@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#b91c1c">
+<title>RRD Rapport</title>
+<style>
+  :root { --bg:#ffffff; --txt:#1a1a1a; --mut:#6b7280; --acc:#b91c1c; --acc-txt:#fff; --sec:#f2f4f7; --ok:#15803d; --bad:#b91c1c; --warn:#b45309; --line:#e5e7eb; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin:0; font:16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--txt); }
+  .top { background:var(--acc); color:#fff; padding:calc(10px + env(safe-area-inset-top)) 14px 10px; display:flex; align-items:center; gap:10px; }
+  .top b { font-size:17px; flex:1; } .top .pill { font-size:12px; background:rgba(255,255,255,.2); padding:3px 9px; border-radius:20px; }
+  .wrap { max-width:560px; margin:0 auto; padding:14px 14px 100px; }
+  h1 { font-size:20px; margin:4px 0 2px; } h2 { font-size:17px; margin:18px 0 8px; }
+  .sub { color:var(--mut); font-size:14px; margin-bottom:12px; }
+  label { display:block; font-size:14px; color:var(--mut); margin:12px 0 4px; }
+  input, select, textarea { width:100%; font-size:17px; padding:11px 12px; border:1px solid var(--line); border-radius:10px; background:var(--bg); color:var(--txt); }
+  textarea { min-height:70px; }
+  .unit { font-size:12px; color:var(--mut); }
+  button { font-size:16px; padding:13px 14px; border:0; border-radius:10px; background:var(--acc); color:var(--acc-txt); cursor:pointer; }
+  button.sec { background:var(--sec); color:var(--txt); }
+  button:disabled { opacity:.5; }
+  .row { display:flex; gap:8px; } .row > * { flex:1; }
+  .bar { position:fixed; left:0; right:0; bottom:0; padding:10px 14px calc(10px + env(safe-area-inset-bottom)); background:var(--bg); border-top:1px solid var(--line); }
+  .bar .in { max-width:560px; margin:0 auto; display:flex; gap:8px; } .bar button { flex:1; }
+  .card { border:1px solid var(--line); border-radius:12px; padding:12px; margin:8px 0; }
+  .big { font-size:26px; font-weight:600; letter-spacing:.5px; }
+  .err { background:#fef2f2; color:var(--bad); border-radius:10px; padding:10px 12px; margin:10px 0; white-space:pre-line; }
+  .okb { background:#f0fdf4; color:var(--ok); border-radius:10px; padding:10px 12px; margin:10px 0; }
+  .wait { background:#fffbeb; color:var(--warn); border-radius:10px; padding:10px 12px; margin:10px 0; }
+  .note { background:var(--sec); border-radius:10px; padding:10px 12px; margin:10px 0; font-size:14px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; } td { padding:7px 4px; border-bottom:1px solid var(--line); vertical-align:top; }
+  td.n { text-align:right; white-space:nowrap; }
+  .hidden { display:none; } .mut { color:var(--mut); font-size:13px; } .center { text-align:center; }
+  .bigbtn { width:100%; padding:18px; font-size:18px; margin:8px 0; }
+  img.prev { max-width:100%; border-radius:10px; margin-top:8px; }
+</style>
+</head>
+<body>
+<div class="top"><b>📋 Rapport de fermeture</b><span class="pill" id="net">…</span></div>
+<div class="wrap" id="app"><p class="center mut" style="margin-top:40px">Chargement…</p></div>
+<div class="bar hidden" id="bar"><div class="in" id="barIn"></div></div>
+
+<script src="config.js"></script>
+<script>
+/* ======================= Outils ======================= */
+var VERSION_APP = '1.0.0';
+var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
+var DEV = 'dollars haïtiens';
+var CHAMPS_DEFAUT = [
+  { k: 'opening_meter', label: 'Compteur ouverture', req: true },
+  { k: 'closing_meter', label: 'Compteur fermeture', req: true },
+  { k: 'starting_cash', label: 'Solde initial', req: true, money: true },
+  { k: 'counted_cash', label: 'Caisse comptée à la fermeture', req: true, money: true },
+  { k: 'bank_deposit', label: 'Dépôt en banque', money: true },
+  { k: 'other_cash_in', label: 'Autres entrées d\'argent', money: true },
+  { k: 'generator_fuel', label: 'Carburant génératrice', money: true },
+  { k: 'withdrawals', label: 'Prélèvements', money: true },
+  { k: 'other_expenses', label: 'Autres dépenses', money: true },
+  { k: 'gas_received', label: 'Gaz reçu aujourd\'hui (gal)' }
+];
+var fmt = function (n) { if (n === null || n === undefined || n === '' || isNaN(n)) return '—'; return Number(n).toLocaleString('fr-FR', { maximumFractionDigits: 2 }); };
+var esc = function (s) { return String(s === null || s === undefined ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
+var $ = function (id) { return document.getElementById(id); };
+var dfr = function (d) { return d ? String(d).split('-').reverse().join('/') : ''; };
+function libPer(p) { return { '': 'Toute la journée', AM: 'Équipe du matin', PM: 'Équipe du soir' }[p || ''] || p; }
+function nb(s) { var n = Number(String(s).replace(/[\s ,]/g, '')); return String(s).trim() === '' || isNaN(n) ? null : n; }
+
+/* Heure d'Haïti, même règle que le serveur : avant 4 h, c'est encore la veille. */
+function partiesHaiti(t) {
+  var f = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  var o = {}; f.formatToParts(t).forEach(function (p) { o[p.type] = p.value; });
+  if (o.hour === '24') o.hour = '00';
+  return o;
+}
+function dateRapport() {
+  var now = new Date(), p = partiesHaiti(now);
+  var d = Number(p.hour) < CUTOFF_HOUR ? new Date(now.getTime() - 24 * 3600 * 1000) : now;
+  var q = partiesHaiti(d);
+  return q.year + '-' + q.month + '-' + q.day;
+}
+function maintenant() { var p = partiesHaiti(new Date()); return p.year + '-' + p.month + '-' + p.day + ' ' + p.hour + ':' + p.minute + ':' + p.second; }
+function refAleatoire(code, date) {
+  var L = 'ABCDEFGHJKLMNPQRSTUVWXYZ', s = '', a = new Uint32Array(4);
+  (window.crypto || {}).getRandomValues ? crypto.getRandomValues(a) : a.forEach(function (_, i) { a[i] = Math.floor(Math.random() * 1e9); });
+  for (var i = 0; i < 4; i++) s += L.charAt(a[i] % L.length);
+  return code + '-' + date.replace(/-/g, '') + '-' + s;
+}
+
+/* ======================= Stockage ======================= */
+var CFG = {
+  get: function (k, d) { try { var v = localStorage.getItem('rrd.' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set: function (k, v) { try { localStorage.setItem('rrd.' + k, JSON.stringify(v)); } catch (e) { } }
+};
+/* File d'attente dans IndexedDB (les photos sont trop lourdes pour localStorage). */
+var DB = null;
+function db() {
+  if (DB) return Promise.resolve(DB);
+  return new Promise(function (res, rej) {
+    var r = indexedDB.open('rrd-rapports', 1);
+    r.onupgradeneeded = function () { r.result.createObjectStore('rapports', { keyPath: 'ref' }); };
+    r.onsuccess = function () { DB = r.result; res(DB); };
+    r.onerror = function () { rej(r.error); };
+  });
+}
+function tx(mode, fn) {
+  return db().then(function (d) {
+    return new Promise(function (res, rej) {
+      var t = d.transaction('rapports', mode), s = t.objectStore('rapports'), out;
+      out = fn(s); t.oncomplete = function () { res(out && out.result !== undefined ? out.result : out); }; t.onerror = function () { rej(t.error); };
+    });
+  });
+}
+function tous() { return tx('readonly', function (s) { return s.getAll(); }); }
+function sauver(r) { return tx('readwrite', function (s) { s.put(r); }); }
+
+/* ======================= Serveur ======================= */
+function api(action, extra) {
+  var url = CFG.get('api', window.RRD_CONFIG && RRD_CONFIG.API_URL || '');
+  if (!url) return Promise.reject({ erreur: 'Adresse du serveur manquante.', code: 'CONFIG', reseau: false });
+  var body = Object.assign({ action: action, jeton: CFG.get('jeton', '') }, extra || {});
+  var ctl = new AbortController(), t = setTimeout(function () { ctl.abort(); }, 60000);
+  return fetch(url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body), redirect: 'follow', signal: ctl.signal })
+    .then(function (r) { clearTimeout(t); return r.text(); })
+    .then(function (txt) {
+      var j; try { j = JSON.parse(txt); } catch (e) { throw { erreur: 'Réponse illisible du serveur.', reseau: true }; }
+      if (!j.ok) throw { erreur: j.erreur, code: j.code || '', reseau: j.code === 'SERVEUR' };
+      return j.data;
+    }, function () { clearTimeout(t); throw { erreur: 'Pas de connexion.', reseau: true }; });
+}
+
+/* ======================= État ======================= */
+var S = { init: null, en_ligne: false, sync: false };
+function majNet(t) { var n = $('net'); if (n) n.textContent = t; }
+function stationCode() { return (CFG.get('station', {}) || {}).code; }
+
+function view(html, barHtml) {
+  $('app').innerHTML = html;
+  if (barHtml) { $('barIn').innerHTML = barHtml; $('bar').classList.remove('hidden'); } else $('bar').classList.add('hidden');
+  window.scrollTo(0, 0);
+}
+
+/* ======================= Enregistrement du téléphone ======================= */
+function ecranEnregistrer(msg) {
+  var h = '<h1>Enregistrer ce téléphone</h1><div class="sub">À faire une seule fois. La direction vous donne le code de la station.</div>' +
+    (msg ? '<div class="err">' + esc(msg) + '</div>' : '') +
+    '<label for="code">Code d\'activation</label><input id="code" autocapitalize="characters" autocomplete="off" placeholder="ex. ESA-4821">' +
+    '<details style="margin-top:18px"><summary class="mut">Paramètres avancés</summary><label for="url">Adresse du serveur</label>' +
+    '<input id="url" autocomplete="off" value="' + esc(CFG.get('api', window.RRD_CONFIG && RRD_CONFIG.API_URL || '')) + '"></details>' +
+    '<p class="mut">Il faut internet pour cette étape seulement. Ensuite, les rapports peuvent se faire sans connexion.</p>';
+  view(h, '<button id="bEnr" onclick="enregistrer()">Enregistrer</button>');
+}
+function enregistrer() {
+  var code = $('code').value.trim(), url = $('url').value.trim();
+  if (!code) return ecranEnregistrer('Entrez le code d\'activation.');
+  if (url) CFG.set('api', url);
+  var b = $('bEnr'); b.disabled = true; b.textContent = 'Enregistrement…';
+  var id = CFG.get('appareil', '') || ('A' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)); CFG.set('appareil', id);
+  api('enregistrer', { code: code, appareil_id: id, modele: navigator.userAgent.slice(0, 80) }).then(function (d) {
+    CFG.set('jeton', d.jeton); CFG.set('station', d.station);
+    accueil();
+    synchroniser();
+  }).catch(function (e) { ecranEnregistrer(e.reseau ? 'Pas de connexion internet. Réessayez quand le téléphone a du signal.' : e.erreur); });
+}
+
+/* ======================= Accueil ======================= */
+function infosDuJour(liste) {
+  /* Ce qu'on sait pour aujourd'hui : rapports confirmés par le serveur + ceux en attente sur le téléphone. */
+  var date = dateRapport(), st = stationCode();
+  var cache = S.init && S.init.date === date ? S.init : null;
+  var envoyes = cache ? (cache.envoyes || []).slice() : [];
+  var locaux = liste.filter(function (r) { return r.date === date && r.station === st && r.statut !== 'rejete'; });
+  locaux.forEach(function (r) { if (!envoyes.some(function (x) { return x.ref === r.ref; })) envoyes.push({ ref: r.ref, periode: r.periode, local: r }); });
+  var pers = envoyes.map(function (r) { return String(r.periode || ''); });
+  var periodes;
+  if (pers.indexOf('') >= 0) periodes = [];
+  else if (pers.indexOf('AM') >= 0 && pers.indexOf('PM') >= 0) periodes = [];
+  else if (pers.indexOf('AM') >= 0) periodes = ['PM'];
+  else if (pers.indexOf('PM') >= 0) periodes = ['AM'];
+  else periodes = ['', 'AM'];
+  return { date: date, envoyes: envoyes, periodes: periodes };
+}
+function accueil() {
+  tous().then(function (liste) {
+    var st = CFG.get('station', {}), j = infosDuJour(liste);
+    var attente = liste.filter(function (r) { return r.statut === 'attente'; });
+    var rejetes = liste.filter(function (r) { return r.statut === 'rejete' && !r.vu; });
+    var h = '<h1>' + esc(st.nom || '') + '</h1><div class="sub">Journée du ' + dfr(j.date) + '</div>';
+    if (attente.length) h += '<div class="wait">⏳ ' + attente.length + ' rapport(s) en attente d\'envoi. Ils partiront tout seuls dès qu\'il y aura du signal.</div>';
+    rejetes.forEach(function (r) { h += '<div class="err">❌ Rapport ' + esc(r.ref) + ' (' + dfr(r.date) + ') refusé par le serveur :\n' + esc(r.erreur || '') + '\n<button class="sec" style="margin-top:8px" onclick="vuRejet(\'' + esc(r.ref) + '\')">J\'ai compris</button></div>'; });
+    if (j.periodes.length) {
+      h += '<button class="bigbtn" onclick="nouveau()">📋 Faire le rapport de fermeture</button>';
+      if (j.envoyes.length) h += '<p class="mut center">Le rapport de l\'équipe du matin est déjà fait. Ce rapport sera celui de l\'équipe du soir.</p>';
+    } else h += '<div class="okb">✅ Les rapports d\'aujourd\'hui sont faits.</div>';
+    var recents = liste.slice().sort(function (a, b) { return a.cree_le < b.cree_le ? 1 : -1; }).slice(0, 10);
+    if (recents.length) {
+      h += '<h2>Derniers rapports de ce téléphone</h2>';
+      recents.forEach(function (r) {
+        var etat = r.statut === 'envoye' ? '<span style="color:var(--ok)">✅ reçu</span>' : r.statut === 'attente' ? '<span style="color:var(--warn)">⏳ en attente</span>' : '<span style="color:var(--bad)">❌ refusé</span>';
+        h += '<div class="card" onclick="voir(\'' + esc(r.ref) + '\')"><div class="row"><div><b>' + esc(r.ref) + '</b><div class="mut">' + dfr(r.date) + ' · ' + esc(libPer(r.periode)) + '</div></div><div style="text-align:right">' + etat + '</div></div></div>';
+      });
+    }
+    h += '<p class="mut center" style="margin-top:24px">Version ' + VERSION_APP + ' · ' + esc(st.code || '') + '</p>';
+    view(h, '<button class="sec" onclick="synchroniser(true)">🔄 Envoyer / actualiser</button>');
+  });
+}
+function vuRejet(ref) { tous().then(function (l) { var r = l.filter(function (x) { return x.ref === ref; })[0]; if (r) { r.vu = true; return sauver(r); } }).then(accueil); }
+
+/* ======================= Formulaire (repris de l'app Telegram) ======================= */
+var V = {}, PHOTO = '', J = null;
+function champs() { return (S.init && S.init.champs) || CFG.get('champs', null) || CHAMPS_DEFAUT; }
+function nouveau() {
+  tous().then(function (liste) {
+    J = infosDuJour(liste); V = {}; PHOTO = '';
+    V.periode = J.periodes[0];
+    var dernier = liste.filter(function (r) { return r.station === stationCode() && r.statut !== 'rejete'; }).sort(function (a, b) { return a.cree_le < b.cree_le ? 1 : -1; })[0];
+    var serveur = S.init && S.init.prerempli;
+    if (dernier && (!S.init || dernier.cree_le > (CFG.get('init_le', '') || ''))) { V.opening_meter = dernier.closing_meter; V.starting_cash = dernier.counted_cash; }
+    else if (serveur) { V.opening_meter = serveur.opening_meter; V.starting_cash = serveur.starting_cash; }
+    ecranFormulaire();
+  });
+}
+function champHtml(f) {
+  var val = V[f.k] !== undefined ? V[f.k] : '';
+  return '<label for="f_' + f.k + '">' + esc(f.label) + (f.req ? ' *' : '') + (f.money ? ' <span class="unit">(' + DEV + ')</span>' : '') + '</label>' +
+    '<input id="f_' + f.k + '" inputmode="decimal" autocomplete="off" value="' + esc(val) + '" oninput="majGallons()">';
+}
+function ecranFormulaire(msgErr) {
+  var st = CFG.get('station', {});
+  var h = '<h1>Rapport de fermeture</h1><div class="sub">' + esc(st.nom) + ' · ' + dfr(J.date) + '</div>';
+  if (msgErr) h += '<div class="err">' + esc(msgErr) + '</div>';
+  if (J.periodes.length > 1) {
+    h += '<label>Ce rapport couvre</label>' + J.periodes.map(function (p) {
+      return '<label style="display:flex;gap:10px;align-items:center;color:var(--txt);font-size:16px;margin:6px 0"><input type="radio" name="per" style="width:auto" value="' + p + '"' + (V.periode === p ? ' checked' : '') + ' onchange="V.periode=this.value">' +
+        (p === '' ? 'Toute la journée (une seule équipe aujourd\'hui)' : 'L\'équipe du matin (une équipe du soir fera son propre rapport)') + '</label>';
+    }).join('');
+  } else h += '<div class="note"><b>' + esc(libPer(V.periode)) + '</b></div>';
+  var noms = (S.init && S.init.noms_connus) || CFG.get('noms', []);
+  h += '<label for="f_employes_service">Employé(s) de service *</label><input id="f_employes_service" list="nomsConnus" autocomplete="off" value="' + esc(V.employes_service || '') + '" placeholder="ex. Rose Jean, Paul Michel">' +
+    '<datalist id="nomsConnus">' + noms.map(function (n) { return '<option value="' + esc(n) + '">'; }).join('') + '</datalist>' +
+    '<div class="mut">Toutes les personnes qui ont travaillé, séparées par une virgule. La première personne est celle qui envoie le rapport.</div>';
+  champs().forEach(function (f) {
+    h += champHtml(f);
+    if (f.k === 'closing_meter') h += '<div class="note">Gallons vendus : <b id="gal">—</b></div>';
+    if (f.k === 'other_expenses') h += '<label for="f_other_expenses_detail">Détail des autres dépenses</label><input id="f_other_expenses_detail" value="' + esc(V.other_expenses_detail || '') + '">';
+  });
+  h += '<label for="f_notes">Notes (facultatif)</label><textarea id="f_notes">' + esc(V.notes || '') + '</textarea>' +
+    '<label>Photo de la page du registre (facultatif)</label><input type="file" id="f_photo" accept="image/*" onchange="lirePhoto(this)">' +
+    '<div id="photoEtat" class="mut">' + (PHOTO ? 'Photo prête ✓' : '') + '</div>' +
+    '<p class="mut">Tous les montants sont en ' + DEV + '.</p>';
+  view(h, '<button class="sec" onclick="accueil()">Annuler</button><button onclick="verifier()">Vérifier</button>');
+  majGallons();
+}
+function lireChamps() {
+  champs().forEach(function (f) { var el = $('f_' + f.k); if (el) V[f.k] = el.value.trim(); });
+  V.other_expenses_detail = (($('f_other_expenses_detail') || {}).value || '').trim();
+  V.notes = (($('f_notes') || {}).value || '').trim();
+  V.employes_service = (($('f_employes_service') || {}).value || '').trim();
+  var r = document.querySelector('input[name="per"]:checked'); if (r) V.periode = r.value;
+}
+function majGallons() {
+  var o = nb(($('f_opening_meter') || {}).value || ''), c = nb(($('f_closing_meter') || {}).value || '');
+  var el = $('gal'); if (!el) return;
+  el.textContent = (o === null || c === null) ? '—' : (c < o ? 'compteur de fermeture plus petit !' : fmt(c - o) + ' gal');
+}
+function lirePhoto(input) {
+  var f = input.files && input.files[0]; if (!f) return;
+  $('photoEtat').textContent = 'Préparation de la photo…';
+  var img = new Image(), url = URL.createObjectURL(f);
+  img.onload = function () {
+    var m = 1600, w = img.width, h = img.height, k = Math.min(1, m / Math.max(w, h));
+    var cv = document.createElement('canvas'); cv.width = Math.round(w * k); cv.height = Math.round(h * k);
+    cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+    PHOTO = cv.toDataURL('image/jpeg', 0.75); URL.revokeObjectURL(url);
+    $('photoEtat').textContent = 'Photo prête ✓';
+  };
+  img.onerror = function () { $('photoEtat').textContent = 'Photo illisible, choisissez-en une autre.'; };
+  img.src = url;
+}
+function verifier() {
+  lireChamps();
+  var err = [];
+  champs().forEach(function (f) {
+    if (f.req && V[f.k] === '') err.push(f.label + ' : obligatoire.');
+    else if (V[f.k] !== '' && (nb(V[f.k]) === null || nb(V[f.k]) < 0)) err.push(f.label + ' : nombre invalide.');
+  });
+  if (!err.length && nb(V.closing_meter) < nb(V.opening_meter)) err.push('Le compteur de fermeture doit être plus grand ou égal au compteur d\'ouverture.');
+  if (!err.length && nb(V.closing_meter) - nb(V.opening_meter) > 5000) err.push('Plus de 5 000 gallons vendus : vérifiez les compteurs.');
+  if (!err.length && nb(V.other_expenses) > 0 && !V.other_expenses_detail) err.push('Autres dépenses : écrivez le détail.');
+  if (!V.employes_service) err.unshift('Employé(s) de service : obligatoire.');
+  if (err.length) return ecranFormulaire(err.join('\n'));
+  var st = CFG.get('station', {});
+  var h = '<h1>Vérifiez avant d\'envoyer</h1><div class="sub">' + esc(st.nom) + ' · ' + dfr(J.date) + ' · ' + esc(libPer(V.periode)) + '</div><div class="card"><table>' +
+    '<tr><td>Employé(s) de service</td><td class="n"><b>' + esc(V.employes_service) + '</b></td></tr>';
+  champs().forEach(function (f) {
+    if (V[f.k] === '' && !f.req) return;
+    h += '<tr><td>' + esc(f.label) + '</td><td class="n"><b>' + fmt(nb(V[f.k])) + '</b>' + (f.money ? ' <span class="unit">$ HT</span>' : '') + '</td></tr>';
+    if (f.k === 'closing_meter') h += '<tr><td>Gallons vendus</td><td class="n"><b>' + fmt(nb(V.closing_meter) - nb(V.opening_meter)) + '</b></td></tr>';
+  });
+  if (V.other_expenses_detail) h += '<tr><td>Détail dépenses</td><td class="n">' + esc(V.other_expenses_detail) + '</td></tr>';
+  if (V.notes) h += '<tr><td>Notes</td><td class="n">' + esc(V.notes) + '</td></tr>';
+  h += '<tr><td>Photo</td><td class="n">' + (PHOTO ? 'oui' : 'non') + '</td></tr></table></div>' +
+    '<div class="note">Après l\'envoi, le rapport ne peut plus être modifié. Montants en ' + DEV + '.</div>';
+  view(h, '<button class="sec" onclick="ecranFormulaire()">Modifier</button><button id="bEnv" onclick="enregistrerRapport()">Envoyer</button>');
+}
+function enregistrerRapport() {
+  var b = $('bEnv'); b.disabled = true; b.textContent = 'Enregistrement…';
+  if (dateRapport() !== J.date) { alert('La journée a changé pendant la saisie. Recommencez le rapport.'); return accueil(); }
+  var st = CFG.get('station', {});
+  var r = { ref: refAleatoire(st.code, J.date), station: st.code, date: J.date, periode: V.periode || '', cree_le: maintenant(), statut: 'attente', photo: PHOTO };
+  Object.keys(V).forEach(function (k) { if (k !== 'periode') r[k] = V[k]; });
+  sauver(r).then(function () { ecranRecu(r, true); synchroniser(); });
+}
+function ecranRecu(r, nouveau) {
+  var st = CFG.get('station', {});
+  var etat = r.statut === 'envoye' ? '<div class="okb">✅ Rapport de fermeture reçu par le bureau' + (r.recu_le ? ' le ' + esc(r.recu_le) : '') + '.</div>'
+    : r.statut === 'attente' ? '<div class="wait">⏳ Enregistré sur le téléphone. Il sera envoyé automatiquement dès qu\'il y aura du signal. Ne refaites pas le rapport.</div>'
+    : '<div class="err">❌ Refusé par le serveur :\n' + esc(r.erreur || '') + '</div>';
+  var h = '<h1>' + (nouveau ? 'Rapport enregistré' : 'Rapport') + '</h1><div class="sub">' + esc(st.nom) + ' · ' + dfr(r.date) + ' · ' + esc(libPer(r.periode)) + '</div>' + etat +
+    '<div class="card center"><div class="mut">Référence</div><div class="big">' + esc(r.ref_serveur || r.ref) + '</div><div class="mut">Fait le ' + esc(r.cree_le) + '</div></div><div class="card"><table>' +
+    '<tr><td>Employé(s) de service</td><td class="n">' + esc(r.employes_service) + '</td></tr>' +
+    '<tr><td>Gallons vendus</td><td class="n"><b>' + fmt(nb(r.closing_meter) - nb(r.opening_meter)) + '</b></td></tr>';
+  champs().forEach(function (f) { if (r[f.k] !== '' && r[f.k] !== undefined) h += '<tr><td>' + esc(f.label) + '</td><td class="n">' + fmt(nb(r[f.k])) + (f.money ? ' <span class="unit">$ HT</span>' : '') + '</td></tr>'; });
+  h += '</table></div><p class="mut">Une erreur ? Prévenez le bureau : il peut annuler le rapport pour que vous puissiez le refaire.</p>';
+  view(h, '<button onclick="accueil()">Retour</button>');
+}
+function voir(ref) { tous().then(function (l) { var r = l.filter(function (x) { return x.ref === ref; })[0]; if (r) ecranRecu(r); }); }
+
+/* ======================= Synchronisation ======================= */
+function synchroniser(manuel) {
+  if (S.sync || !CFG.get('jeton', '')) return;
+  S.sync = true; majNet('envoi…');
+  var arret = false;
+  api('init').then(function (d) {
+    S.en_ligne = true; S.init = d; CFG.set('init', d); CFG.set('init_le', maintenant()); CFG.set('champs', d.champs); CFG.set('noms', d.noms_connus || []);
+    if (d.station) CFG.set('station', d.station);
+  }).catch(function (e) {
+    S.en_ligne = !e.reseau;
+    if (e.code === 'NON_ENREGISTRE' || e.code === 'DESACTIVE') { arret = true; CFG.set('jeton', ''); ecranEnregistrer(e.erreur); }
+  }).then(function () {
+    if (arret) return;
+    return tous().then(function (liste) {
+      var attente = liste.filter(function (r) { return r.statut === 'attente'; }).sort(function (a, b) { return a.cree_le < b.cree_le ? -1 : 1; });
+      return attente.reduce(function (p, r) {
+        return p.then(function () {
+          if (arret) return;
+          var payload = {}; Object.keys(r).forEach(function (k) { if (['statut', 'cree_le', 'erreur', 'vu', 'recu_le', 'station'].indexOf(k) < 0) payload[k] = r[k]; });
+          return api('envoyer', { payload: payload }).then(function (d) {
+            S.en_ligne = true;
+            if (d.recu && d.recu.ref !== r.ref) r.ref_serveur = d.recu.ref;
+            r.statut = 'envoye'; r.recu_le = d.recu ? d.recu.soumis_le : maintenant(); r.photo = r.photo ? 'envoyée' : '';
+            return sauver(r);
+          }, function (e) {
+            if (e.reseau) { S.en_ligne = false; arret = true; return; }
+            if (e.code === 'NON_ENREGISTRE' || e.code === 'DESACTIVE') { arret = true; return; }
+            r.statut = 'rejete'; r.erreur = e.erreur; return sauver(r);
+          });
+        });
+      }, Promise.resolve());
+    });
+  }).then(function () {
+    S.sync = false; majNet(S.en_ligne ? '● en ligne' : '○ hors ligne');
+    var a = $('app'); if (!arret && a && !document.getElementById('f_opening_meter') && !document.getElementById('bEnv')) { if (document.getElementById('code')) return; if (manuel || a.querySelector('.bigbtn,.okb,.wait,h2') || a.textContent.indexOf('Chargement') >= 0) accueil(); }
+  });
+}
+
+/* ======================= Démarrage ======================= */
+window.addEventListener('online', function () { synchroniser(); });
+document.addEventListener('visibilitychange', function () { if (!document.hidden) synchroniser(); });
+setInterval(function () { synchroniser(); }, 2 * 60 * 1000);
+S.init = CFG.get('init', null);
+majNet('○ hors ligne');
+if (!CFG.get('jeton', '')) ecranEnregistrer(); else { accueil(); synchroniser(); }
+</script>
+</body>
+</html>
