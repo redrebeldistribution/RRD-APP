@@ -135,7 +135,8 @@ var S = { init: null, en_ligne: false, sync: false };
 function majNet(t) { var n = $('net'); if (n) n.textContent = t; }
 function stationCode() { return (CFG.get('station', {}) || {}).code; }
 
-function view(html, barHtml) {
+function view(html, barHtml, ecran) {
+  S.ecran = ecran || '';
   $('app').innerHTML = html;
   if (barHtml) { $('barIn').innerHTML = barHtml; $('bar').classList.remove('hidden'); } else $('bar').classList.add('hidden');
   window.scrollTo(0, 0);
@@ -202,7 +203,7 @@ function accueil() {
       });
     }
     h += '<p class="mut center" style="margin-top:24px">Version ' + VERSION_APP + ' · ' + esc(st.code || '') + '</p>';
-    view(h, '<button class="sec" onclick="synchroniser(true)">🔄 Envoyer / actualiser</button>');
+    view(h, '<button class="sec" onclick="synchroniser(true)">🔄 Envoyer / actualiser</button>', 'accueil');
   });
 }
 function vuRejet(ref) { tous().then(function (l) { var r = l.filter(function (x) { return x.ref === ref; })[0]; if (r) { r.vu = true; return sauver(r); } }).then(accueil); }
@@ -352,7 +353,7 @@ function synchroniser(manuel) {
             r.statut = 'envoye'; r.recu_le = d.recu ? d.recu.soumis_le : maintenant(); r.photo = r.photo ? 'envoyée' : '';
             return sauver(r);
           }, function (e) {
-            if (e.reseau) { S.en_ligne = false; arret = true; return; }
+            if (e.reseau || e.code === 'CONFIG' || e.code === 'SERVEUR') { S.en_ligne = false; arret = true; return; }
             if (e.code === 'NON_ENREGISTRE' || e.code === 'DESACTIVE') { arret = true; return; }
             r.statut = 'rejete'; r.erreur = e.erreur; return sauver(r);
           });
@@ -361,7 +362,7 @@ function synchroniser(manuel) {
     });
   }).then(function () {
     S.sync = false; majNet(S.en_ligne ? '● en ligne' : '○ hors ligne');
-    var a = $('app'); if (!arret && a && !document.getElementById('f_opening_meter') && !document.getElementById('bEnv')) { if (document.getElementById('code')) return; if (manuel || a.querySelector('.bigbtn,.okb,.wait,h2') || a.textContent.indexOf('Chargement') >= 0) accueil(); }
+    if (!arret && (S.ecran === 'accueil' || manuel)) accueil();
   });
 }
 
