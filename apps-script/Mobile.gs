@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.12';
+var MOBILE_VERSION = 'm1.13';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var MAX_APPAREILS_ROLE = 5;   // un code DIR ou CPT peut servir sur 5 appareils en même temps (demande du propriétaire, 26/11/2026)
 var ROLES_APPAREIL = { DIRECTION: 'management', COMPTA: 'accounting' };   // station = DIRECTION ou COMPTA → téléphone de la direction / comptabilité
@@ -74,6 +74,7 @@ function apiMobile_(action, b) {
       case 'envoyer': return ok_(envoyerMobile_(app, payload));
       case 'photo': return ok_(photoHoraire_(app, payload));
       case 'photos': return ok_(photosStation_(app));
+      case 'bordereau': return ok_(bordereau_(app, payload));
       case 'dir': return ok_(direction_(app, String(b.sous_action || ''), payload));
       default: throw new UserError('Action inconnue.');
     }
@@ -400,6 +401,7 @@ function direction_(app, sous, p) {
     case 'photosSuivi': exiger_(ctx, ['management', 'accounting']); return photosSuivi_(p);
     case 'photosListe': exiger_(ctx, ['management', 'accounting']); return photosListe_(p);
     case 'photoVoir': exiger_(ctx, ['management', 'accounting']); return photoVoir_(p);
+    case 'bordereaux': exiger_(ctx, ['management', 'accounting']); return bordereauxListe_(p);
     default: throw new UserError('Action inconnue.');
   }
 }
@@ -468,6 +470,7 @@ var PH_ENTETES = ['date', 'station', 'heure', 'type', 'pris_le', 'recu_le', 'com
 var PH_TYPES = ['COMPTEUR', 'STATION', 'CITERNE'];
 var PH_LETTRE = { COMPTEUR: 'C', STATION: 'S', CITERNE: 'T' };   // lettres de la grille du tableau de bord
 var PH_HEURES = [7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+var PH_JAUGES = ['JAUGE_OUV', 'JAUGE_FER'];   // manomètre : ouverture = avant midi, fermeture = à partir de 15 h (règles du 09/11/2026)
 var PH_NON_SUIVIES = ['M83', 'LEO'];   // décision du propriétaire (21/11/2026) : Mahotière 83 et Léogâne ne sont pas suivies
 var PH_SANS_CITERNE = ['DIQ'];         // décision du propriétaire (23/11/2026) : la citerne n'est pas comptée à Diquini
 var PH_MAX_OCTETS = 1500000;
@@ -483,7 +486,7 @@ function phFeuille_() {
   return sh;
 }
 function phJour_(v) { return v instanceof Date ? Utilities.formatDate(v, TZ, 'yyyy-MM-dd') : String(v || '').slice(0, 10); }
-function phTexte_(v) { return v instanceof Date ? Utilities.formatDate(v, TZ, 'yyyy-MM-dd HH:mm:ss') : String(v || ''); }
+function phTexte_(v) { return v instanceof Date ? Utilities.formatDate(v, TZ, 'yyyy-MM-dd HH:mm:ss') : String(v || '').replace(/^(\d{4}-\d{2}-\d{2}) (\d):/, '$1 0$2:'); }
 function phLire_(max) {
   var sh = ss_().getSheetByName(PH_ONGLET);
   if (!sh || sh.getLastRow() < 2) return [];
@@ -493,16 +496,23 @@ function phLire_(max) {
       compteur: r[6] === '' || r[6] === null ? '' : String(r[6]), fichier_id: String(r[7]), appareil: String(r[8]), cid: String(r[9]), note: String(r[10] || '') };
   });
 }
+/** Même règle que les rapports : « 1 788 » ou « 1,788 » = mille sept cent quatre-vingt-huit ; le point est la décimale. '' si illisible. */
+function phNombre_(v) {
+  var s = String(v === undefined || v === null ? '' : v).trim();
+  if (!/^(\d{1,3}([ \u00a0\u202f,]\d{3})+|\d+)(\.\d+)?$/.test(s)) return '';
+  return s.replace(/[ \u00a0\u202f,]/g, '');
+}
 function phTypesDe_(code) { return PH_SANS_CITERNE.indexOf(code) >= 0 ? ['COMPTEUR', 'STATION'] : PH_TYPES; }
 
 /** Dossier Drive privé : « RRD – Photos horaires (app, privé) » / station / mois. */
-function phDossier_(st, date) {
-  var props = PropertiesService.getScriptProperties(), mois = date.slice(0, 7), cle = 'PH_DOSSIER_' + st.code + '_' + mois;
+function phDossier_(st, date, prefixe, nomRacine) {
+  prefixe = prefixe || 'PH'; nomRacine = nomRacine || 'RRD – Photos horaires (app, privé)';
+  var props = PropertiesService.getScriptProperties(), mois = date.slice(0, 7), cle = prefixe + '_DOSSIER_' + st.code + '_' + mois;
   var id = props.getProperty(cle);
   if (id) { try { return DriveApp.getFolderById(id); } catch (e) { } }
-  var racine = null, rid = props.getProperty('PH_RACINE');
+  var racine = null, rid = props.getProperty(prefixe + '_RACINE');
   if (rid) { try { racine = DriveApp.getFolderById(rid); } catch (e) { } }
-  if (!racine) { racine = DriveApp.createFolder('RRD – Photos horaires (app, privé)'); props.setProperty('PH_RACINE', racine.getId()); }
+  if (!racine) { racine = DriveApp.createFolder(nomRacine); props.setProperty(prefixe + '_RACINE', racine.getId()); }
   var nom = st.code + ' – ' + st.nom, it = racine.getFoldersByName(nom), ds = it.hasNext() ? it.next() : racine.createFolder(nom);
   var it2 = ds.getFoldersByName(mois), dm = it2.hasNext() ? it2.next() : ds.createFolder(mois);
   props.setProperty(cle, dm.getId());
@@ -513,7 +523,7 @@ function phDossier_(st, date) {
 function photoHoraire_(app, p) {
   if (app.role || !app.station) throw new UserError('Les photos se font depuis le téléphone de la station.', 'FORBIDDEN');
   var st = app.station, type = String(p.type || '').toUpperCase();
-  if (PH_TYPES.indexOf(type) < 0) throw new UserError('Type de photo inconnu.');
+  if (PH_TYPES.indexOf(type) < 0 && PH_JAUGES.indexOf(type) < 0) throw new UserError('Type de photo inconnu.');
   var cid = String(p.cid || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 60);
   if (!cid) throw new UserError('Photo sans identifiant.');
   var m = String(p.photo || '').match(/^data:image\/jpeg;base64,(.+)$/);
@@ -526,12 +536,14 @@ function photoHoraire_(app, p) {
     pris = recu;
   } else if (recu.getTime() - pris.getTime() > 31 * 864e5) throw new UserError('Photo trop ancienne (plus de 31 jours).');
   var date = Utilities.formatDate(pris, TZ, 'yyyy-MM-dd'), heure = Number(Utilities.formatDate(pris, TZ, 'H'));
-  var compteur = '';
-  if (type === 'COMPTEUR' && p.compteur !== undefined && p.compteur !== null) {
-    var c = String(p.compteur).replace(/\s/g, '').replace(',', '.');
-    if (/^\d+(\.\d+)?$/.test(c)) compteur = c;
-    else if (c) note = (note ? note + ' ; ' : '') + 'Index saisi illisible : ' + String(p.compteur).slice(0, 30);
+  var compteur = '', jauge = PH_JAUGES.indexOf(type) >= 0;   // colonne « compteur » : index du compteur, ou niveau du manomètre en %
+  if ((type === 'COMPTEUR' || jauge) && p.compteur !== undefined && p.compteur !== null) {
+    var c = phNombre_(String(p.compteur).replace(/%/g, ''));
+    if (c && (!jauge || Number(c) <= 100)) compteur = c;
+    else if (String(p.compteur).trim()) note = (note ? note + ' ; ' : '') + (jauge ? 'Niveau saisi illisible : ' : 'Index saisi illisible : ') + String(p.compteur).slice(0, 30);
   }
+  if (type === 'JAUGE_OUV' && heure >= 12) note = (note ? note + ' ; ' : '') + 'Ouverture prise après midi';
+  if (type === 'JAUGE_FER' && heure < 15) note = (note ? note + ' ; ' : '') + 'Fermeture prise avant 15 h';
   var lock = LockService.getScriptLock();
   lock.waitLock(25000);
   try {
@@ -580,9 +592,14 @@ function phBilanJour_(parHeure, types, date, auj, hMaintenant) {
 function photosSuivi_(p) {
   var now = new Date(), auj = Utilities.formatDate(now, TZ, 'yyyy-MM-dd'), hM = Number(Utilities.formatDate(now, TZ, 'H'));
   var date = /^\d{4}-\d{2}-\d{2}$/.test(String(p.date || '')) ? String(p.date) : auj, mois = date.slice(0, 7);
-  var lignes = phLire_(15000), idx = {}, premier = {};
+  var lignes = phLire_(15000), idx = {}, premier = {}, jg = {};
   lignes.forEach(function (r) {
     var k = r.station + '|' + r.date;
+    if (PH_JAUGES.indexOf(r.type) >= 0) {   // ouverture = la première de la journée ; fermeture = la dernière
+      var j = jg[k] = jg[k] || {}, hm = r.pris_le.slice(11, 16);
+      if (r.type === 'JAUGE_OUV' && (!j.ouv || hm < j.ouv)) { j.ouv = hm; j.ouvNiveau = r.compteur; }
+      if (r.type === 'JAUGE_FER' && (!j.fer || hm > j.fer)) { j.fer = hm; j.ferNiveau = r.compteur; }
+    }
     ((idx[k] = idx[k] || {})[r.heure] = idx[k][r.heure] || {})[r.type] = (idx[k][r.heure][r.type] || 0) + 1;
     if (!premier[r.station] || r.date < premier[r.station]) premier[r.station] = r.date;
   });
@@ -603,7 +620,10 @@ function photosSuivi_(p) {
         d = Utilities.formatDate(new Date(new Date(d + 'T12:00:00Z').getTime() + 864e5), 'UTC', 'yyyy-MM-dd');
       }
     }
-    return { code: code, nom: String(s.nom), suivie: PH_NON_SUIVIES.indexOf(code) < 0, debut: premier[code] || '', types: types, grille: grille, nbPhotos: nbPhotos,
+    var j = jg[code + '|' + date] || {};
+    var jauge = { ouv: j.ouv || '', ouvOk: !!j.ouv && j.ouv < '12:00', ouvNiveau: j.ouvNiveau || '', fer: j.fer || '', ferOk: !!j.fer && j.fer >= '15:00', ferNiveau: j.ferNiveau || '',
+      ouvManque: !(j.ouv && j.ouv < '12:00') && (date < auj || hM >= 12), ferManque: !(j.fer && j.fer >= '15:00') && (date < auj || hM >= 18) };
+    return { code: code, nom: String(s.nom), suivie: PH_NON_SUIVIES.indexOf(code) < 0, debut: premier[code] || '', types: types, grille: grille, nbPhotos: nbPhotos, jauge: jauge,
       couvertes: b.couvertes, echues: b.echues, manquantes: b.manquantes, typesManquants: b.typesManquants, mois: m };
   });
   return { date: date, aujourdhui: auj, heures: PH_HEURES, stations: out };
@@ -621,7 +641,93 @@ function photosListe_(p) {
 /** Renvoie une photo (seulement un fichier listé dans l'onglet « Photos horaires »). */
 function photoVoir_(p) {
   var id = String(p.id || '');
-  if (!id || !phLire_(15000).some(function (r) { return r.fichier_id === id; })) throw new UserError('Photo introuvable.');
+  if (!id || !(phLire_(15000).some(function (r) { return r.fichier_id === id; }) || bdLire_(5000).some(function (r) { return r.fichier_id === id; }))) throw new UserError('Photo introuvable.');
   var f = DriveApp.getFileById(id), b = f.getBlob();
   return { nom: f.getName(), photo: 'data:image/jpeg;base64,' + Utilities.base64Encode(b.getBytes()) };
+}
+
+/* ============================ Bordereaux de dépôt (m1.13, 26/11/2026) ============================
+ * La station photographie le bordereau (fiche de dépôt, reçu de caisse) et écrit le montant tel qu'il est sur le papier.
+ * Une ligne par bordereau dans l'onglet « Bordereaux (app) », photo dans un dossier Drive privé. Rien n'est envoyé aux fournisseurs d'ici.
+ */
+var BD_ONGLET = 'Bordereaux (app)';
+var BD_ENTETES = ['date_depot', 'station', 'montant', 'devise', 'beneficiaire', 'numero', 'note', 'pris_le', 'recu_le', 'fichier_id', 'appareil', 'cid'];
+var BD_BENEF = ['Haiti Propane', 'SODIGAZ', 'Compte Red Rebel', 'Autre'];
+var BD_DEVISES = ['HTG', 'USD'];
+function bdLire_(max) {
+  var sh = ss_().getSheetByName(BD_ONGLET);
+  if (!sh || sh.getLastRow() < 2) return [];
+  var n = sh.getLastRow(), from = Math.max(2, n - (max || 5000) + 1);
+  return sh.getRange(from, 1, n - from + 1, BD_ENTETES.length).getValues().map(function (r) {
+    return { date_depot: phJour_(r[0]), station: String(r[1]), montant: Number(r[2]) || 0, devise: String(r[3]), beneficiaire: String(r[4]), numero: String(r[5] || ''), note: String(r[6] || ''),
+      pris_le: phTexte_(r[7]), recu_le: phTexte_(r[8]), fichier_id: String(r[9]), appareil: String(r[10]), cid: String(r[11]) };
+  });
+}
+function bordereau_(app, p) {
+  if (app.role || !app.station) throw new UserError('Les bordereaux se font depuis le téléphone de la station.', 'FORBIDDEN');
+  var st = app.station, cid = String(p.cid || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 60);
+  if (!cid) throw new UserError('Bordereau sans identifiant.');
+  var m = String(p.photo || '').match(/^data:image\/jpeg;base64,(.+)$/);
+  if (!m) throw new UserError('Photo du bordereau invalide.');
+  var octets = Utilities.base64Decode(m[1]);
+  if (octets.length > 3000000) throw new UserError('Photo trop lourde.');
+  var mt = phNombre_(p.montant);
+  if (!mt || !(Number(mt) > 0)) throw new UserError('Montant du bordereau illisible. Écrivez seulement les chiffres.');
+  var devise = BD_DEVISES.indexOf(String(p.devise)) >= 0 ? String(p.devise) : 'HTG';
+  var benef = BD_BENEF.indexOf(String(p.beneficiaire)) >= 0 ? String(p.beneficiaire) : 'Autre';
+  var recu = new Date(), auj = Utilities.formatDate(recu, TZ, 'yyyy-MM-dd'), pris = new Date(Number(p.pris_ms) || 0);
+  if (!(pris.getTime() > 0) || pris.getTime() > recu.getTime() + 10 * 60000) pris = recu;
+  var date = String(p.date_depot || ''), note = String(p.note || '').slice(0, 200);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > auj) date = auj;   // jamais dans le futur
+  var lock = LockService.getScriptLock();
+  lock.waitLock(25000);
+  try {
+    var sh = ss_().getSheetByName(BD_ONGLET);
+    if (!sh) { sh = ss_().insertSheet(BD_ONGLET); sh.appendRow(BD_ENTETES); sh.setFrozenRows(1); }
+    var n = sh.getLastRow();
+    if (n > 1) {
+      var from = Math.max(2, n - 1999), cids = sh.getRange(from, 12, n - from + 1, 1).getValues();
+      for (var i = 0; i < cids.length; i++) if (String(cids[i][0]) === cid) return { recu: true, deja: true, cid: cid };
+    }
+    var nomF = st.code + '_bordereau_' + date + '_' + mt.replace('.', '-') + devise + '_' + Utilities.formatDate(pris, TZ, 'HHmmss') + '.jpg';
+    var f = phDossier_(st, date, 'BD', 'RRD – Bordereaux de dépôt (app, privé)').createFile(Utilities.newBlob(octets, 'image/jpeg', nomF));
+    f.setDescription('Bordereau de dépôt (application RRD) — ' + st.nom + ' — ' + mt + ' ' + devise + ' — ' + benef + ' — ' + cid);
+    sh.appendRow([date, st.code, Number(mt), devise, benef, String(p.numero || '').slice(0, 40), note, Utilities.formatDate(pris, TZ, 'yyyy-MM-dd HH:mm:ss'),
+      Utilities.formatDate(recu, TZ, 'yyyy-MM-dd HH:mm:ss'), f.getId(), app.id, cid]);
+    return { recu: true, cid: cid };
+  } finally { lock.releaseLock(); }
+}
+/** Direction / comptabilité : bordereaux reçus entre deux dates de dépôt (7 derniers jours par défaut), avec les totaux par devise. */
+function bordereauxListe_(p) {
+  var auj = Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd'), ok = function (d) { return /^\d{4}-\d{2}-\d{2}$/.test(String(d || '')); };
+  var au = ok(p.au) ? String(p.au) : auj, du = ok(p.du) ? String(p.du) : Utilities.formatDate(new Date(new Date(au + 'T12:00:00Z').getTime() - 6 * 864e5), 'UTC', 'yyyy-MM-dd');
+  var noms = {}; stations_().forEach(function (s) { noms[String(s.code)] = String(s.nom); });
+  var totaux = {}, l = bdLire_(5000).filter(function (r) { return r.date_depot >= du && r.date_depot <= au && (!p.station || r.station === String(p.station)); })
+    .sort(function (a, b) { return a.date_depot === b.date_depot ? (a.recu_le < b.recu_le ? 1 : -1) : (a.date_depot < b.date_depot ? 1 : -1); });
+  l.forEach(function (r) { totaux[r.devise] = (totaux[r.devise] || 0) + r.montant; });
+  return { du: du, au: au, aujourdhui: auj, totaux: totaux, bordereaux: l.map(function (r) {
+    return { date: r.date_depot, station: r.station, nom: noms[r.station] || r.station, montant: r.montant, devise: r.devise, beneficiaire: r.beneficiaire, numero: r.numero, note: r.note, recu_le: r.recu_le, id: r.fichier_id };
+  }) };
+}
+
+/** Texte ajouté au résumé du soir (courriel) : photos horaires, manomètre et bordereaux du jour. */
+function resumeApp_(date) {
+  var t = '', s = photosSuivi_({ date: date }).stations.filter(function (x) { return x.debut && x.debut <= date; });
+  if (s.length) {
+    t += '\n\n📷 Photos — ' + date.split('-').reverse().join('/') + '\n' + s.map(function (x) {
+      var pb = x.jauge.ouvManque || x.jauge.ferManque || (x.suivie && (x.manquantes.length || x.typesManquants.length));
+      return (pb ? '⚠️ ' : '✅ ') + x.nom + ' : ' + (x.suivie ? x.manquantes.length + ' heure(s) sans photo' +
+        (x.manquantes.length ? ' (' + x.manquantes.map(function (h) { return h + ' h'; }).join(', ') + ')' : '') + ', ' + x.typesManquants.length + ' photo(s) manquante(s) ; ' : '') +
+        'manomètre ouverture ' + (x.jauge.ouv ? x.jauge.ouv + (x.jauge.ouvOk ? '' : ' (après midi)') + (x.jauge.ouvNiveau ? ' ' + x.jauge.ouvNiveau + ' %' : '') : 'manquante') +
+        ', fermeture ' + (x.jauge.fer ? x.jauge.fer + (x.jauge.ferOk ? '' : ' (avant 15 h)') + (x.jauge.ferNiveau ? ' ' + x.jauge.ferNiveau + ' %' : '') : 'manquante') +
+        (x.suivie ? ' — mois : ' + x.mois.heuresManquantes + ' heure(s) sans photo, ' + x.mois.typesManquants + ' photo(s) manquante(s)' : '');
+    }).join('\n');
+  }
+  var noms = {}; stations_().forEach(function (x) { noms[String(x.code)] = String(x.nom); });
+  var b = bdLire_(5000).filter(function (r) { return r.recu_le.slice(0, 10) === date; });
+  if (b.length) t += '\n\n🧾 Bordereaux reçus le ' + date.split('-').reverse().join('/') + '\n' + b.map(function (r) {
+    return '• ' + (noms[r.station] || r.station) + ' : ' + r.montant.toLocaleString('fr-FR') + ' ' + r.devise + ' — ' + r.beneficiaire + (r.numero ? ' — n° ' + r.numero : '') +
+      (r.date_depot !== date ? ' — dépôt du ' + r.date_depot.split('-').reverse().join('/') : '');
+  }).join('\n');
+  return t;
 }

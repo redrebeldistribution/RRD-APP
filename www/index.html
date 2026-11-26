@@ -68,7 +68,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.11.2';
+var VERSION_APP = '1.12.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -593,6 +593,8 @@ function synchroniser(manuel) {
  * La photo est gardée sur le téléphone puis envoyée dès qu'il y a du signal. L'heure est celle du téléphone au moment de la photo. */
 var PH_TYPES = [['COMPTEUR', '📟', 'Compteur', 'de près, chiffres lisibles'], ['STATION', '⛽', 'Station', 'entrée et zone de remplissage'], ['CITERNE', '🛢️', 'Citerne', 'la citerne et autour']];
 var PH_HEURES = [7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+var PH_NOMS = { COMPTEUR: 'compteur', STATION: 'station', CITERNE: 'citerne', JAUGE_OUV: 'manomètre ouverture', JAUGE_FER: 'manomètre fermeture', BORDEREAU: 'bordereau' };
+var BD_BENEF = ['Haiti Propane', 'SODIGAZ', 'Compte Red Rebel', 'Autre'];
 var PDB = null, PH = { type: '', serveur: null, envoi: false, attente: null };
 function pdb() {
   if (PDB) return Promise.resolve(PDB);
@@ -632,7 +634,7 @@ function ecranPhotos(msg) {
     if (msg) h += '<div class="okb">' + esc(msg) + '</div>';
     if (att) h += '<div class="wait">⏳ ' + att + ' photo(s) en attente d\'envoi. Elles partiront toutes seules dès qu\'il y aura du signal.</div>';
     l.filter(function (r) { return r.statut === 'rejete' && !r.vu; }).forEach(function (r) {
-      h += '<div class="err">❌ Photo de ' + r.heure + ' h (' + esc(r.type.toLowerCase()) + ') refusée :\n' + esc(r.erreur || '') + '\n<button class="sec" style="margin-top:8px" onclick="phVu(\'' + esc(r.cid) + '\')">J\'ai compris</button></div>';
+      h += '<div class="err">❌ Photo de ' + r.heure + ' h (' + esc(PH_NOMS[r.type] || r.type) + ') refusée :\n' + esc(r.erreur || '') + '\n<button class="sec" style="margin-top:8px" onclick="phVu(\'' + esc(r.cid) + '\')">J\'ai compris</button></div>';
     });
     h += '<div class="ph3">' + PH_TYPES.map(function (t) {
       var e = (etat[now.heure] || {})[t[0]], facult = types.indexOf(t[0]) < 0;
@@ -640,6 +642,15 @@ function ecranPhotos(msg) {
         (e === 'ok' ? '✓ reçue' : e === 'att' ? '⏳ en attente' : facult ? 'facultative' : 'à prendre') + '</span></button>';
     }).join('') + '</div>';
     h += '<p class="mut">' + PH_TYPES.map(function (t) { return '<b>' + t[2] + '</b> : ' + t[3]; }).join(' · ') + '. Touchez un bouton, prenez la photo, c\'est tout.</p>';
+    var toutJour = function (type) { var x = ''; Object.keys(etat).forEach(function (hh) { var e = etat[hh][type]; if (e === 'ok') x = 'ok'; else if (e === 'att' && x !== 'ok') x = 'att'; }); return x; };
+    h += '<h2>Manomètre</h2><div class="ph3">' + [['JAUGE_OUV', '🌅', 'Ouverture', 'avant midi'], ['JAUGE_FER', '🌇', 'Fermeture', 'à partir de 15 h']].map(function (t) {
+      var e = toutJour(t[0]);
+      return '<button class="' + (e === 'ok' ? 'fait' : e === 'att' ? 'att' : '') + '" onclick="phPrendre(\'' + t[0] + '\')">' + t[1] + '<br><b>' + t[2] + '</b><br><span style="font-size:12px">' + t[3] + ' · ' +
+        (e === 'ok' ? '✓ reçue' : e === 'att' ? '⏳ en attente' : 'à prendre') + '</span></button>';
+    }).join('') + '</div>';
+    var bds = l.filter(function (r) { return r.genre === 'bordereau' && r.date === now.date && r.statut !== 'rejete'; });
+    h += '<h2>Bordereau de dépôt</h2><button class="sec" style="width:100%" onclick="phPrendre(\'BORDEREAU\')">🧾 Envoyer un bordereau</button>';
+    if (bds.length) h += '<div class="note">' + bds.map(function (r) { return (r.statut === 'envoye' ? '✓ ' : '⏳ ') + fmt(Number(r.montant)) + ' ' + esc(r.devise) + ' — ' + esc(r.beneficiaire) + (r.statut === 'envoye' ? ' (reçu par le bureau)' : ' (en attente de signal)'); }).join('<br>') + '</div>';
     h += '<h2>Aujourd\'hui</h2><table><tr><th>Heure</th>' + PH_TYPES.map(function (t) { return '<th class="center">' + t[2] + '</th>'; }).join('') + '</tr>' + PH_HEURES.map(function (hh) {
       var e = etat[hh] || {}, passee = now.heure > hh;
       return '<tr' + (hh === now.heure ? ' style="font-weight:700"' : '') + '><td>' + hh + ' h</td>' + PH_TYPES.map(function (t) {
@@ -656,30 +667,61 @@ function phPrise(input) {
   var type = PH.type, ms = Date.now(), jh = phJourHeure(ms), st = CFG.get('station', {});
   var img = new Image(), url = URL.createObjectURL(f);
   img.onload = function () {
-    var k = Math.min(1, 1280 / Math.max(img.width, img.height));
+    var k = Math.min(1, (type === 'BORDEREAU' ? 1600 : 1280) / Math.max(img.width, img.height));
     var cv = document.createElement('canvas'); cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
     var c = cv.getContext('2d'); c.drawImage(img, 0, 0, cv.width, cv.height); URL.revokeObjectURL(url);
     // Station, date, heure et type écrits dans l'image (comme l'appareil photo horodateur d'avant).
-    var txt = (st.nom || st.code || '') + ' · ' + jh.txt + ' · ' + type, fs = Math.max(14, Math.round(cv.width / 38));
-    c.font = 'bold ' + fs + 'px sans-serif';
-    c.fillStyle = 'rgba(0,0,0,.6)'; c.fillRect(0, cv.height - fs * 1.7, Math.min(cv.width, c.measureText(txt).width + fs), fs * 1.7);
-    c.fillStyle = '#fff'; c.fillText(txt, fs / 2, cv.height - fs * 0.55);
-    var r = { cid: 'P' + ms.toString(36) + Math.random().toString(36).slice(2, 8), type: type, pris_ms: ms, date: jh.date, heure: jh.heure, statut: 'attente', compteur: '', photo: cv.toDataURL('image/jpeg', 0.6) };
-    if (type === 'COMPTEUR') { PH.attente = r; phEcranCompteur(); } else phGarder(r);
+    var bord = type === 'BORDEREAU';
+    if (!bord) {   // date et heure en gros (jaune), station et type dessous ; le bordereau n'est pas marqué pour rester lisible en entier
+      var fs = Math.max(20, Math.round(cv.width / 16)), fs2 = Math.round(fs * 0.55), l2 = (st.nom || st.code || '') + ' · ' + (PH_NOMS[type] || type).toUpperCase();
+      c.font = 'bold ' + fs + 'px sans-serif'; var w1 = c.measureText(jh.txt).width;
+      c.font = 'bold ' + fs2 + 'px sans-serif'; var w2 = c.measureText(l2).width, ht = fs * 1.25 + fs2 * 1.7;
+      c.fillStyle = 'rgba(0,0,0,.65)'; c.fillRect(0, cv.height - ht, Math.min(cv.width, Math.max(w1, w2) + fs), ht);
+      c.fillStyle = '#ffd400'; c.font = 'bold ' + fs + 'px sans-serif'; c.fillText(jh.txt, fs / 2, cv.height - fs2 * 1.7 - fs * 0.2);
+      c.fillStyle = '#fff'; c.font = 'bold ' + fs2 + 'px sans-serif'; c.fillText(l2, fs / 2, cv.height - fs2 * 0.55);
+    }
+    var r = { cid: (bord ? 'B' : 'P') + ms.toString(36) + Math.random().toString(36).slice(2, 8), type: type, pris_ms: ms, date: jh.date, heure: jh.heure, statut: 'attente', compteur: '', photo: cv.toDataURL('image/jpeg', bord ? 0.7 : 0.6) };
+    if (bord) { r.genre = 'bordereau'; PH.attente = r; phEcranBordereau(); }
+    else if (type === 'COMPTEUR' || type.indexOf('JAUGE') === 0) { PH.attente = r; phEcranCompteur(); } else phGarder(r);
   };
   img.onerror = function () { URL.revokeObjectURL(url); alerte('Photo illisible. Reprenez-la.'); };
   img.src = url;
 }
 function phEcranCompteur() {
   var r = PH.attente; if (!r) return ecranPhotos();
-  view('<h1>Photo du compteur</h1><img class="prev" src="' + r.photo + '"><label>Index du compteur (gallons) — facultatif</label>' +
-    '<input id="phIdx" inputmode="decimal" autocomplete="off" placeholder="les chiffres du compteur">' +
-    '<p class="mut">Écrivez les chiffres exactement comme sur le compteur. Si vous ne pouvez pas les lire, laissez vide.</p>',
+  var jg = r.type.indexOf('JAUGE') === 0;
+  view('<h1>' + (jg ? 'Photo du manomètre' : 'Photo du compteur') + '</h1><img class="prev" src="' + r.photo + '"><label>' + (jg ? 'Niveau du manomètre (%) — facultatif' : 'Index du compteur (gallons) — facultatif') + '</label>' +
+    '<input id="phIdx" inputmode="decimal" autocomplete="off" placeholder="' + (jg ? 'le chiffre montré par l\'aiguille' : 'les chiffres du compteur') + '">' +
+    '<p class="mut">' + (jg ? 'Écrivez le chiffre que montre l\'aiguille (0 à 100). Si vous n\'êtes pas sûr, laissez vide.' : 'Écrivez les chiffres exactement comme sur le compteur. Si vous ne pouvez pas les lire, laissez vide.') + '</p>',
     '<button class="sec" onclick="PH.attente=null;ecranPhotos()">Reprendre la photo</button><button onclick="phValiderCompteur()">Enregistrer</button>', 'photoCompteur');
 }
-function phValiderCompteur() { var r = PH.attente; if (!r) return; r.compteur = String($('phIdx').value || '').trim(); PH.attente = null; phGarder(r); }
+function phValiderCompteur() {
+  var r = PH.attente; if (!r) return;
+  var v = String($('phIdx').value || '').replace(/%/g, '').trim(), n = v ? nb(v) : null;   // même règle que les rapports : la virgule sépare les milliers
+  if (v && (n === null || (r.type.indexOf('JAUGE') === 0 && n > 100))) return alerte('Chiffres illisibles. Écrivez seulement les chiffres, ou laissez vide.');
+  r.compteur = v ? String(n) : ''; PH.attente = null; phGarder(r);
+}
+function phEcranBordereau() {
+  var r = PH.attente; if (!r) return ecranPhotos();
+  view('<h1>Bordereau de dépôt</h1><img class="prev" src="' + r.photo + '">' +
+    '<label>Montant écrit sur le bordereau</label><input id="bdMt" inputmode="decimal" autocomplete="off" placeholder="seulement les chiffres">' +
+    '<label>Monnaie</label><select id="bdDev"><option value="HTG">Gourdes (HTG)</option><option value="USD">Dollars US (USD)</option></select>' +
+    '<label>Dépôt fait pour</label><select id="bdBen">' + BD_BENEF.map(function (b) { return '<option>' + esc(b) + '</option>'; }).join('') + '</select>' +
+    '<label>Date du dépôt</label><input type="date" id="bdDate" value="' + r.date + '" max="' + r.date + '">' +
+    '<label>N° du bordereau (facultatif)</label><input id="bdNum" autocomplete="off">' +
+    '<label>Note (facultatif)</label><input id="bdNote" autocomplete="off">',
+    '<button class="sec" onclick="PH.attente=null;ecranPhotos()">Annuler</button><button onclick="phValiderBordereau()">Envoyer</button>', 'photoBordereau');
+}
+function phValiderBordereau() {
+  var r = PH.attente; if (!r) return;
+  var mt = nb($('bdMt').value);   // même règle que les rapports : « 125 000 » ou « 125,000 » = cent vingt-cinq mille
+  if (mt === null || !(mt > 0)) return alerte('Écrivez le montant du bordereau, seulement les chiffres (ex. 125000).');
+  r.montant = String(mt); r.devise = $('bdDev').value; r.beneficiaire = $('bdBen').value; r.date_depot = $('bdDate').value || r.date;
+  r.numero = String($('bdNum').value || '').trim(); r.note = String($('bdNote').value || '').trim();
+  PH.attente = null; phGarder(r);
+}
 function phGarder(r) {
-  ptx('readwrite', function (s) { s.put(r); }).then(function () { ecranPhotos('Photo enregistrée (' + r.heure + ' h, ' + r.type.toLowerCase() + ').'); phEnvoyer(); },
+  ptx('readwrite', function (s) { s.put(r); }).then(function () { ecranPhotos(r.genre === 'bordereau' ? 'Bordereau enregistré (' + r.montant + ' ' + r.devise + ').' : 'Photo enregistrée (' + r.heure + ' h, ' + (PH_NOMS[r.type] || r.type) + ').'); phEnvoyer(); },
     function () { ecranPhotos(); alerte('Impossible de garder la photo sur le téléphone (mémoire pleine ?). Reprenez-la.'); });
 }
 function phVu(cid) { phTous().then(function (l) { var r = l.filter(function (x) { return x.cid === cid; })[0]; if (!r) return; r.vu = true; return ptx('readwrite', function (s) { s.put(r); }); }).then(function () { ecranPhotos(); }); }
@@ -692,7 +734,9 @@ function phEnvoyer() {
     function suivant() {
       if (i >= file.length) return;
       var r = file[i++];
-      return api('photo', { payload: { cid: r.cid, type: r.type, pris_ms: r.pris_ms, compteur: r.compteur, photo: r.photo } }).then(function () {
+      return (r.genre === 'bordereau'
+        ? api('bordereau', { payload: { cid: r.cid, pris_ms: r.pris_ms, photo: r.photo, montant: r.montant, devise: r.devise, beneficiaire: r.beneficiaire, numero: r.numero, note: r.note, date_depot: r.date_depot } })
+        : api('photo', { payload: { cid: r.cid, type: r.type, pris_ms: r.pris_ms, compteur: r.compteur, photo: r.photo } })).then(function () {
         r.statut = 'envoye'; delete r.photo;
       }, function (e) {
         if (e.reseau || e.code === 'NON_ENREGISTRE' || e.code === 'DESACTIVE') throw e;   // pas de signal ou téléphone à réenregistrer : on réessaiera
@@ -892,14 +936,14 @@ function exporterCsv() {
 }
 
 function entete() {
-  var tabs = [['rapports', 'Rapports'], ['analyse', '📊 Analyse'], ['resume', 'Résumé du jour'], ['photos', '📷 Photos'], ['prix', 'Prix']];
+  var tabs = [['rapports', 'Rapports'], ['analyse', '📊 Analyse'], ['resume', 'Résumé du jour'], ['photos', '📷 Photos'], ['bordereaux', '🧾 Bordereaux'], ['prix', 'Prix']];
   if (D.utilisateur.role === 'management') tabs.push(['appareils', 'Téléphones']);
   return '<h1>Tableau de bord</h1><div class="sub">' + esc(D.utilisateur.nom) + ' · ' + (D.utilisateur.role === 'management' ? 'Direction' : 'Comptabilité') + ' · montants en ' + DEV + ' · <a href="#" onclick="changerCode();return false">Changer de code</a></div>' +
     '<div class="tabs">' + tabs.map(function (t) { return '<button class="' + (T.onglet === t[0] ? '' : 'sec') + '" onclick="tableau(\'' + t[0] + '\')">' + t[1] + '</button>'; }).join('') + '</div>';
 }
 function charge() { view(entete() + '<p class="mut center">Chargement…</p>'); }
 function errTab(e) { view(entete() + '<div class="err">' + esc(e.reseau ? 'Pas de connexion. Réessayez.' : e.erreur) + '</div>', '<button class="sec" onclick="tableau(T.onglet)">Réessayer</button>'); }
-function tableau(o) { T.retour = ''; T.onglet = o; charge(); ({ rapports: ongletRapports, analyse: function () { ongletAnalyse(); }, resume: ongletResume, photos: ongletPhotos, prix: ongletPrix, appareils: ongletAppareils })[o](); }
+function tableau(o) { T.retour = ''; T.onglet = o; charge(); ({ rapports: ongletRapports, analyse: function () { ongletAnalyse(); }, resume: ongletResume, photos: ongletPhotos, bordereaux: ongletBordereaux, prix: ongletPrix, appareils: ongletAppareils })[o](); }
 function badgeEcart(e) {
   if (e === null || e === undefined) return '<span class="badge b-warn">prix manquant</span>';
   if (Math.abs(e) < 1) return '<span class="badge b-ok">écart 0</span>';
@@ -1042,6 +1086,8 @@ function ongletPhotos() {
       }).join('') + '</div>';
       if (!commence) h += '<div class="mut">Pas de photos envoyées par l\'application' + (s.debut ? ' avant le ' + dfr(s.debut) : ' pour l\'instant') + '.</div>';
       else {
+        var jg = function (heure, ok, niveau, manque, tard) { return heure ? heure + (ok ? ' ✓' : ' ⚠️ (' + tard + ')') + (niveau ? ' ' + esc(niveau) + ' %' : '') : manque ? '<b style="color:var(--bad)">manquante</b>' : '—'; };
+        if (s.jauge) h += '<div class="mut">Manomètre : ouverture ' + jg(s.jauge.ouv, s.jauge.ouvOk, s.jauge.ouvNiveau, s.jauge.ouvManque, 'après midi') + ' · fermeture ' + jg(s.jauge.fer, s.jauge.ferOk, s.jauge.ferNiveau, s.jauge.ferManque, 'avant 15 h') + '</div>';
         h += '<div class="mut">Heures sans photo : ' + (s.manquantes.length ? '<b style="color:var(--bad)">' + s.manquantes.map(function (x) { return x + ' h'; }).join(', ') + '</b>' : 'aucune') + '</div>';
         if (s.typesManquants.length) h += '<div class="mut">Photos manquantes : ' + s.typesManquants.map(function (x) { return x.h + ' h ' + x.type.toLowerCase(); }).join(' · ') + '</div>';
         if (s.mois.depuis) h += '<div class="mut">Mois (depuis le ' + dfr(s.mois.depuis) + ', ' + s.mois.jours + ' j) : <b>' + s.mois.heuresManquantes + '</b> heure(s) sans photo, <b>' + s.mois.typesManquants + '</b> photo(s) manquante(s) dans les heures couvertes</div>';
@@ -1057,8 +1103,8 @@ function phOuvrir(code) {
     var s = PHD.stations.filter(function (x) { return x.code === code; })[0] || { nom: code };
     var h = entete() + '<h2>' + esc(s.nom) + ' — ' + dfr(d.date) + '</h2>';
     if (!d.photos.length) h += '<p class="mut">Aucune photo ce jour-là.</p>';
-    else h += '<table><tr><th>Heure</th><th>Photo</th><th>Index compteur</th><th></th></tr>' + d.photos.map(function (p, i) {
-      return '<tr><td>' + esc(String(p.pris_le).slice(11, 16)) + '</td><td>' + esc(p.type.toLowerCase()) + (p.note ? '<div class="mut">' + esc(p.note) + '</div>' : '') + '</td><td>' + esc(p.compteur || '') + '</td>' +
+    else h += '<table><tr><th>Heure</th><th>Photo</th><th>Index / niveau</th><th></th></tr>' + d.photos.map(function (p, i) {
+      return '<tr><td>' + esc(String(p.pris_le).slice(11, 16)) + '</td><td>' + esc(PH_NOMS[p.type] || p.type) + (p.note ? '<div class="mut">' + esc(p.note) + '</div>' : '') + '</td><td>' + esc(p.compteur || '') + '</td>' +
         '<td class="n"><button class="sec" style="padding:6px 10px" onclick="phVoir(\'' + esc(p.id) + '\',' + i + ')">Voir</button></td></tr><tr><td colspan="4" id="phv' + i + '" style="border:0;padding:0"></td></tr>';
     }).join('') + '</table>';
     view(h, '<button class="sec" onclick="tableau(\'photos\')">← Retour</button>');
@@ -1069,6 +1115,25 @@ function phVoir(id, i) {
   if (c.innerHTML) { c.innerHTML = ''; return; }
   c.innerHTML = '<p class="mut">Chargement de la photo…</p>';
   call('photoVoir', { id: id }).then(function (d) { c.innerHTML = '<img class="photo" src="' + d.photo + '" alt="">'; }, function (e) { c.innerHTML = '<div class="err">' + esc(e.reseau ? 'Pas de connexion.' : e.erreur) + '</div>'; });
+}
+
+
+/* ----- Direction : bordereaux de dépôt envoyés par les stations ----- */
+function ongletBordereaux() {
+  call('bordereaux', { du: T.bdu || '', au: T.bau || '' }).then(function (d) {
+    T.bdu = d.du; T.bau = d.au;
+    var h = entete() + '<div class="row"><div><label>Dépôts du</label><input type="date" id="bDu" value="' + d.du + '" max="' + d.aujourdhui + '"></div><div><label>au</label><input type="date" id="bAu" value="' + d.au + '" max="' + d.aujourdhui + '"></div></div>' +
+      '<div style="margin-top:8px"><button class="sec" onclick="T.bdu=$(\'bDu\').value;T.bau=$(\'bAu\').value;tableau(\'bordereaux\')">Afficher</button></div>';
+    var tot = Object.keys(d.totaux).map(function (k) { return '<b>' + fmt(d.totaux[k]) + ' ' + esc(k) + '</b>'; }).join(' · ');
+    h += '<div class="card">' + d.bordereaux.length + ' bordereau(x)' + (tot ? ' — total ' + tot : '') + '<div class="mut">Montants tels que la station les a écrits ; vérifiez avec la photo.</div></div>';
+    if (!d.bordereaux.length) h += '<p class="mut">Aucun bordereau pour ces dates.</p>';
+    else h += '<table><tr><th>Dépôt</th><th>Station</th><th class="n">Montant</th><th></th></tr>' + d.bordereaux.map(function (b, i) {
+      return '<tr><td>' + dfr(b.date).slice(0, 5) + '</td><td>' + esc(b.nom) + '<div class="mut">' + esc(b.beneficiaire) + (b.numero ? ' · n° ' + esc(b.numero) : '') + (b.note ? ' · ' + esc(b.note) : '') + '</div></td>' +
+        '<td class="n">' + fmt(b.montant) + ' ' + esc(b.devise) + '</td><td class="n"><button class="sec" style="padding:6px 10px" onclick="phVoir(\'' + esc(b.id) + '\',' + i + ')">Voir</button></td></tr>' +
+        '<tr><td colspan="4" id="phv' + i + '" style="border:0;padding:0"></td></tr>';
+    }).join('') + '</table>';
+    view(h);
+  }).catch(errTab);
 }
 
 function ongletResume() {
