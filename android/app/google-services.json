@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "307058061040",
+    "project_id": "rrd-app-94e2c",
+    "storage_bucket": "rrd-app-94e2c.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:307058061040:android:739be181818ad468d8dc35",
+        "android_client_info": {
+          "package_name": "com.redrebel.rrdapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAI4fub0Gf_qx_gtcMNF9MeX9eAvL3Myks"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

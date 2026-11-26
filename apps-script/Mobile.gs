@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.14';
+var MOBILE_VERSION = 'm1.15';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var MAX_APPAREILS_ROLE = 5;   // un code DIR ou CPT peut servir sur 5 appareils en même temps (demande du propriétaire, 26/11/2026)
 var ROLES_APPAREIL = { DIRECTION: 'management', COMPTA: 'accounting' };   // station = DIRECTION ou COMPTA → téléphone de la direction / comptabilité
@@ -31,7 +31,7 @@ var JOURS_DIFFERE_MAX = 7;   // une station peut faire un rapport manquant jusqu
 
 var APPAREILS = {
   name: 'Appareils',
-  headers: ['code_activation', 'station', 'actif', 'appareil_id', 'jeton', 'modele', 'enregistre_le', 'dernier_contact', 'note', 'nom']
+  headers: ['code_activation', 'station', 'actif', 'appareil_id', 'jeton', 'modele', 'enregistre_le', 'dernier_contact', 'note', 'nom', 'push', 'msg_vu_le']
 };
 
 function installerMobile() {
@@ -76,6 +76,7 @@ function apiMobile_(action, b) {
       case 'photos': return ok_(photosStation_(app));
       case 'bordereau': return ok_(bordereau_(app, payload));
       case 'messages': return ok_(messagesStation_(app));
+      case 'pushToken': return ok_(pushToken_(app, payload));
       case 'dir': return ok_(direction_(app, String(b.sous_action || ''), payload));
       default: throw new UserError('Action inconnue.');
     }
@@ -421,7 +422,7 @@ function listeAppareils_() {
       return { code: String(a.code_activation), station: String(a.station), station_nom: noms[String(a.station).trim()] || String(a.station),
         actif: estVrai_(a.actif), utilise: !!String(a.jeton || '').trim(), enregistre_le: String(a.enregistre_le || ''),
         partage: !!ROLES_APPAREIL[String(a.station).trim().toUpperCase()], nb: appListe_(a.appareil_id).length, max: MAX_APPAREILS_ROLE,
-        dernier_contact: String(a.dernier_contact || ''), nom: String(a.nom || '') };
+        dernier_contact: String(a.dernier_contact || ''), nom: String(a.nom || ''), push: !!String(a.push || '').trim() };
     })
   };
 }
@@ -449,6 +450,7 @@ function libererAppareil_(ctx, p) {
   if (String(a.code_activation) === ctx.id.replace(/^APP-/, '')) throw new UserError('Vous ne pouvez pas libérer le code de votre propre téléphone.');
   majCellule_(APPAREILS, a._ligne, 'jeton', '');
   majCellule_(APPAREILS, a._ligne, 'appareil_id', '');
+  try { if (String(a.push || '')) majCellule_(APPAREILS, a._ligne, 'push', ''); } catch (e) { }
   majCellule_(APPAREILS, a._ligne, 'note', String(a.note || '') + ' | libéré le ' + maintenant_() + ' par ' + ctx.nom);
   journal_(ctx, 'appareil-libere', String(a.code_activation));
   return listeAppareils_();
@@ -742,10 +744,11 @@ function resumeApp_(date) {
  * (même sans signal). Une ligne par message dans l'onglet « Messages (app) » ; « supprimer » le désactive, la ligne reste.
  */
 var MSG_ONGLET = 'Messages (app)';
-var MSG_ENTETES = ['id', 'cree_le', 'par', 'cible', 'date', 'heure', 'type', 'texte', 'actif'];
+var MSG_ENTETES = ['id', 'cree_le', 'par', 'cible', 'date', 'heure', 'type', 'texte', 'actif', 'pousse_le', 'pousse_a'];   // les deux dernières : remplies par le relais des notifications
 function msgFeuille_(creer) {
   var sh = ss_().getSheetByName(MSG_ONGLET);
   if (!sh && creer) { sh = ss_().insertSheet(MSG_ONGLET); sh.appendRow(MSG_ENTETES); sh.setFrozenRows(1); }
+  else if (sh && creer && sh.getLastColumn() < MSG_ENTETES.length) sh.getRange(1, 1, 1, MSG_ENTETES.length).setValues([MSG_ENTETES]);
   return sh;
 }
 function msgLire_() {
@@ -754,7 +757,8 @@ function msgLire_() {
   var n = sh.getLastRow(), from = Math.max(2, n - 1999);
   return sh.getRange(from, 1, n - from + 1, MSG_ENTETES.length).getValues().map(function (r, i) {
     return { ligne: from + i, id: Number(r[0]) || 0, cree_le: phTexte_(r[1]), par: String(r[2]), cible: String(r[3]).trim(), date: phJour_(r[4]),
-      heure: String(r[5]).replace('h', ':'), type: String(r[6]), texte: String(r[7]).trim(), actif: /^(oui|true)$/i.test(String(r[8]).trim()) };
+      heure: String(r[5]).replace('h', ':'), type: String(r[6]), texte: String(r[7]).trim(), actif: /^(oui|true)$/i.test(String(r[8]).trim()),
+      pousse_a: String(r[10] || '').split(',').map(function (x) { return x.trim(); }).filter(String) };
   });
 }
 function msgJour_(n) { return Utilities.formatDate(new Date(Date.now() + n * 864e5), TZ, 'yyyy-MM-dd'); }
@@ -762,8 +766,41 @@ function msgJour_(n) { return Utilities.formatDate(new Date(Date.now() + n * 864
 function messagesStation_(app) {
   if (app.role || !app.station) throw new UserError('Réservé au téléphone de la station.', 'FORBIDDEN');
   var code = String(app.station.code), du = msgJour_(-2), au = msgJour_(14);
-  return { date: msgJour_(0), messages: msgLire_().filter(function (m) { return m.actif && (m.cible === 'TOUS' || m.cible === code) && m.date >= du && m.date <= au; })
-    .map(function (m) { return { id: m.id, date: m.date, heure: m.heure, type: m.type, texte: m.texte }; }) };
+  var l = msgLire_().filter(function (m) { return m.actif && (m.cible === 'TOUS' || m.cible === code) && m.date >= du && m.date <= au; })
+    .map(function (m) { return { id: m.id, date: m.date, heure: m.heure, type: m.type, texte: m.texte, pousse: m.pousse_a.indexOf(code) >= 0 }; });
+  try { majColonne_(APPAREILS, app.ligne._ligne, 'msg_vu_le', maintenant_()); } catch (e) { }   // ce téléphone a maintenant ces messages : inutile de les lui pousser
+  return { date: msgJour_(0), messages: l };
+}
+
+/* ============================ Notifications poussées (m1.15, 26/11/2026) ============================
+ * Le téléphone d'une station donne son adresse de notification (Firebase) ; elle est gardée dans la colonne « push » de l'onglet
+ * « Appareils ». Un petit programme à part, « RRD Notifications », lit l'onglet « Messages (app) » et pousse à l'heure prévue les
+ * messages qu'un téléphone n'a pas encore pris (« msg_vu_le » plus ancien que le message), puis note « pousse_le » et « pousse_a ».
+ * Si ce relais est arrêté, rien n'est perdu : le message s'affiche à la prochaine ouverture de l'application, comme avant. */
+function majColonne_(def, ligne, champ, valeur) {   // comme majCellule_, mais ajoute la colonne si elle manque
+  var sh = sh_(def), h = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String), j = h.indexOf(champ);
+  if (j < 0) { j = h.length; sh.getRange(1, j + 1).setValue(champ); }
+  sh.getRange(ligne, j + 1).setValue(valeur);
+}
+function pushToken_(app, p) {
+  if (app.role || !app.station) return { garde: false };
+  var t = String(p.token || '').trim();
+  if (t && (t.length > 1024 || !/^[A-Za-z0-9_:.\-]+$/.test(t))) throw new UserError('Adresse de notification invalide.');
+  var lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    lire_(APPAREILS).forEach(function (a) {   // une adresse = un seul téléphone : on la retire d'un ancien code
+      if (t && a._ligne !== app.ligne._ligne && String(a.push || '') === t) majColonne_(APPAREILS, a._ligne, 'push', '');
+    });
+    if (String(app.ligne.push || '') !== t) majColonne_(APPAREILS, app.ligne._ligne, 'push', t);
+  } finally { lock.releaseLock(); }
+  return { garde: !!t };
+}
+/** Réveille le relais tout de suite (sinon il passe toutes les 5 minutes). Sans effet tant que l'adresse du relais n'est pas réglée. */
+function pushReveiller_() {
+  try {
+    var url = prop_('PUSH_RELAIS_URL');
+    if (url) UrlFetchApp.fetch(url, { method: 'post', payload: '{}', contentType: 'text/plain', muteHttpExceptions: true });
+  } catch (e) { }
 }
 function messagesListe_() {
   var noms = { TOUS: 'Toutes les stations' }; stations_().forEach(function (s) { noms[String(s.code)] = String(s.nom); });
@@ -788,6 +825,7 @@ function messageAjouter_(ctx, p) {
     msgFeuille_(true).appendRow([id, maintenant_(), ctx.nom, cible, date, heure.replace(':', 'h'), type, (/^[=+\-@]/.test(texte) ? ' ' : '') + texte, 'oui']);   // jamais une formule
     journal_(ctx, 'message+', id + ' ' + cible + ' ' + date + ' ' + heure);
   } finally { lock.releaseLock(); }
+  if (date === auj && heure <= Utilities.formatDate(new Date(Date.now() + 60000), TZ, 'HH:mm')) pushReveiller_();   // message pour maintenant : poussé tout de suite
   return messagesListe_();
 }
 function messageSupprimer_(ctx, p) {
