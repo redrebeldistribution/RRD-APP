@@ -50,7 +50,7 @@
 <script src="config.js"></script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.2.0';
+var VERSION_APP = '1.3.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -70,7 +70,18 @@ var esc = function (s) { return String(s === null || s === undefined ? '' : s).r
 var $ = function (id) { return document.getElementById(id); };
 var dfr = function (d) { return d ? String(d).split('-').reverse().join('/') : ''; };
 function libPer(p) { return { '': 'Toute la journée', AM: 'Équipe du matin', PM: 'Équipe du soir' }[p || ''] || p; }
-function nb(s) { var n = Number(String(s).replace(/[\s ,]/g, '')); return String(s).trim() === '' || isNaN(n) ? null : n; }
+/* Nombre strict : « 1 788 » ou « 1,788 » = mille sept cent quatre-vingt-huit ; « 1788 2862 » est refusé (deux montants collés) ;
+   plusieurs montants s'additionnent avec + (ex. 1788+2862). */
+function nb(s) {
+  s = String(s === undefined || s === null ? '' : s).replace(/[$]|HTG|gdes?/gi, '').trim(); if (!s) return null;
+  var tot = 0, parts = s.split('+');
+  for (var i = 0; i < parts.length; i++) {
+    var p = parts[i].trim();
+    if (!/^(\d{1,3}([ \u00a0\u202f,]\d{3})+|\d+)(\.\d+)?$/.test(p)) return null;
+    tot += Number(p.replace(/[ \u00a0\u202f,]/g, ''));
+  }
+  return Math.round(tot * 100) / 100;
+}
 
 /* Heure d'Haïti, même règle que le serveur : avant 4 h, c'est encore la veille. */
 function partiesHaiti(t) {
@@ -131,7 +142,7 @@ function api(action, extra) {
     .then(function (r) { clearTimeout(t); return r.text(); })
     .then(function (txt) {
       var j; try { j = JSON.parse(txt); } catch (e) { throw { erreur: 'Réponse illisible du serveur.', reseau: true }; }
-      if (!j.ok) throw { erreur: j.erreur, code: j.code || '', reseau: j.code === 'SERVEUR' };
+      if (!j.ok) throw { erreur: j.erreur, code: j.code || '', reseau: j.code === 'SERVEUR', controles: j.controles || null };
       return j.data;
     }, function () { clearTimeout(t); throw { erreur: 'Pas de connexion.', reseau: true }; });
 }
@@ -204,6 +215,9 @@ function accueil() {
     var rejetes = liste.filter(function (r) { return r.statut === 'rejete' && !r.vu; });
     var h = '<h1>' + esc(st.nom || '') + '</h1><div class="sub">Journée du ' + dfr(j.date) + '</div>';
     if (attente.length) h += '<div class="wait">⏳ ' + attente.length + ' rapport(s) en attente d\'envoi. Ils partiront tout seuls dès qu\'il y aura du signal.</div>';
+    liste.filter(function (r) { return r.statut === 'verif'; }).forEach(function (r) {
+      h += '<div class="err">⚠️ Rapport du ' + dfr(r.date) + ' (' + esc(libPer(r.periode)) + ') pas encore accepté : le bureau demande de revérifier des chiffres.\n<button style="margin-top:8px" onclick="revoir(\'' + esc(r.ref) + '\')">Revoir le rapport</button></div>';
+    });
     rejetes.forEach(function (r) { h += '<div class="err">❌ Rapport ' + esc(r.ref) + ' (' + dfr(r.date) + ') refusé par le serveur :\n' + esc(r.erreur || '') + '\n<button class="sec" style="margin-top:8px" onclick="vuRejet(\'' + esc(r.ref) + '\')">J\'ai compris</button></div>'; });
     if (j.periodes.length) {
       h += '<button class="bigbtn" onclick="nouveau()">📋 Faire le rapport de fermeture</button>';
@@ -214,7 +228,7 @@ function accueil() {
     if (recents.length) {
       h += '<h2>Derniers rapports de ce téléphone</h2>';
       recents.forEach(function (r) {
-        var etat = r.statut === 'envoye' ? '<span style="color:var(--ok)">✅ reçu</span>' : r.statut === 'attente' ? '<span style="color:var(--warn)">⏳ en attente</span>' : '<span style="color:var(--bad)">❌ refusé</span>';
+        var etat = r.statut === 'envoye' ? '<span style="color:var(--ok)">✅ reçu</span>' : r.statut === 'attente' ? '<span style="color:var(--warn)">⏳ en attente</span>' : r.statut === 'verif' ? '<span style="color:var(--warn)">⚠️ à revérifier</span>' : '<span style="color:var(--bad)">❌ refusé</span>';
         h += '<div class="card" onclick="voir(\'' + esc(r.ref) + '\')"><div class="row"><div><b>' + esc(r.ref) + '</b><div class="mut">' + dfr(r.date) + ' · ' + esc(libPer(r.periode)) + '</div></div><div style="text-align:right">' + etat + '</div></div></div>';
       });
     }
@@ -251,6 +265,17 @@ function changerCode() {
     S.init = null; D = null; ecranEnregistrer();
   });
 }
+function revoir(ref) {
+  tous().then(function (l) {
+    var r = l.filter(function (x) { return x.ref === ref; })[0]; if (!r) return accueil();
+    V = {}; Object.keys(r).forEach(function (k) { if (['statut', 'cree_le', 'erreur', 'vu', 'recu_le', 'station', 'controles', 'photo', 'ref', 'date', 'en_retard'].indexOf(k) < 0) V[k] = r[k]; });
+    V.periode = r.periode || ''; V.confirme_codes = [];
+    PHOTO = r.photo || '';
+    J = { date: r.date, periodes: [r.periode || ''], envoyes: [], retard: !!r.en_retard, revoir: true, ref: r.ref, cree_le: r.cree_le, prec: null, ctrlServeur: r.controles || [] };
+    J.valeursServeur = champs().map(function (f) { return String(nb(V[f.k])); }).join('|');
+    ecranFormulaire();
+  });
+}
 function vuRejet(ref) { tous().then(function (l) { var r = l.filter(function (x) { return x.ref === ref; })[0]; if (r) { r.vu = true; return sauver(r); } }).then(accueil); }
 
 /* ======================= Formulaire (repris de l'app Telegram) ======================= */
@@ -271,6 +296,7 @@ function nouveau(date) {
     var serveur = J.prerempli;
     if (dernier && (!serveur || !S.init || dernier.cree_le > (CFG.get('init_le', '') || ''))) { V.opening_meter = dernier.closing_meter; V.starting_cash = dernier.counted_cash; }
     else if (serveur) { V.opening_meter = serveur.opening_meter; V.starting_cash = serveur.starting_cash; }
+    J.prec = (V.opening_meter !== undefined && V.opening_meter !== '') ? { opening_meter: nb(V.opening_meter), starting_cash: nb(V.starting_cash) } : null;
     ecranFormulaire();
   });
 }
@@ -303,11 +329,12 @@ function ecranFormulaire(msgErr) {
   h += '<label for="f_notes">Notes (facultatif)</label><textarea id="f_notes">' + esc(V.notes || '') + '</textarea>' +
     '<label>Photo de la page du registre (facultatif)</label><input type="file" id="f_photo" accept="image/*" onchange="lirePhoto(this)">' +
     '<div id="photoEtat" class="mut">' + (PHOTO ? 'Photo prête ✓' : '') + '</div>' +
-    '<p class="mut">Tous les montants sont en ' + DEV + '.</p>';
+    '<p class="mut">Tous les montants sont en ' + DEV + '. Un seul montant par case ; pour plusieurs Zelle ou dépenses, écrivez-les avec + (ex. 1788+2862).</p>';
   view(h, '<button class="sec" onclick="accueil()">Annuler</button><button onclick="verifier()">Vérifier</button>');
   majGallons();
 }
 function lireChamps() {
+  V.confirme_codes = [];
   champs().forEach(function (f) { var el = $('f_' + f.k); if (el) V[f.k] = el.value.trim(); });
   V.other_expenses_detail = (($('f_other_expenses_detail') || {}).value || '').trim();
   V.notes = (($('f_notes') || {}).value || '').trim();
@@ -339,7 +366,7 @@ function verifier() {
   var err = [];
   champs().forEach(function (f) {
     if (f.req && V[f.k] === '') err.push(f.label + ' : obligatoire.');
-    else if (V[f.k] !== '' && (nb(V[f.k]) === null || nb(V[f.k]) < 0)) err.push(f.label + ' : nombre invalide.');
+    else if (V[f.k] !== '' && (nb(V[f.k]) === null || nb(V[f.k]) < 0)) err.push(f.label + ' : « ' + V[f.k] + ' » n\'est pas un nombre valide. Un seul montant par case ; pour plusieurs montants écrivez-les avec + (ex. 1788+2862).');
   });
   if (!err.length && nb(V.closing_meter) < nb(V.opening_meter)) err.push('Le compteur de fermeture doit être plus grand ou égal au compteur d\'ouverture.');
   if (!err.length && nb(V.closing_meter) - nb(V.opening_meter) > 5000) err.push('Plus de 5 000 gallons vendus : vérifiez les compteurs.');
@@ -347,6 +374,43 @@ function verifier() {
   if (!V.employes_service) err.unshift('Employé(s) de service : obligatoire.');
   if (J.retard && !V.raison_retard) err.unshift('Raison du retard : obligatoire.');
   if (err.length) return ecranFormulaire(err.join('\n'));
+  var ctrls = controlesLocaux();
+  var aConfirmer = ctrls.filter(function (c) { return (V.confirme_codes || []).indexOf(c.code) < 0; });
+  if (aConfirmer.length || (ctrls.length && !V.explication_controle)) return ecranControles(ctrls);
+  resume();
+}
+/* Les mêmes contrôles que le serveur, faisables sans connexion (pas d'écart de caisse : le prix n'est pas sur le téléphone). */
+function controlesLocaux() {
+  var out = [], f = function (n) { return fmt(n); }, c = (S.init && S.init.plafonds) || (CFG.get('init', null) || {}).plafonds || null;
+  if (J.prec) {
+    if (J.prec.opening_meter !== null && nb(V.opening_meter) !== J.prec.opening_meter) out.push({ code: 'COMPTEUR', msg: 'Compteur d\'ouverture ' + f(nb(V.opening_meter)) + ' : le rapport précédent a fermé à ' + f(J.prec.opening_meter) + '. S\'il manque un jour, faites d\'abord le « Rapport manquant ».' });
+    if (J.prec.starting_cash !== null && nb(V.starting_cash) !== J.prec.starting_cash) out.push({ code: 'CAISSE_DEPART', msg: 'Solde initial ' + f(nb(V.starting_cash)) + ' : la caisse comptée au rapport précédent était ' + f(J.prec.starting_cash) + '.' });
+  }
+  if (c) {
+    var gros = champs().filter(function (x) { return x.money && nb(V[x.k]) > c.montant; });
+    if (gros.length) out.push({ code: 'MONTANT', msg: gros.map(function (x) { return x.label + ' ' + f(nb(V[x.k])); }).join(', ') + ' : montant beaucoup trop grand pour cette station. Un seul montant par case : additionnez les Zelle (ex. 1788+2862).' });
+    var g = nb(V.closing_meter) - nb(V.opening_meter);
+    if (g > c.gallons) out.push({ code: 'GALLONS', msg: f(g) + ' gallons vendus : beaucoup plus que d\'habitude. Vérifiez les deux compteurs.' });
+  }
+  var inchange = J.valeursServeur && J.valeursServeur === champs().map(function (f) { return String(nb(V[f.k])); }).join('|');
+  if (inchange) (J.ctrlServeur || []).forEach(function (x) { if (!out.some(function (y) { return y.code === x.code; })) out.push(x); });
+  return out;
+}
+function ecranControles(ctrls) {
+  var h = '<h1>⚠️ Chiffres à revérifier</h1><div class="sub">Ces chiffres semblent faux. Corrigez-les, ou expliquez pourquoi ils sont justes.</div>';
+  ctrls.forEach(function (c) { h += '<div class="err">' + esc(c.msg) + '</div>'; });
+  h += '<label for="f_expl">Si les chiffres sont justes, expliquez pourquoi *</label><textarea id="f_expl" placeholder="ex. 100 gallons vendus à crédit à …">' + esc(V.explication_controle || '') + '</textarea>' +
+    '<p class="mut">L\'explication est envoyée au bureau avec le rapport.</p>';
+  S.ctrls = ctrls;
+  view(h, '<button onclick="ecranFormulaire()">Corriger</button><button class="sec" onclick="confirmerControles()">C\'est juste</button>');
+}
+function confirmerControles() {
+  var e = ($('f_expl').value || '').trim();
+  if (e.length < 5) { alert('Écrivez une explication.'); return; }
+  V.explication_controle = e; V.confirme_codes = S.ctrls.map(function (c) { return c.code; });
+  resume();
+}
+function resume() {
   var st = CFG.get('station', {});
   var h = '<h1>Vérifiez avant d\'envoyer</h1><div class="sub">' + esc(st.nom) + ' · ' + dfr(J.date) + ' · ' + esc(libPer(V.periode)) + '</div>' +
     (J.retard ? '<div class="wait">📅 Rapport en retard pour le ' + dfr(J.date) + '.\nRaison : ' + esc(V.raison_retard) + '</div>' : '') + '<div class="card"><table>' +
@@ -358,17 +422,19 @@ function verifier() {
   });
   if (V.other_expenses_detail) h += '<tr><td>Détail dépenses</td><td class="n">' + esc(V.other_expenses_detail) + '</td></tr>';
   if (V.notes) h += '<tr><td>Notes</td><td class="n">' + esc(V.notes) + '</td></tr>';
+  if (V.explication_controle && (V.confirme_codes || []).length) h += '<tr><td>⚠️ Explication</td><td class="n">' + esc(V.explication_controle) + '</td></tr>';
   h += '<tr><td>Photo</td><td class="n">' + (PHOTO ? 'oui' : 'non') + '</td></tr></table></div>' +
     '<div class="note">Après l\'envoi, le rapport ne peut plus être modifié. Montants en ' + DEV + '.</div>';
   view(h, '<button class="sec" onclick="ecranFormulaire()">Modifier</button><button id="bEnv" onclick="enregistrerRapport()">Envoyer</button>');
 }
 function enregistrerRapport() {
   var b = $('bEnv'); b.disabled = true; b.textContent = 'Enregistrement…';
-  if (!J.retard && dateRapport() !== J.date) { alert('La journée a changé pendant la saisie. Recommencez le rapport.'); return accueil(); }
+  if (!J.revoir && !J.retard && dateRapport() !== J.date) { alert('La journée a changé pendant la saisie. Recommencez le rapport.'); return accueil(); }
   if (J.retard && joursPasses().indexOf(J.date) < 0) { alert('Ce jour est trop ancien (plus de 7 jours). Prévenez le bureau.'); return accueil(); }
   var st = CFG.get('station', {});
-  var r = { ref: refAleatoire(st.code, J.date), station: st.code, date: J.date, periode: V.periode || '', cree_le: maintenant(), statut: 'attente', photo: PHOTO };
+  var r = { ref: J.ref || refAleatoire(st.code, J.date), station: st.code, date: J.date, periode: V.periode || '', cree_le: J.cree_le || maintenant(), statut: 'attente', photo: PHOTO };
   Object.keys(V).forEach(function (k) { if (k !== 'periode') r[k] = V[k]; });
+  champs().forEach(function (f) { if (r[f.k] !== '' && r[f.k] !== undefined) r[f.k] = String(nb(r[f.k])); });
   if (J.retard) r.en_retard = true; else delete r.raison_retard;
   sauver(r).then(function () { ecranRecu(r, true); synchroniser(); });
 }
@@ -376,6 +442,7 @@ function ecranRecu(r, nouveau) {
   var st = CFG.get('station', {});
   var etat = r.statut === 'envoye' ? '<div class="okb">✅ Rapport de fermeture reçu par le bureau' + (r.recu_le ? ' le ' + esc(r.recu_le) : '') + '.</div>'
     : r.statut === 'attente' ? '<div class="wait">⏳ Enregistré sur le téléphone. Il sera envoyé automatiquement dès qu\'il y aura du signal. Ne refaites pas le rapport.</div>'
+    : r.statut === 'verif' ? '<div class="err">⚠️ Pas encore accepté. ' + esc(r.erreur || '') + '\n<button style="margin-top:8px" onclick="revoir(\'' + esc(r.ref) + '\')">Revoir le rapport</button></div>'
     : '<div class="err">❌ Refusé par le serveur :\n' + esc(r.erreur || '') + '</div>';
   var h = '<h1>' + (nouveau ? 'Rapport enregistré' : 'Rapport') + '</h1><div class="sub">' + esc(st.nom) + ' · ' + dfr(r.date) + ' · ' + esc(libPer(r.periode)) + '</div>' + etat +
     '<div class="card center"><div class="mut">Référence</div><div class="big">' + esc(r.ref_serveur || r.ref) + '</div><div class="mut">Fait le ' + esc(r.cree_le) + '</div></div><div class="card"><table>' +
@@ -405,7 +472,7 @@ function synchroniser(manuel) {
       return attente.reduce(function (p, r) {
         return p.then(function () {
           if (arret) return;
-          var payload = {}; Object.keys(r).forEach(function (k) { if (['statut', 'cree_le', 'erreur', 'vu', 'recu_le', 'station'].indexOf(k) < 0) payload[k] = r[k]; });
+          var payload = {}; Object.keys(r).forEach(function (k) { if (['statut', 'cree_le', 'erreur', 'vu', 'recu_le', 'station', 'controles'].indexOf(k) < 0) payload[k] = r[k]; });
           return api('envoyer', { payload: payload }).then(function (d) {
             S.en_ligne = true;
             if (d.recu && d.recu.ref !== r.ref) r.ref_serveur = d.recu.ref;
@@ -414,6 +481,7 @@ function synchroniser(manuel) {
           }, function (e) {
             if (e.reseau || e.code === 'CONFIG' || e.code === 'SERVEUR') { S.en_ligne = false; arret = true; return; }
             if (e.code === 'NON_ENREGISTRE' || e.code === 'DESACTIVE') { arret = true; return; }
+            if (e.code === 'VERIF') { r.statut = 'verif'; r.erreur = e.erreur; r.controles = e.controles || []; return sauver(r); }
             r.statut = 'rejete'; r.erreur = e.erreur; return sauver(r);
           });
         });

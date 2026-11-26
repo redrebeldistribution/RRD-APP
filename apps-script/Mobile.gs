@@ -14,8 +14,17 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.2';
+var MOBILE_VERSION = 'm1.3';
 var ROLES_APPAREIL = { DIRECTION: 'management', COMPTA: 'accounting' };   // station = DIRECTION ou COMPTA → téléphone de la direction / comptabilité
+/* Contrôles avant d'accepter un rapport (chiffres « visiblement faux »). Réglables ici. */
+var CTRL = {
+  PLAFOND_MIN: 25000,       // HTG : un montant au-dessus du plafond de la station est signalé (plafond = max(PLAFOND_MIN, 4 × caisse habituelle))
+  PLAFOND_FOIS: 4,
+  GALLONS_MIN: 150,         // gallons : signalé au-dessus de max(GALLONS_MIN, 3 × gallons habituels)
+  GALLONS_FOIS: 3,
+  ECART_MIN: 2000,          // HTG : écart de caisse signalé s'il dépasse max(ECART_MIN, ECART_PCT × ventes)
+  ECART_PCT: 0.30
+};
 var JOURS_DIFFERE_MAX = 7;   // une station peut faire un rapport manquant jusqu'à 7 jours en arrière (jamais modifier un rapport déjà envoyé)
 
 var APPAREILS = {
@@ -65,7 +74,7 @@ function apiMobile_(action, b) {
       default: throw new UserError('Action inconnue.');
     }
   } catch (e) {
-    if (e instanceof UserError) return { ok: false, erreur: e.message, code: e.code || '' };
+    if (e instanceof UserError) return { ok: false, erreur: e.message, code: e.code || '', controles: e.controles || undefined };
     console.error(e && e.stack || e);
     return { ok: false, erreur: 'Erreur du serveur. Le rapport reste sur le téléphone et sera renvoyé.', code: 'SERVEUR' };
   }
@@ -146,6 +155,7 @@ function initMobile_(app) {
     champs: FIELDS, envoyes: jour.map(recuEmploye_), periodes: periodesPossibles(jour), noms_connus: nomsConnus_(st.code)
   };
   base.prerempli = prerempliPour(date, jour, base.periodes[0]);
+  base.plafonds = plafonds_(tous);
   // Les jours passés : ce qui est déjà envoyé (non modifiable par la station) et ce qui manque encore.
   base.jours = [];
   for (var i = 1; i <= JOURS_DIFFERE_MAX; i++) {
@@ -199,6 +209,15 @@ function envoyerMobile_(app, p) {
     }
     var v = val.valeurs;
     var notes = v.notes;
+    // Chiffres visiblement faux : refusés tant que l'employé n'a pas revérifié et expliqué.
+    var ctrls = controles_(st, date, attendue, v);
+    var confirmes = [].concat(p.confirme_codes || []).map(String), expl = String(p.explication_controle || '').trim().slice(0, 400);
+    var nonConfirmes = ctrls.filter(function (c) { return confirmes.indexOf(c.code) < 0; });
+    if (nonConfirmes.length || (ctrls.length && !expl)) {
+      var err = new UserError('Chiffres à revérifier :\n• ' + ctrls.map(function (c) { return c.msg; }).join('\n• '), 'VERIF');
+      err.controles = ctrls; throw err;
+    }
+    if (ctrls.length) notes = (notes ? notes + ' ' : '') + '[⚠️ Contrôle : ' + ctrls.map(function (c) { return c.court; }).join(', ') + ' — explication de l\'employé : ' + expl + ']';
     if (p.en_retard) {
       var raison = String(p.raison_retard || '').trim().slice(0, 300);
       if (!raison) throw new UserError('Rapport en retard : écrivez la raison du retard.', 'INVALIDE');
@@ -226,6 +245,46 @@ function envoyerMobile_(app, p) {
   } finally { lock.releaseLock(); }
 }
 
+
+/* ============================ Contrôles ============================ */
+
+function mediane_(a) { a = a.filter(function (x) { return x > 0; }).sort(function (x, y) { return x - y; }); return a.length ? a[Math.floor(a.length / 2)] : 0; }
+
+/** Plafonds de la station, calculés sur ses 30 derniers rapports (sans prix : rien de secret pour l'employé). */
+function plafonds_(rapportsStation) {
+  var r = rapportsStation.slice().sort(function (a, b) { return iso(a.date_rapport) < iso(b.date_rapport) ? 1 : -1; }).slice(0, 30);
+  var caisse = mediane_(r.map(function (x) { return Math.max(num(x.starting_cash), num(x.counted_cash)); }));
+  var gal = mediane_(r.map(function (x) { return num(x.closing_meter) - num(x.opening_meter); }));
+  return { montant: Math.round(Math.max(CTRL.PLAFOND_MIN, CTRL.PLAFOND_FOIS * caisse)), gallons: Math.round(Math.max(CTRL.GALLONS_MIN, CTRL.GALLONS_FOIS * gal)) };
+}
+
+/** Liste des anomalies d'un rapport. Le message pour l'employé ne montre jamais le prix, la caisse attendue ni l'écart. */
+function controles_(st, date, periode, v) {
+  var tous = rapportsEffectifs_().filter(function (r) { return String(r.station) === st.code && !estAnnule(r); });
+  var out = [], pl = plafonds_(tous), f = function (n) { return Number(n).toLocaleString('fr-FR'); };
+  var cle = function (d, per) { return d + '|' + ORDRE_PERIODE[String(per || '')]; };
+  var moi = cle(date, periode);
+  var avant = tous.filter(function (r) { return cle(iso(r.date_rapport), r.periode) < moi; })
+    .sort(function (a, b) { return cle(iso(a.date_rapport), a.periode) < cle(iso(b.date_rapport), b.periode) ? 1 : -1; })[0];
+  if (avant) {
+    var dPrec = iso(avant.date_rapport).split('-').reverse().join('/');
+    if (num(avant.closing_meter) !== v.opening_meter) out.push({ code: 'COMPTEUR', court: 'compteur ouverture ≠ fermeture précédente',
+      msg: 'Compteur d\'ouverture ' + f(v.opening_meter) + ' : le dernier rapport (' + dPrec + ') a fermé à ' + f(num(avant.closing_meter)) + '. S\'il manque un jour, faites d\'abord le « Rapport manquant ».' });
+    if (num(avant.counted_cash) !== v.starting_cash) out.push({ code: 'CAISSE_DEPART', court: 'solde initial ≠ caisse précédente',
+      msg: 'Solde initial ' + f(v.starting_cash) + ' : la caisse comptée au dernier rapport (' + dPrec + ') était ' + f(num(avant.counted_cash)) + '.' });
+  }
+  var gros = FIELDS.filter(function (x) { return x.money && v[x.k] > pl.montant; });
+  if (gros.length) out.push({ code: 'MONTANT', court: 'montant trop grand (' + gros.map(function (x) { return x.label; }).join(', ') + ')',
+    msg: gros.map(function (x) { return x.label + ' ' + f(v[x.k]); }).join(', ') + ' : montant beaucoup trop grand pour cette station. Un seul montant par case : additionnez les Zelle et écrivez le total.' });
+  if (v.gallons > pl.gallons) out.push({ code: 'GALLONS', court: v.gallons + ' gal vendus', msg: f(v.gallons) + ' gallons vendus : beaucoup plus que d\'habitude. Vérifiez les deux compteurs.' });
+  var prix = prixPour(lire_(SHEETS.PRIX), st.code, date);
+  if (prix && !gros.length) {
+    var c = calculsDirection(v, prix);
+    if (c.ecart !== null && Math.abs(c.ecart) > Math.max(CTRL.ECART_MIN, CTRL.ECART_PCT * c.ventes_attendues)) out.push({ code: 'ECART', court: 'grand écart de caisse',
+      msg: 'La caisse comptée ne correspond pas du tout aux gallons vendus et aux montants entrés. Recomptez la caisse et vérifiez chaque case (dépôt, dépenses, Zelle, ventes à crédit). Si c\'est juste (ex. vente à crédit), expliquez-le.' });
+  }
+  return out;
+}
 
 /* ============================ Direction / comptabilité ============================ */
 
