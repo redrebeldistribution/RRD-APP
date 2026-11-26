@@ -68,7 +68,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.12.0';
+var VERSION_APP = '1.12.1';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -643,9 +643,9 @@ function ecranPhotos(msg) {
     }).join('') + '</div>';
     h += '<p class="mut">' + PH_TYPES.map(function (t) { return '<b>' + t[2] + '</b> : ' + t[3]; }).join(' · ') + '. Touchez un bouton, prenez la photo, c\'est tout.</p>';
     var toutJour = function (type) { var x = ''; Object.keys(etat).forEach(function (hh) { var e = etat[hh][type]; if (e === 'ok') x = 'ok'; else if (e === 'att' && x !== 'ok') x = 'att'; }); return x; };
-    h += '<h2>Manomètre</h2><div class="ph3">' + [['JAUGE_OUV', '🌅', 'Ouverture', 'avant midi'], ['JAUGE_FER', '🌇', 'Fermeture', 'à partir de 15 h']].map(function (t) {
+    h += '<h2>Manomètre</h2><div class="ph3">' + [['JAUGE_OUV', '🌅', 'Ouverture'], ['JAUGE_FER', '🌇', 'Fermeture']].map(function (t) {
       var e = toutJour(t[0]);
-      return '<button class="' + (e === 'ok' ? 'fait' : e === 'att' ? 'att' : '') + '" onclick="phPrendre(\'' + t[0] + '\')">' + t[1] + '<br><b>' + t[2] + '</b><br><span style="font-size:12px">' + t[3] + ' · ' +
+      return '<button class="' + (e === 'ok' ? 'fait' : e === 'att' ? 'att' : '') + '" onclick="phPrendre(\'' + t[0] + '\')">' + t[1] + '<br><b>' + t[2] + '</b><br><span style="font-size:12px">' +
         (e === 'ok' ? '✓ reçue' : e === 'att' ? '⏳ en attente' : 'à prendre') + '</span></button>';
     }).join('') + '</div>';
     var bds = l.filter(function (r) { return r.genre === 'bordereau' && r.date === now.date && r.statut !== 'rejete'; });
