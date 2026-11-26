@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.23';
+var MOBILE_VERSION = 'm1.24';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var STATION_FORMATION = 'TST', MAX_APPAREILS_FORMATION = 50;   // les codes de la station de test servent à la formation : plusieurs téléphones avec le même code (propriétaire, 26/11/2026)
 var MAX_APPAREILS_ROLE = 5;   // un code DIR ou CPT peut servir sur 5 appareils en même temps (demande du propriétaire, 26/11/2026)
@@ -1117,7 +1117,7 @@ function camOps_(max) {
   return sh.getRange(from, 1, n - from + 1, COP_ENTETES.length).getValues().map(function (r, i) {
     return { ligne: from + i, id: String(r[0]), genre: String(r[1]), date: phJour_(r[2]), camion: String(r[3]).trim().toUpperCase(), client_id: String(r[4] || ''), client: String(r[5] || ''),
       gallons: vide(r[6]), prix: vide(r[7]), montant: vide(r[8]), paye: vide(r[9]), credit: vide(r[10]), devise: String(r[11] || 'HTG'), bon_no: String(r[12] || ''),
-      fournisseur: String(r[13] || ''), detail: String(r[14] || ''), lat: vide(r[15]), lon: vide(r[16]), pris_le: phTexte_(r[18]), recu_le: phTexte_(r[19]),
+      fournisseur: String(r[13] || ''), detail: String(r[14] || ''), lat: vide(r[15]), lon: vide(r[16]), prec: vide(r[17]), pris_le: phTexte_(r[18]), recu_le: phTexte_(r[19]),
       fichier_id: String(r[20] || ''), cid: String(r[22] || ''), annule: estVrai_(r[23]), note: String(r[24] || '') };
   });
 }
@@ -1205,7 +1205,7 @@ function camEnvoyer_(app, p) {
   }
   var gps = function (v, max) { var x = Number(v); return v === '' || v === undefined || v === null || isNaN(x) || Math.abs(x) > max ? '' : Math.round(x * 1e6) / 1e6; };
   var lat = gps(p.lat, 90), lon = gps(p.lon, 180), prec = lat === '' || lon === '' ? '' : Math.round(Number(p.precision) || 0);
-  if (lat === '' || lon === '') { lat = ''; lon = ''; }
+  if (lat === '' || lon === '') throw new UserError('Position GPS manquante. Allumez la localisation du téléphone, puis refaites l\'opération.', 'GPS');   // propriétaire, 26/11/2026 : toujours la position
   var lock = LockService.getScriptLock(); lock.waitLock(25000);
   try {
     var sh = camFeuille_(COP_ONGLET, COP_ENTETES), n = sh.getLastRow(), col = COP_ENTETES.indexOf('cid') + 1;
@@ -1243,7 +1243,7 @@ function camListe_(p) {
   });
   return { du: du, au: au, aujourdhui: auj, camion: filtre, camions: cams, totaux: t, devise: CURRENCY, rapports: camRapportsVue_(du, au, filtre), stations: stations_().filter(function (s) { return estVrai_(s.actif); }).map(function (s) { return { code: String(s.code), nom: String(s.nom) }; }),
     clients: camClients_().map(function (c) { return { id: c.id, nom: c.nom, prix: c.prix, station: c.station, actif: c.actif }; }),
-    ops: ops.map(function (o) { var x = camPourTel_(o); x.id = o.id; x.camion_nom = noms[o.camion] || o.camion; x.fichier = o.fichier_id; x.lat = o.lat; x.lon = o.lon; x.annule = o.annule; x.note = o.note; return x; }) };
+    ops: ops.map(function (o) { var x = camPourTel_(o); x.id = o.id; x.camion_nom = noms[o.camion] || o.camion; x.fichier = o.fichier_id; x.lat = o.lat; x.lon = o.lon; x.prec = o.prec; x.annule = o.annule; x.note = o.note; return x; }) };
 }
 /** Le bureau crée un client ou change son prix (aussi le prix par défaut, id = DEFAUT). Le changement ne touche pas les livraisons déjà reçues. */
 function camClient_(ctx, p) {

@@ -56,7 +56,7 @@
 </style>
 </head>
 <body>
-<div class="top"><b>RRD</b><span class="pill" id="net">…</span></div>
+<div class="top"><img src="emblem.png" alt="" style="width:28px;height:28px;border-radius:50%"><b>RRD</b><span class="pill" id="net">…</span></div>
 <div class="sect hidden" id="sect"><a class="on" href="index.html">📋 Rapports</a><a href="transfert.html">💸 Transferts</a><a href="#" id="sPhotos" class="hidden" onclick="ecranPhotos();phActualiser();return false">📷 Photos</a></div>
 <input type="file" id="phInput" accept="image/*" capture="environment" class="hidden" onchange="phPrise(this)">
 <input type="file" id="cmInput" accept="image/*" capture="environment" class="hidden" onchange="cmPhoto(this)">
@@ -71,7 +71,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.19.0';
+var VERSION_APP = '1.20.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -223,7 +223,7 @@ function view(html, barHtml, ecran) {
 
 /* ======================= Enregistrement du téléphone ======================= */
 function ecranEnregistrer(msg) {
-  var h = (WEB ? '<h1>Tableau de bord RRD</h1><div class="sub">Version web, pour la direction et la comptabilité. Entrez votre code (DIR-… ou CPT-…). Les stations utilisent l\'application Android.</div>'
+  var h = '<div class="center"><img src="logo.jpg" alt="Red Rebel Distribution" style="width:190px;max-width:60%;border-radius:14px;margin:6px 0 4px"></div>' + (WEB ? '<h1>Tableau de bord RRD</h1><div class="sub">Version web, pour la direction et la comptabilité. Entrez votre code (DIR-… ou CPT-…). Les stations utilisent l\'application Android.</div>'
     : '<h1>Enregistrer ce téléphone</h1><div class="sub">À faire une seule fois. La direction vous donne le code de la station.</div>') +
     (msg ? '<div class="err">' + esc(msg) + '</div>' : '') +
     '<label for="code">Code d\'activation</label><input id="code" autocapitalize="characters" autocomplete="off" placeholder="ex. ESA-4821">' +
@@ -905,11 +905,36 @@ function camAccueil(msg, err) {
   });
 }
 function cmVu(cid) { phTous().then(function (l) { var r = l.filter(function (x) { return x.cid === cid; })[0]; if (!r) return; r.vu = true; return ptx('readwrite', function (s) { s.put(r); }); }).then(function () { camAccueil(); }); }
-function cmGps() {   // position du téléphone, sans jamais bloquer la saisie
-  var G = NAT.Geolocation; if (!G) return;
-  G.checkPermissions().then(function (p) { return p.location === 'granted' || p.coarseLocation === 'granted' ? p : G.requestPermissions(); })
-    .then(function (p) { if (p.location !== 'granted' && p.coarseLocation !== 'granted') return; return G.getCurrentPosition({ enableHighAccuracy: true, timeout: 20000, maximumAge: 60000 }); })
-    .then(function (pos) { if (pos && pos.coords) CM.gps = { lat: pos.coords.latitude, lon: pos.coords.longitude, acc: pos.coords.accuracy, ms: Date.now() }; }).catch(function () { });
+/* Position du téléphone. Elle est obligatoire pour chaque opération du camion (propriétaire, 26/11/2026) : on sait où est chaque client.
+ * Rend une promesse : la position (moins de 2 minutes), ou un message à montrer au chauffeur. */
+function cmPosition() {
+  var G = NAT.Geolocation;
+  if (CM.gps && Date.now() - CM.gps.ms < 120000) return Promise.resolve(CM.gps);
+  if (!G) return Promise.reject('L\'application installée sur ce téléphone est trop ancienne pour donner la position. Installez la nouvelle application (demandez le lien à la direction).');
+  return G.checkPermissions().then(function (p) { return p.location === 'granted' || p.coarseLocation === 'granted' ? p : G.requestPermissions(); }).then(function (p) {
+    if (p.location !== 'granted' && p.coarseLocation !== 'granted') throw 'refus';
+    return G.getCurrentPosition({ enableHighAccuracy: true, timeout: 25000, maximumAge: 30000 });
+  }).then(function (pos) {
+    if (!pos || !pos.coords) throw 'vide';
+    CM.gps = { lat: pos.coords.latitude, lon: pos.coords.longitude, acc: pos.coords.accuracy, ms: Date.now() }; return CM.gps;
+  }).catch(function (e) {
+    throw e === 'refus' ? 'La position est obligatoire. Autorisez-la pour RRD : Paramètres du téléphone > Applications > RRD > Autorisations > Position.'
+      : 'Position introuvable. Allumez la localisation (GPS) du téléphone, mettez-vous dehors, puis touchez encore le bouton.';
+  });
+}
+function cmGps() { cmPosition().catch(function () { }); }   // à l'ouverture d'un écran : on commence à chercher la position
+function cmTampon(photo, texte) {   // écrit la position dans une photo de preuve (en haut, pour ne pas cacher la date du bas)
+  return new Promise(function (res) {
+    var img = new Image();
+    img.onload = function () {
+      var cv = document.createElement('canvas'); cv.width = img.width; cv.height = img.height; var c = cv.getContext('2d'); c.drawImage(img, 0, 0);
+      var fs = Math.max(16, Math.round(cv.width / 26)); c.font = 'bold ' + fs + 'px sans-serif'; var w = c.measureText(texte).width;
+      c.fillStyle = 'rgba(0,0,0,.55)'; c.fillRect(0, 0, w + fs, fs * 1.6); c.fillStyle = '#fff'; c.fillText(texte, fs / 2, fs * 1.15);
+      res(cv.toDataURL('image/jpeg', 0.7));
+    };
+    img.onerror = function () { res(photo); };
+    img.src = photo;
+  });
 }
 function cmOptClients() {
   return '<option value="">— choisir —</option>' + ((CM.d && CM.d.clients) || []).map(function (c) { return '<option value="' + esc(c.id) + '">' + esc(c.nom) + '</option>'; }).join('') + '<option value="__autre">➕ Autre client (pas dans la liste)</option>';
@@ -1057,9 +1082,17 @@ function cmValider() {
     }
     if (!f.photo) return alerte('Prenez la photo du bon ou du reçu.');
   }
-  if (CM.gps && ms - CM.gps.ms < 5 * 60000) { r.lat = CM.gps.lat; r.lon = CM.gps.lon; r.precision = CM.gps.acc; }
-  ptx('readwrite', function (s) { s.put(r); }).then(function () { CM.f = null; camAccueil((CM_NOMS[r.op] || 'Opération').replace(/^\S+\s/, '') + ' enregistré(e).'); cmEnvoyer().then(function () { if (S.ecran === 'camion') camAccueil(); }); },
-    function () { alerte('Impossible de garder l\'opération sur le téléphone (mémoire pleine ?). Réessayez.'); });
+  var garder = function () { return ptx('readwrite', function (s) { s.put(r); }).then(function () { CM.f = null; camAccueil((CM_NOMS[r.op] || 'Opération').replace(/^\S+\s/, '') + ' enregistré(e).'); cmEnvoyer().then(function () { if (S.ecran === 'camion') camAccueil(); }); },
+    function () { alerte('Impossible de garder l\'opération sur le téléphone (mémoire pleine ?). Réessayez.'); }); };
+  var pos = function (g) { r.lat = g.lat; r.lon = g.lon; r.precision = g.acc; };
+  if (r.op === 'rapport') { if (CM.gps && ms - CM.gps.ms < 5 * 60000) pos(CM.gps); return garder(); }
+  if (CM.attente) return;
+  CM.attente = true; var bs = document.querySelectorAll('#barIn button'), bt = bs[bs.length - 1], txt = bt ? bt.textContent : '';
+  if (bt) { bt.disabled = true; bt.textContent = 'Recherche de la position…'; }
+  cmPosition().then(function (g) {
+    pos(g);
+    return r.op === 'photo' ? cmTampon(r.photo, 'GPS ' + g.lat.toFixed(5) + ', ' + g.lon.toFixed(5) + ' (±' + Math.round(g.acc) + ' m)').then(function (ph) { r.photo = ph; }) : null;
+  }).then(function () { CM.attente = false; return garder(); }, function (m) { CM.attente = false; if (bt) { bt.disabled = false; bt.textContent = txt; } alerte(String(m)); });
 }
 /* Envoi de la file, une opération à la fois, de la plus ancienne à la plus récente. Le serveur ne garde jamais deux fois la même (cid). */
 function cmEnvoyer() {
@@ -1645,7 +1678,7 @@ function ongletCamion(data, msg) {
       return '<tr' + (o.annule ? ' style="opacity:.5"' : '') + '><td>' + dfr(o.date).slice(0, 5) + '<div class="mut">' + esc(o.heure) + '</div></td><td><b>' + esc(o.client || o.fournisseur || o.detail) + '</b>' + (o.annule ? ' <span class="badge">annulée</span>' : '') +
         '<div class="mut">' + (CM_NOMS[o.genre] || esc(o.genre)) + ' · ' + esc(o.camion_nom) + (o.bon_no ? ' · bon n° ' + esc(o.bon_no) : '') + (o.note ? ' · ' + esc(o.note) : '') + '</div></td><td class="n">' + cmLigne(o).replace(/ · /g, '<br>') + '</td>' +
         '<td class="n">' + (o.fichier ? '<button class="sec" style="padding:6px 10px" onclick="phVoir(\'' + esc(o.fichier) + '\',' + i + ')">Voir</button>' : '') +
-        (o.lat !== '' && o.lat !== undefined ? '<div><a target="_blank" rel="noopener" href="https://www.google.com/maps?q=' + o.lat + ',' + o.lon + '">📍 lieu</a></div>' : '') +
+        (o.lat !== '' && o.lat !== undefined ? '<div><a target="_blank" rel="noopener" href="https://www.google.com/maps?q=' + o.lat + ',' + o.lon + '">📍 lieu</a>' + (Number(o.prec) > 100 ? '<div class="mut">±' + Math.round(o.prec) + ' m</div>' : '') + '</div>' : '<div class="mut">sans position</div>') +
         (dir && !o.annule ? '<div><a href="#" onclick="camAnnulerOp(\'' + esc(o.id) + '\');return false">Annuler</a></div>' : '') + '</td></tr><tr><td colspan="4" id="phv' + i + '" style="border:0;padding:0"></td></tr>';
     }).join('') + '</table>';
     var def = d.clients.filter(function (c) { return c.id === 'DEFAUT'; })[0], stN = {}; d.stations.forEach(function (s) { stN[s.code] = s.nom; });
