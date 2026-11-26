@@ -70,7 +70,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.17.0';
+var VERSION_APP = '1.17.1';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -325,12 +325,13 @@ function ecranManquants() {
   });
 }
 function changerCode(siAnnule) {
-  tous().then(function (liste) {
-    var att = liste.filter(function (r) { return r.statut === 'attente'; }).length;
+  Promise.all([tous(), phMiens().catch(function () { return []; })]).then(function (x) {
+    var att = x[0].filter(function (r) { return r.statut === 'attente'; }).length, attPh = x[1].filter(function (r) { return r.statut === 'attente'; }).length;
     if (att) return alert(att + ' rapport(s) pas encore envoyé(s). Attendez qu\'ils partent (bouton Envoyer / actualiser) avant de changer de code.');
+    if (attPh) return alert(attPh + ' photo(s) ou bordereau(x) pas encore envoyé(s). Attendez qu\'ils partent (onglet Photos, bouton Envoyer / actualiser) avant de changer de code.');
     if (!confirm('Changer le code de ce téléphone ? Il faudra un nouveau code d\'activation et internet.')) { if (typeof siAnnule === 'function') siAnnule(); return; }
-    ['jeton', 'role', 'nom', 'station', 'init', 'init_le', 'noms', 'messages', 'reponses', 'msgVus'].forEach(CFG.del);
-    S.init = null; D = null; ecranEnregistrer();
+    ['jeton', 'role', 'nom', 'station', 'init', 'init_le', 'noms', 'messages', 'reponses', 'msgVus', 'phTypes', 'phSuivie'].forEach(CFG.del);
+    S.init = null; D = null; PH.serveur = null; ecranEnregistrer();
   });
 }
 function revoir(ref) {
@@ -593,7 +594,8 @@ function synchroniser(manuel) {
  * Chaque heure, de 7 h à 17 h : 3 photos (compteur, station, citerne), prises avec l'appareil photo du téléphone.
  * La photo est gardée sur le téléphone puis envoyée dès qu'il y a du signal. L'heure est celle du téléphone au moment de la photo. */
 var PH_TYPES = [['COMPTEUR', '📟', 'Compteur', 'de près, chiffres lisibles'], ['STATION', '⛽', 'Station', 'entrée et zone de remplissage'], ['CITERNE', '🛢️', 'Citerne', 'la citerne et autour']];
-var PH_HEURES = [7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+var PH_HEURES = [7, 8, 9, 10, 11, 12, 13, 14, 15, 16];   // heures comptées (rappels, heures manquantes)
+var PH_VUES = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19];   // heures montrées : de 5 h à 20 h, une photo prise y est marquée même si l'heure n'est pas comptée
 var PH_NOMS = { COMPTEUR: 'compteur', STATION: 'station', CITERNE: 'citerne', JAUGE_OUV: 'manomètre ouverture', JAUGE_FER: 'manomètre fermeture', BORDEREAU: 'bordereau' };
 var BD_BENEF = ['Haiti Propane', 'SODIGAZ', 'Compte Red Rebel', 'Autre'];
 var PDB = null, PH = { type: '', serveur: null, envoi: false, attente: null };
@@ -615,10 +617,20 @@ function ptx(mode, fn) {
   });
 }
 function phTous() { return ptx('readonly', function (s) { return s.getAll(); }); }
+/* Les photos et bordereaux gardés sur le téléphone appartiennent au code sous lequel ils ont été pris : après « Changer de code »,
+ * ceux d'un autre code ne sont ni montrés ni envoyés. */
+function phMiens() { var c = stationCode(); return phTous().then(function (l) { return l.filter(function (r) { return r.station === c; }); }); }
+function phMigrer() {   // anciennes lignes sans station : celles déjà reçues par le bureau quittent le téléphone, celles en attente restent pour ce code
+  var c = stationCode(); if (!c) return Promise.resolve();
+  return phTous().then(function (l) {
+    var sans = l.filter(function (r) { return !r.station; }); if (!sans.length) return;
+    return ptx('readwrite', function (s) { sans.forEach(function (r) { if (r.statut === 'attente') { r.station = c; s.put(r); } else s.delete(r.cid); }); });
+  }).catch(function () { });
+}
 function phJourHeure(ms) { var p = partiesHaiti(new Date(ms)); return { date: p.year + '-' + p.month + '-' + p.day, heure: Number(p.hour), txt: p.day + '/' + p.month + '/' + p.year + ' ' + p.hour + ':' + p.minute }; }
 function ecranPhotos(msg) {
   if (CFG.get('role', '') || !CFG.get('jeton', '')) return;
-  phTous().then(function (l) { return l; }, function () { return null; }).then(function (l) {
+  phMiens().then(function (l) { return l; }, function () { return null; }).then(function (l) {
     if (!l) return view('<h1>Photos de l\'heure</h1><div class="err">La mémoire du téléphone n\'est pas disponible pour garder les photos. Fermez puis rouvrez l\'application.</div>', '', 'photos');
     var now = phJourHeure(Date.now()), st = CFG.get('station', {}), srv = PH.serveur && PH.serveur.date === now.date ? PH.serveur : null;
     var types = (srv && srv.types) || CFG.get('phTypes', null) || PH_TYPES.map(function (t) { return t[0]; });
@@ -630,8 +642,8 @@ function ecranPhotos(msg) {
       if (r.statut === 'envoye') e[r.type] = 'ok'; else if (e[r.type] !== 'ok') e[r.type] = 'att';
     });
     var att = l.filter(function (r) { return r.statut === 'attente'; }).length;
-    var dansPlage = PH_HEURES.indexOf(now.heure) >= 0;
-    var h = '<h1>Photos de l\'heure</h1><div class="sub">' + esc(st.nom || '') + ' · ' + (dansPlage ? 'heure en cours : ' + now.heure + ' h – ' + (now.heure + 1) + ' h' : 'les photos se font chaque heure, de 7 h à 17 h') + '</div>';
+    var vues = (srv && srv.heures_vues) || PH_VUES, comptees = (srv && srv.heures) || PH_HEURES, dansPlage = vues.indexOf(now.heure) >= 0;
+    var h = '<h1>Photos de l\'heure</h1><div class="sub">' + esc(st.nom || '') + ' · ' + (dansPlage ? 'heure en cours : ' + now.heure + ' h – ' + (now.heure + 1) + ' h' : 'les photos se font chaque heure, de 5 h à 20 h') + '</div>';
     if (msg) h += '<div class="okb">' + esc(msg) + '</div>';
     if (att) h += '<div class="wait">⏳ ' + att + ' photo(s) en attente d\'envoi. Elles partiront toutes seules dès qu\'il y aura du signal.</div>';
     l.filter(function (r) { return r.statut === 'rejete' && !r.vu; }).forEach(function (r) {
@@ -652,8 +664,8 @@ function ecranPhotos(msg) {
     var bds = l.filter(function (r) { return r.genre === 'bordereau' && r.date === now.date && r.statut !== 'rejete'; });
     h += '<h2>Bordereau de dépôt</h2><button class="sec" style="width:100%" onclick="phPrendre(\'BORDEREAU\')">🧾 Envoyer un bordereau</button>';
     if (bds.length) h += '<div class="note">' + bds.map(function (r) { return (r.statut === 'envoye' ? '✓ ' : '⏳ ') + fmt(Number(r.montant)) + ' ' + esc(r.devise) + ' — ' + esc(r.beneficiaire) + (r.statut === 'envoye' ? ' (reçu par le bureau)' : ' (en attente de signal)'); }).join('<br>') + '</div>';
-    h += '<h2>Aujourd\'hui</h2><table><tr><th>Heure</th>' + PH_TYPES.map(function (t) { return '<th class="center">' + t[2] + '</th>'; }).join('') + '</tr>' + PH_HEURES.map(function (hh) {
-      var e = etat[hh] || {}, passee = now.heure > hh;
+    h += '<h2>Aujourd\'hui</h2><table><tr><th>Heure</th>' + PH_TYPES.map(function (t) { return '<th class="center">' + t[2] + '</th>'; }).join('') + '</tr>' + vues.map(function (hh) {
+      var e = etat[hh] || {}, passee = now.heure > hh && comptees.indexOf(hh) >= 0;
       return '<tr' + (hh === now.heure ? ' style="font-weight:700"' : '') + '><td>' + hh + ' h</td>' + PH_TYPES.map(function (t) {
         var x = e[t[0]], req = types.indexOf(t[0]) >= 0;
         return '<td class="center">' + (x === 'ok' ? '<span style="color:var(--ok)">✓</span>' : x === 'att' ? '⏳' : passee && req ? '<span style="color:var(--bad)">✗</span>' : '·') + '</td>';
@@ -681,7 +693,7 @@ function phPrise(input) {
       c.fillStyle = '#ffd400'; c.font = 'bold ' + fs + 'px sans-serif'; c.fillText(jh.txt, fs / 2, cv.height - fs2 * 1.7 - fs * 0.2);
       c.fillStyle = '#fff'; c.font = 'bold ' + fs2 + 'px sans-serif'; c.fillText(l2, fs / 2, cv.height - fs2 * 0.55);
     }
-    var r = { cid: (bord ? 'B' : 'P') + ms.toString(36) + Math.random().toString(36).slice(2, 8), type: type, pris_ms: ms, date: jh.date, heure: jh.heure, statut: 'attente', compteur: '', photo: cv.toDataURL('image/jpeg', bord ? 0.7 : 0.6) };
+    var r = { cid: (bord ? 'B' : 'P') + ms.toString(36) + Math.random().toString(36).slice(2, 8), station: st.code || '', type: type, pris_ms: ms, date: jh.date, heure: jh.heure, statut: 'attente', compteur: '', photo: cv.toDataURL('image/jpeg', bord ? 0.7 : 0.6) };
     if (bord) { r.genre = 'bordereau'; PH.attente = r; phEcranBordereau(); }
     else if (type === 'COMPTEUR' || type.indexOf('JAUGE') === 0) { PH.attente = r; phEcranCompteur(); } else phGarder(r);
   };
@@ -730,7 +742,7 @@ function phVu(cid) { phTous().then(function (l) { var r = l.filter(function (x) 
 function phEnvoyer() {
   if (PH.envoi || !CFG.get('jeton', '') || CFG.get('role', '')) return Promise.resolve();
   PH.envoi = true;
-  return phTous().then(function (l) {
+  return phMiens().then(function (l) {
     var file = l.filter(function (r) { return r.statut === 'attente'; }).sort(function (a, b) { return a.pris_ms - b.pris_ms; }), i = 0;
     function suivant() {
       if (i >= file.length) return;
@@ -813,24 +825,26 @@ function pushRepli() { if (!PUSH.refus) pushDemarrer(); }   // au retour dans l'
 /* ======================= Test du téléphone (build 43) =======================
  * Ce que le téléphone sait faire en plus : position GPS, lecture d'un code-barres ou QR (carte de fidélité), photo en direct,
  * empreinte / code du téléphone, Bluetooth (imprimante de reçus). Cet écran ne sert qu'à vérifier ; rien n'est envoyé au bureau. */
-var TT = { res: {}, scan: false };
+var TT = { res: {}, scan: false }, TT_NATIF = 43;   // premier build de l'application installée qui a ces fonctions
 var TT_LISTE = [['gps', '📍 Position GPS'], ['code', '🔳 Lecture d\'un code (carte de fidélité)'], ['photo', '📷 Photo en direct'], ['bio', '🔒 Empreinte ou code du téléphone'], ['bt', '🖨 Bluetooth (imprimante de reçus)']];
 function ttErr(e) { return String((e && (e.message || e.errorMessage || e.erreur)) || e || 'erreur inconnue').slice(0, 160); }
 function ecranTestTel() {
   var h = '<h1>Tester ce téléphone</h1><div class="sub">Appuyez sur chaque ligne. Rien n\'est envoyé au bureau.</div>';
+  if (S.natif && S.natif < TT_NATIF) h += '<div class="wait">Ces fonctions demandent la nouvelle application (build ' + TT_NATIF + ' ou plus). Celle qui est installée sur ce téléphone est le build ' + S.natif + '. À installer une seule fois ; le code et les données restent.' +
+    (S.apk ? '<br><button style="margin-top:8px" onclick="S.majApk=S.apk;installerApk()">Installer</button>' : '') + '</div>';
   TT_LISTE.forEach(function (x) {
     var r = TT.res[x[0]];
     h += '<div class="card"><div class="row"><div><b>' + x[1] + '</b><div class="mut" style="white-space:pre-line">' + (r ? (r.ok ? '<span style="color:var(--ok)">✓ ' : '<span style="color:var(--bad)">✗ ') + esc(r.txt) + '</span>' : 'pas encore testé') + '</div>' +
       (r && r.img ? '<img class="prev" style="max-height:120px" src="' + r.img + '">' : '') + '</div>' +
       '<div><button class="sec" onclick="ttLancer(\'' + x[0] + '\')">' + (r && r.cours ? '…' : 'Tester') + '</button></div></div></div>';
   });
-  h += '<p class="mut center">Version ' + VERSION_APP + ' (build ' + (window.RRD_BUILD || 0) + ')</p>';
+  h += '<p class="mut center">Version ' + VERSION_APP + ' (écrans : build ' + (window.RRD_BUILD || 0) + (S.natif ? ' · application installée : build ' + S.natif : '') + ')</p>';
   view(h, '<button class="sec" onclick="ttRetour()">Retour</button>', 'testtel');
 }
 function ttRetour() { if (TT.scan) ttScanFin(); if (CFG.get('role', '')) tableau('appareils'); else accueil(); }
 function ttFin(k, ok, txt, img) { TT.res[k] = { ok: ok, txt: txt, img: img || '' }; if (S.ecran === 'testtel') ecranTestTel(); }
 function ttLancer(k) {
-  var P = NAT, absent = function (n) { ttFin(k, false, 'Pas disponible sur cette version de l\'application (' + n + '). Installez la dernière version.'); };
+  var P = NAT, absent = function (n) { ttFin(k, false, 'L\'application installée sur ce téléphone est trop ancienne pour cette fonction (' + n + '). Installez la nouvelle une fois.'); };
   TT.res[k] = { ok: true, txt: 'en cours…', cours: true }; ecranTestTel();
   var faire;
   if (k === 'gps') {
@@ -889,7 +903,7 @@ function ntPlanifier() {
   if (!LN || NT.ok === false || CFG.get('role', '') || !CFG.get('jeton', '')) return;
   if (NT.enCours) return ntBientot();
   NT.enCours = true;
-  Promise.all([phTous().catch(function () { return []; }), tous().catch(function () { return []; })]).then(function (x) {
+  Promise.all([phMiens().catch(function () { return []; }), tous().catch(function () { return []; })]).then(function (x) {
     var photos = x[0], rapports = x[1], now = Date.now(), jh = phJourHeure(now), plan = [];
     var types = CFG.get('phTypes', null) || PH_TYPES.map(function (t) { return t[0]; }), suivie = CFG.get('phSuivie', true);
     var srv = PH.serveur && PH.serveur.date === jh.date ? PH.serveur : null;
@@ -1321,13 +1335,13 @@ function ongletPhotos() {
     PHD = d; T.pdate = d.date;
     var h = entete() + '<div class="row"><input type="date" value="' + d.date + '" max="' + d.aujourdhui + '" onchange="T.pdate=this.value;tableau(\'photos\')">' +
       '<button class="sec" onclick="T.pdate=jourPlus(\'' + d.date + '\',-1);tableau(\'photos\')">◀ Veille</button><button class="sec" onclick="T.pdate=\'\';tableau(\'photos\')">Aujourd\'hui</button></div>' +
-      '<p class="mut">3 photos par heure (compteur, station, citerne), de 7 h à 17 h. Vert : tout y est · jaune : il manque une photo · rouge : aucune photo · gris : heure pas encore passée. Touchez une station pour voir ses photos.</p>';
+      '<p class="mut">3 photos par heure (compteur, station, citerne). Les heures comptées vont de 7 h à 17 h ; une photo prise entre 5 h et 20 h est marquée aussi. Vert : tout y est · jaune : il manque une photo · rouge : aucune photo · gris : heure pas encore passée ou pas comptée. Touchez une station pour voir ses photos.</p>';
     d.stations.forEach(function (s) {
       var commence = s.debut && d.date >= s.debut, req = s.types.map(function (t) { return t === 'CITERNE' ? 'T' : t.charAt(0); });
       h += '<div class="card" onclick="phOuvrir(\'' + esc(s.code) + '\')"><div class="row"><div><b>' + esc(s.nom) + '</b>' + (s.suivie ? '' : ' <span class="badge">non suivie</span>') + '</div><div style="text-align:right" class="mut">' + s.nbPhotos + ' photo(s)</div></div>';
-      h += '<div class="phg">' + d.heures.map(function (hh) {
+      h += '<div class="phg" style="grid-template-columns:repeat(' + d.heures.length + ',1fr)">' + d.heures.map(function (hh) {
         var g = s.grille[hh] || '', complet = g && req.every(function (x) { return g.indexOf(x) >= 0; });
-        return '<div class="' + (!commence ? '' : complet ? 'g3' : g ? 'g1' : s.manquantes.indexOf(hh) >= 0 ? 'g0' : '') + '">' + hh + ' h</div>';
+        return '<div class="' + (!commence ? '' : complet ? 'g3' : g ? 'g1' : s.manquantes.indexOf(hh) >= 0 ? 'g0' : '') + '">' + hh + (d.heures.length > 10 ? '' : ' h') + '</div>';
       }).join('') + '</div>';
       if (!commence) h += '<div class="mut">Pas de photos envoyées par l\'application' + (s.debut ? ' avant le ' + dfr(s.debut) : ' pour l\'instant') + '.</div>';
       else {
@@ -1556,7 +1570,7 @@ function verifierMaj() {
   fetch(MAJ_URL + '?t=' + Date.now(), { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (x) {
     m = x; return AP.getInfo();
   }).then(function (info) {
-    var natif = Number(info.build) || 0;
+    var natif = Number(info.build) || 0; S.natif = natif; S.apk = m.apk_url;
     if (Number(m.native_min) > natif) { S.majApk = m.apk_url; bandeauMaj(); return; }      // il faut une nouvelle APK
     if (!(Number(m.web) > Number(window.RRD_BUILD || 0))) return;                          // déjà à jour
     var ver = String(m.web);
@@ -1577,7 +1591,7 @@ restaurer().then(function () {
     else location.replace('transfert.html');
   }
   else if (CFG.get('role', '')) demarrerDirection();
-  else { if (/[?&]photos=1/.test(location.search)) { ecranPhotos(); phActualiser(); } else { accueil(); phEnvoyer(); } synchroniser(); ntDemarrer(); }
+  else phMigrer().then(function () { if (/[?&]photos=1/.test(location.search)) { ecranPhotos(); phActualiser(); } else { accueil(); phEnvoyer(); } synchroniser(); ntDemarrer(); });
 });
 </script>
 </body>

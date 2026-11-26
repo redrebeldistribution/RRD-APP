@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.20';
+var MOBILE_VERSION = 'm1.21';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var STATION_FORMATION = 'TST', MAX_APPAREILS_FORMATION = 50;   // les codes de la station de test servent à la formation : plusieurs téléphones avec le même code (propriétaire, 26/11/2026)
 var MAX_APPAREILS_ROLE = 5;   // un code DIR ou CPT peut servir sur 5 appareils en même temps (demande du propriétaire, 26/11/2026)
@@ -491,7 +491,8 @@ var PH_ONGLET = 'Photos horaires';
 var PH_ENTETES = ['date', 'station', 'heure', 'type', 'pris_le', 'recu_le', 'compteur', 'fichier_id', 'appareil', 'cid', 'note'];
 var PH_TYPES = ['COMPTEUR', 'STATION', 'CITERNE'];
 var PH_LETTRE = { COMPTEUR: 'C', STATION: 'S', CITERNE: 'T' };   // lettres de la grille du tableau de bord
-var PH_HEURES = [7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+var PH_HEURES = [7, 8, 9, 10, 11, 12, 13, 14, 15, 16];   // heures comptées
+var PH_HEURES_VUES = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19];   // heures montrées (5 h à 20 h) : une photo prise y est marquée même si l'heure n'est pas comptée (propriétaire, 26/11/2026)
 var PH_JAUGES = ['JAUGE_OUV', 'JAUGE_FER'];   // manomètre : ouverture = avant midi, fermeture = à partir de 15 h (règles du 09/11/2026)
 var PH_NON_SUIVIES = ['M83', 'LEO'];   // décision du propriétaire (21/11/2026) : Mahotière 83 et Léogâne ne sont pas suivies
 var PH_SANS_CITERNE = ['DIQ'];         // décision du propriétaire (23/11/2026) : la citerne n'est pas comptée à Diquini
@@ -591,7 +592,7 @@ function photosStation_(app) {
     if (r.station !== code || r.date !== date) return;
     (faits[r.heure] = faits[r.heure] || []).indexOf(r.type) < 0 && faits[r.heure].push(r.type);
   });
-  return { date: date, heure: Number(Utilities.formatDate(now, TZ, 'H')), heures: PH_HEURES, types: phTypesDe_(code), faits: faits, suivie: PH_NON_SUIVIES.indexOf(code) < 0 };
+  return { date: date, heure: Number(Utilities.formatDate(now, TZ, 'H')), heures: PH_HEURES, heures_vues: PH_HEURES_VUES, types: phTypesDe_(code), faits: faits, suivie: PH_NON_SUIVIES.indexOf(code) < 0 };
 }
 
 /** Bilan d'une journée pour une station : heures sans photo et types manquants (seulement pour les heures déjà passées). */
@@ -629,7 +630,7 @@ function photosSuivi_(p) {
   var out = stations_().filter(function (s) { return estVrai_(s.actif); }).map(function (s) {
     var code = String(s.code), types = phTypesDe_(code), jour = idx[code + '|' + date] || {};
     var b = phBilanJour_(jour, types, date, auj, hM), grille = {}, nbPhotos = 0;
-    PH_HEURES.forEach(function (h) { grille[h] = PH_TYPES.filter(function (t) { return (jour[h] || {})[t]; }).map(function (t) { return PH_LETTRE[t]; }).join(''); });
+    PH_HEURES_VUES.forEach(function (h) { grille[h] = PH_TYPES.filter(function (t) { return (jour[h] || {})[t]; }).map(function (t) { return PH_LETTRE[t]; }).join(''); });
     Object.keys(jour).forEach(function (h) { Object.keys(jour[h]).forEach(function (t) { nbPhotos += jour[h][t]; }); });
     // Mois : compté à partir du premier jour où la station a envoyé une photo par l'application.
     var m = { depuis: '', jours: 0, heuresManquantes: 0, typesManquants: 0 };
@@ -648,7 +649,7 @@ function photosSuivi_(p) {
     return { code: code, nom: String(s.nom), suivie: PH_NON_SUIVIES.indexOf(code) < 0, debut: premier[code] || '', types: types, grille: grille, nbPhotos: nbPhotos, jauge: jauge,
       couvertes: b.couvertes, echues: b.echues, manquantes: b.manquantes, typesManquants: b.typesManquants, mois: m };
   });
-  return { date: date, aujourdhui: auj, heures: PH_HEURES, stations: out };
+  return { date: date, aujourdhui: auj, heures: PH_HEURES_VUES, comptees: PH_HEURES, stations: out };
 }
 
 /** Liste des photos d'une station pour un jour. */
