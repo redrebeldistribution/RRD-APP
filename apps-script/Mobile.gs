@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.3';
+var MOBILE_VERSION = 'm1.4';
 var ROLES_APPAREIL = { DIRECTION: 'management', COMPTA: 'accounting' };   // station = DIRECTION ou COMPTA → téléphone de la direction / comptabilité
 /* Contrôles avant d'accepter un rapport (chiffres « visiblement faux »). Réglables ici. */
 var CTRL = {
@@ -260,6 +260,17 @@ function plafonds_(rapportsStation) {
   return { montant: Math.round(Math.max(CTRL.PLAFOND_MIN, CTRL.PLAFOND_FOIS * caisse)), gallons: Math.round(Math.max(CTRL.GALLONS_MIN, CTRL.GALLONS_FOIS * gal)) };
 }
 
+/** Montants trop grands. La caisse s'accumule tant qu'il n'y a pas de dépôt : le solde initial n'est jamais plafonné
+ *  (il est contrôlé par la caisse du rapport précédent) ; caisse comptée et dépôt sont plafonnés à « solde initial + entrées + plafond ». */
+function trop_(v, plafond, val) {
+  var base = (Number(val('starting_cash')) || 0) + (Number(val('other_cash_in')) || 0);
+  return FIELDS.filter(function (x) {
+    if (!x.money || x.k === 'starting_cash') return false;
+    var lim = (x.k === 'counted_cash' || x.k === 'bank_deposit') ? base + plafond : plafond;
+    return Number(val(x.k)) > lim;
+  });
+}
+
 /** Liste des anomalies d'un rapport. Le message pour l'employé ne montre jamais le prix, la caisse attendue ni l'écart. */
 function controles_(st, date, periode, v) {
   var tous = rapportsEffectifs_().filter(function (r) { return String(r.station) === st.code && !estAnnule(r); });
@@ -275,7 +286,7 @@ function controles_(st, date, periode, v) {
     if (num(avant.counted_cash) !== v.starting_cash) out.push({ code: 'CAISSE_DEPART', court: 'solde initial ≠ caisse précédente',
       msg: 'Solde initial ' + f(v.starting_cash) + ' : la caisse comptée au dernier rapport (' + dPrec + ') était ' + f(num(avant.counted_cash)) + '.' });
   }
-  var gros = FIELDS.filter(function (x) { return x.money && v[x.k] > pl.montant; });
+  var gros = trop_(v, pl.montant, function (k) { return v[k]; });
   if (gros.length) out.push({ code: 'MONTANT', court: 'montant trop grand (' + gros.map(function (x) { return x.label; }).join(', ') + ')',
     msg: gros.map(function (x) { return x.label + ' ' + f(v[x.k]); }).join(', ') + ' : montant beaucoup trop grand pour cette station. Un seul montant par case : additionnez les Zelle et écrivez le total.' });
   if (v.gallons > pl.gallons) out.push({ code: 'GALLONS', court: v.gallons + ' gal vendus', msg: f(v.gallons) + ' gallons vendus : beaucoup plus que d\'habitude. Vérifiez les deux compteurs.' });

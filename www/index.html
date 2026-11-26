@@ -50,7 +50,7 @@
 <script src="config.js"></script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.3.0';
+var VERSION_APP = '1.3.1';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -387,7 +387,12 @@ function controlesLocaux() {
     if (J.prec.starting_cash !== null && nb(V.starting_cash) !== J.prec.starting_cash) out.push({ code: 'CAISSE_DEPART', msg: 'Solde initial ' + f(nb(V.starting_cash)) + ' : la caisse comptée au rapport précédent était ' + f(J.prec.starting_cash) + '.' });
   }
   if (c) {
-    var gros = champs().filter(function (x) { return x.money && nb(V[x.k]) > c.montant; });
+    // Le solde initial n'est jamais plafonné (la caisse s'accumule) ; caisse comptée et dépôt : solde initial + entrées + plafond.
+    var base = (nb(V.starting_cash) || 0) + (nb(V.other_cash_in) || 0);
+    var gros = champs().filter(function (x) {
+      if (!x.money || x.k === 'starting_cash') return false;
+      return nb(V[x.k]) > ((x.k === 'counted_cash' || x.k === 'bank_deposit') ? base + c.montant : c.montant);
+    });
     if (gros.length) out.push({ code: 'MONTANT', msg: gros.map(function (x) { return x.label + ' ' + f(nb(V[x.k])); }).join(', ') + ' : montant beaucoup trop grand pour cette station. Un seul montant par case : additionnez les Zelle (ex. 1788+2862).' });
     var g = nb(V.closing_meter) - nb(V.opening_meter);
     if (g > c.gallons) out.push({ code: 'GALLONS', msg: f(g) + ' gallons vendus : beaucoup plus que d\'habitude. Vérifiez les deux compteurs.' });
