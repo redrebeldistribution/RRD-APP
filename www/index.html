@@ -48,9 +48,14 @@
 <div class="bar hidden" id="bar"><div class="in" id="barIn"></div></div>
 
 <script src="config.js"></script>
+<script src="build.js"></script>
+<script>
+/* Mise à jour automatique : on confirme tout de suite que cette version démarre bien (sinon retour automatique à la précédente). */
+try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugins.CapacitorUpdater.notifyAppReady(); } catch (e) { }
+</script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.3.1';
+var VERSION_APP = '1.4.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -155,6 +160,7 @@ function stationCode() { return (CFG.get('station', {}) || {}).code; }
 function view(html, barHtml, ecran) {
   S.ecran = ecran || '';
   $('app').innerHTML = html;
+  bandeauMaj();
   if (barHtml) { $('barIn').innerHTML = barHtml; $('bar').classList.remove('hidden'); } else $('bar').classList.add('hidden');
   window.scrollTo(0, 0);
 }
@@ -232,7 +238,7 @@ function accueil() {
         h += '<div class="card" onclick="voir(\'' + esc(r.ref) + '\')"><div class="row"><div><b>' + esc(r.ref) + '</b><div class="mut">' + dfr(r.date) + ' · ' + esc(libPer(r.periode)) + '</div></div><div style="text-align:right">' + etat + '</div></div></div>';
       });
     }
-    h += '<p class="mut center" style="margin-top:24px">Version ' + VERSION_APP + ' · ' + esc(st.code || '') + ' · <a href="#" onclick="changerCode();return false">Changer de code</a></p>';
+    h += '<p class="mut center" style="margin-top:24px">Version ' + VERSION_APP + ' (build ' + (window.RRD_BUILD || 0) + (S.majPrete ? ', mise à jour prête : elle s\'installe à la prochaine ouverture' : '') + ') · ' + esc(st.code || '') + ' · <a href="#" onclick="changerCode();return false">Changer de code</a></p>';
     view(h, '<button class="sec" onclick="synchroniser(true)">🔄 Envoyer / actualiser</button>', 'accueil');
   });
 }
@@ -690,6 +696,36 @@ document.addEventListener('visibilitychange', function () { if (!document.hidden
 setInterval(function () { synchroniser(); }, 2 * 60 * 1000);
 S.init = CFG.get('init', null);
 majNet('○ hors ligne');
+/* ======================= Mises à jour automatiques ======================= */
+var MAJ_URL = 'https://github.com/redrebeldistribution/RRD-APP/releases/latest/download/web.json';
+function bandeauMaj() {
+  if (!S.majApk || !$('app') || $('majApk')) return;
+  var d = document.createElement('div'); d.id = 'majApk'; d.className = 'wait';
+  d.innerHTML = '⬆️ Nouvelle version de l\'application disponible.<br><button style="margin-top:8px" onclick="installerApk()">Installer</button>';
+  $('app').insertBefore(d, $('app').firstChild);
+}
+function installerApk() { if (confirm('Le téléchargement va s\'ouvrir. Ensuite, touchez le fichier puis « Installer ». Vos rapports restent sur le téléphone.')) location.href = S.majApk; }
+function verifierMaj() {
+  var P = window.Capacitor && Capacitor.Plugins, CU = P && P.CapacitorUpdater, AP = P && P.App;
+  if (!CU || !AP || S.majEnCours || navigator.onLine === false) return;
+  S.majEnCours = true;
+  var m;
+  fetch(MAJ_URL + '?t=' + Date.now(), { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (x) {
+    m = x; return AP.getInfo();
+  }).then(function (info) {
+    var natif = Number(info.build) || 0;
+    if (Number(m.native_min) > natif) { S.majApk = m.apk_url; bandeauMaj(); return; }      // il faut une nouvelle APK
+    if (!(Number(m.web) > Number(window.RRD_BUILD || 0))) return;                          // déjà à jour
+    var ver = String(m.web);
+    return CU.list().then(function (l) {
+      var deja = ((l && l.bundles) || []).filter(function (b) { return b.version === ver && b.status === 'success'; })[0];
+      return deja || CU.download({ url: m.url, version: ver });
+    }).then(function (b) { return CU.next({ id: b.id }); }).then(function () { S.majPrete = ver; });
+  }).catch(function () { }).then(function () { S.majEnCours = false; });
+}
+document.addEventListener('resume', function () { verifierMaj(); bandeauMaj(); });
+setTimeout(verifierMaj, 4000); setInterval(verifierMaj, 3 * 3600 * 1000);
+
 if (!CFG.get('jeton', '')) ecranEnregistrer(); else if (CFG.get('role', '')) demarrerDirection(); else { accueil(); synchroniser(); }
 </script>
 </body>

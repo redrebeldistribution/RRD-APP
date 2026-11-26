@@ -26,6 +26,9 @@ jobs:
       - name: Install
         run: npm ci
 
+      - name: Stamp the build number into the app
+        run: echo "window.RRD_BUILD = ${{ github.run_number }};" > www/build.js
+
       - name: Copy app into Android project
         run: npx cap sync android
 
@@ -38,10 +41,17 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon
 
-      - name: Name the APK
+      - name: APK, automatic-update bundle and manifest
         run: |
+          N=${{ github.run_number }}
+          BASE="https://github.com/${{ github.repository }}/releases/download/build-$N"
           mkdir -p out
-          cp android/app/build/outputs/apk/release/app-release.apk "out/RRD-Rapport-build-${{ github.run_number }}.apk"
+          cp android/app/build/outputs/apk/release/app-release.apk "out/RRD-Rapport-build-$N.apk"
+          (cd www && zip -qr "../out/web-$N.zip" .)
+          NATIVE_MIN=$(tr -dc '0-9' < native_min.txt)
+          printf '{"web":%s,"url":"%s/web-%s.zip","native_min":%s,"apk_url":"%s/RRD-Rapport-build-%s.apk"}\n' \
+            "$N" "$BASE" "$N" "$NATIVE_MIN" "$BASE" "$N" > out/web.json
+          cat out/web.json
 
       - uses: actions/upload-artifact@v4
         with:
@@ -53,4 +63,8 @@ jobs:
         with:
           tag_name: build-${{ github.run_number }}
           name: RRD Rapport – build ${{ github.run_number }}
-          files: out/*.apk
+          make_latest: true
+          files: |
+            out/*.apk
+            out/web-*.zip
+            out/web.json

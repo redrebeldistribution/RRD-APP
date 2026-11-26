@@ -2,6 +2,18 @@
   "appId": "com.redrebel.rrdapp",
   "appName": "RRD Rapport",
   "webDir": "www",
-  "android": { "allowMixedContent": false },
-  "plugins": { "CapacitorHttp": { "enabled": true } }
+  "android": {
+    "allowMixedContent": false
+  },
+  "plugins": {
+    "CapacitorHttp": {
+      "enabled": true
+    },
+    "CapacitorUpdater": {
+      "autoUpdate": false,
+      "statsUrl": "",
+      "appReadyTimeout": 10000,
+      "resetWhenUpdate": true
+    }
+  }
 }
