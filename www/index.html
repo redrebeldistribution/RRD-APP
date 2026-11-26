@@ -68,7 +68,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.14.0';
+var VERSION_APP = '1.14.1';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -1255,10 +1255,11 @@ function ongletMessages(data, msg) {
     if (msg) h += '<div class="okb">' + esc(msg) + '</div>';
     if (gestion) h += '<h2>Nouveau message</h2><label>Pour</label><select id="mCible"><option value="TOUS">Toutes les stations</option>' + d.stations.map(function (s) { return '<option value="' + esc(s.code) + '">' + esc(s.nom) + '</option>'; }).join('') + '</select>' +
       '<label>Genre</label><select id="mType"><option value="conseil">💡 Conseil du jour</option><option value="message">✉️ Message</option></select>' +
-      '<div class="row"><div><label>Jour</label><input type="date" id="mDate" value="' + d.aujourdhui + '" min="' + d.aujourdhui + '"></div><div><label>Heure (Haïti)</label><input type="time" id="mHeure" value="06:30"></div></div>' +
+      '<label>Quand</label><select id="mQuand" onchange="msgQuand()"><option value="maintenant">Envoyer maintenant</option><option value="plus_tard">Programmer pour plus tard</option></select>' +
+      '<div class="row" id="mPlus" style="display:none"><div><label>Jour</label><input type="date" id="mDate" value="' + d.aujourdhui + '" min="' + d.aujourdhui + '"></div><div><label>Heure (heure d\'Haïti)</label><input type="time" id="mHeure" value="06:30"></div></div>' +
       '<label>Texte (500 caractères au plus)</label><textarea id="mTexte" maxlength="500"></textarea>' +
-      '<div style="margin-top:10px"><button id="bMsg" onclick="msgAjouter()">Programmer le message</button></div>' +
-      '<p class="mut">Le téléphone de la station prend le message à sa prochaine ouverture de l\'application, puis l\'affiche en notification à l\'heure choisie, même sans signal. Si l\'heure est déjà passée quand il le reçoit, il l\'affiche tout de suite. Un téléphone qui n\'ouvre pas l\'application ne reçoit rien.</p>';
+      '<div style="margin-top:10px"><button id="bMsg" onclick="msgAjouter()">Envoyer maintenant</button></div>' +
+      '<p class="mut">« Envoyer maintenant » : le message arrive tout de suite en notification sur le téléphone de la station, même si l\'application est fermée. Si le téléphone n\'a pas de signal, il arrive dès que le signal revient (dans les 24 heures) ou à la prochaine ouverture de l\'application.<br>« Programmer pour plus tard » : il arrive au jour et à l\'heure choisis, à l\'heure d\'Haïti. Une heure déjà passée aujourd\'hui = envoi tout de suite.</p>';
     h += '<h2>Messages programmés et récents</h2>';
     if (!d.messages.length) h += '<div class="note">Aucun message.</div>';
     d.messages.forEach(function (m) {
@@ -1270,11 +1271,18 @@ function ongletMessages(data, msg) {
   if (data) return rendre(data);
   call('messages').then(rendre).catch(errTab);
 }
+function msgQuand() {
+  var m = $('mQuand').value === 'maintenant';
+  $('mPlus').style.display = m ? 'none' : '';
+  $('bMsg').textContent = m ? 'Envoyer maintenant' : 'Programmer le message';
+}
 function msgAjouter() {
-  var p = { cible: $('mCible').value, type: $('mType').value, date: $('mDate').value, heure: $('mHeure').value, texte: String($('mTexte').value || '').trim() };
+  var m = $('mQuand').value === 'maintenant', q = partiesHaiti(new Date());
+  var p = { cible: $('mCible').value, type: $('mType').value, texte: String($('mTexte').value || '').trim(),
+    maintenant: m, date: m ? q.year + '-' + q.month + '-' + q.day : $('mDate').value, heure: m ? q.hour + ':' + q.minute : $('mHeure').value };   // « maintenant » : le bureau met sa propre heure
   if (!p.texte) return alerte('Écrivez le texte du message.');
   $('bMsg').disabled = true;
-  call('messageAjouter', p).then(function (d) { ongletMessages(d, 'Message programmé.'); }).catch(function (e) { $('bMsg').disabled = false; alerte(e.erreur || 'Pas de connexion.'); });
+  call('messageAjouter', p).then(function (d) { ongletMessages(d, m ? 'Message envoyé.' : 'Message programmé.'); }).catch(function (e) { $('bMsg').disabled = false; alerte(e.erreur || 'Pas de connexion.'); });
 }
 function msgSupprimer(id) {
   if (!confirm('Supprimer ce message ? Les téléphones qui l\'ont déjà reçu ne l\'afficheront plus après leur prochain contact avec le bureau.')) return;

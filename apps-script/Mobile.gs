@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.15';
+var MOBILE_VERSION = 'm1.16';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var MAX_APPAREILS_ROLE = 5;   // un code DIR ou CPT peut servir sur 5 appareils en même temps (demande du propriétaire, 26/11/2026)
 var ROLES_APPAREIL = { DIRECTION: 'management', COMPTA: 'accounting' };   // station = DIRECTION ou COMPTA → téléphone de la direction / comptabilité
@@ -814,8 +814,9 @@ function messageAjouter_(ctx, p) {
   if (!texte) throw new UserError('Écrivez le texte du message.');
   if (texte.length > 500) throw new UserError('Message trop long (500 caractères au plus).');
   var auj = msgJour_(0), date = /^\d{4}-\d{2}-\d{2}$/.test(String(p.date || '')) ? String(p.date) : auj;
-  if (date < auj) throw new UserError('La date est déjà passée.');
   var heure = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(p.heure || '')) ? String(p.heure) : '06:30';
+  if (p.maintenant === true) { date = auj; heure = Utilities.formatDate(new Date(), TZ, 'HH:mm'); }   // « Envoyer maintenant » : l'heure du bureau, pas celle de l'appareil
+  if (date < auj) throw new UserError('La date est déjà passée.');
   var cible = String(p.cible || 'TOUS').trim();
   if (cible !== 'TOUS' && !stations_().some(function (s) { return String(s.code) === cible && estVrai_(s.actif); })) throw new UserError('Station inconnue.');
   var type = p.type === 'conseil' ? 'conseil' : 'message';
@@ -825,7 +826,7 @@ function messageAjouter_(ctx, p) {
     msgFeuille_(true).appendRow([id, maintenant_(), ctx.nom, cible, date, heure.replace(':', 'h'), type, (/^[=+\-@]/.test(texte) ? ' ' : '') + texte, 'oui']);   // jamais une formule
     journal_(ctx, 'message+', id + ' ' + cible + ' ' + date + ' ' + heure);
   } finally { lock.releaseLock(); }
-  if (date === auj && heure <= Utilities.formatDate(new Date(Date.now() + 60000), TZ, 'HH:mm')) pushReveiller_();   // message pour maintenant : poussé tout de suite
+  if (p.maintenant === true || (date === auj && heure <= Utilities.formatDate(new Date(Date.now() + 60000), TZ, 'HH:mm'))) pushReveiller_();   // message pour maintenant : poussé tout de suite
   return messagesListe_();
 }
 function messageSupprimer_(ctx, p) {
