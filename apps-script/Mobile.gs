@@ -95,7 +95,9 @@ function enregistrerAppareil_(b) {
   try {
     var ligne = lire_(APPAREILS).filter(function (a) { return String(a.code_activation).trim().toUpperCase() === code; })[0];
     if (!ligne || !estVrai_(ligne.actif)) throw new UserError('Code d\'activation inconnu ou désactivé.', 'CODE');
-    if (String(ligne.jeton || '').trim()) throw new UserError('Ce code a déjà été utilisé sur un autre téléphone. Demandez un nouveau code à la direction.', 'CODE_UTILISE');
+    // Un code déjà utilisé ne peut resservir que sur le MÊME téléphone (ex. après « Changer de code » pour tester).
+    var memeTel = String(b.appareil_id || '').trim() && String(ligne.appareil_id || '').trim() === String(b.appareil_id).trim();
+    if (String(ligne.jeton || '').trim() && !memeTel) throw new UserError('Ce code a déjà été utilisé sur un autre téléphone. Demandez un nouveau code à la direction.', 'CODE_UTILISE');
     var role = ROLES_APPAREIL[String(ligne.station).trim().toUpperCase()] || '';
     var st = role ? null : stations_().filter(function (s) { return String(s.code) === String(ligne.station).trim() && estVrai_(s.actif); })[0];
     if (!role && !st) throw new UserError('La station de ce code n\'existe pas ou est inactive.', 'CODE');
