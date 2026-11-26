@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.21';
+var MOBILE_VERSION = 'm1.22';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var STATION_FORMATION = 'TST', MAX_APPAREILS_FORMATION = 50;   // les codes de la station de test servent à la formation : plusieurs téléphones avec le même code (propriétaire, 26/11/2026)
 var MAX_APPAREILS_ROLE = 5;   // un code DIR ou CPT peut servir sur 5 appareils en même temps (demande du propriétaire, 26/11/2026)
@@ -79,6 +79,7 @@ function apiMobile_(action, b) {
       case 'messages': return ok_(messagesStation_(app));
       case 'pushToken': return ok_(pushToken_(app, payload));
       case 'reponse': return ok_(reponseStation_(app, payload));
+      case 'camion': return ok_(camEnvoyer_(app, payload));
       case 'dir': return ok_(direction_(app, String(b.sous_action || ''), payload));
       default: throw new UserError('Action inconnue.');
     }
@@ -110,6 +111,12 @@ function enregistrerAppareil_(b) {
     // Les identifiants sont séparés par « | » (identifiant de l'app + identifiant fixe du téléphone) : un seul en commun suffit.
     var role = roleAppareil_(ligne.station);
     if (role === 'management' || role === 'accounting') return enregistrerPartage_(ligne, b, role, code);
+    if (role === 'camion') {
+      var cam = camDe_(ligne.station);
+      if (!cam) throw new UserError('Le camion de ce code n\'existe pas ou est inactif.', 'CODE');
+      if (b.web) throw new UserError('La version web est réservée à la direction et à la comptabilité. Pour un camion, installez l\'application Android.', 'CODE');
+      if (cam.code === CAM_TEST) { var rp = enregistrerPartage_(ligne, b, 'camion', code, MAX_APPAREILS_FORMATION); return { jeton: rp.jeton, role: 'camion', nom: cam.nom, camion: { code: cam.code, nom: cam.nom } }; }
+    }
     if (String(ligne.station).trim().toUpperCase() === STATION_FORMATION) return enregistrerFormation_(ligne, b, code);
     var ancien = String(ligne.appareil_id || '').split('|').filter(String), envoye = String(b.appareil_id || '').split('|').filter(String);
     var memeTel = envoye.some(function (x) { return ancien.indexOf(x) >= 0; });
@@ -123,6 +130,7 @@ function enregistrerAppareil_(b) {
     majCellule_(APPAREILS, ligne._ligne, 'modele', String(b.modele || '').slice(0, 80));
     majCellule_(APPAREILS, ligne._ligne, 'enregistre_le', maintenant_());
     journal_({ id: 'APP', nom: 'Appareil ' + code }, 'appareil+', role || st.code);
+    if (role === 'camion') return { jeton: jeton, role: role, nom: cam.nom, camion: { code: cam.code, nom: cam.nom } };
     if (role) return { jeton: jeton, role: role, nom: String(ligne.nom || ligne.note || code) };
     return { jeton: jeton, station: { code: st.code, nom: st.nom } };
   } finally { lock.releaseLock(); }
@@ -167,7 +175,7 @@ function enregistrerPartage_(ligne, b, role, code, max) {
 /** DIRECTION / COMPTA = tableau de bord ; « TR:CODE » = agent de transfert sans station (transferts seulement). */
 function roleAppareil_(station) {
   station = String(station).trim().toUpperCase();
-  return ROLES_APPAREIL[station] || (station.indexOf('TR:') === 0 ? 'transferts' : '');
+  return ROLES_APPAREIL[station] || (station.indexOf('TR:') === 0 ? 'transferts' : station.indexOf('CAM:') === 0 ? 'camion' : '');
 }
 
 /** Agents de transfert actifs qui ne sont pas des stations du rapport de fermeture : ils reçoivent un code « transferts seulement ». */
@@ -189,9 +197,11 @@ function appareil_(jeton) {
   if (!a) throw new UserError('Ce téléphone n\'est plus enregistré. Demandez un nouveau code à la direction.', 'NON_ENREGISTRE');
   if (!estVrai_(a.actif)) throw new UserError('Ce téléphone a été désactivé par la direction.', 'DESACTIVE');
   var role = roleAppareil_(a.station);
+  var cam = role === 'camion' ? camDe_(a.station) : null;
+  if (role === 'camion' && !cam) throw new UserError('Ce camion n\'existe pas ou est inactif.', 'DESACTIVE');
   if (role) {
     try { majCellule_(APPAREILS, a._ligne, 'dernier_contact', maintenant_()); } catch (e) { }
-    return { ligne: a, station: null, role: role, id: 'APP-' + String(a.code_activation), nom: String(a.nom || a.note || a.code_activation), username: 'app', enGroupe: false, chatInstance: '' };
+    return { ligne: a, station: null, role: role, camion: cam, id: 'APP-' + String(a.code_activation), nom: String(a.nom || a.note || a.code_activation), username: 'app', enGroupe: false, chatInstance: '' };
   }
   var st = stations_().filter(function (s) { return String(s.code) === String(a.station).trim() && estVrai_(s.actif); })[0];
   if (!st) throw new UserError('Station inactive.', 'DESACTIVE');
@@ -203,6 +213,7 @@ function appareil_(jeton) {
 
 function initMobile_(app) {
   if (app.role === 'transferts') return { version: MOBILE_VERSION, mode: 'transferts', utilisateur: { id: app.id, nom: app.nom, role: app.role } };
+  if (app.role === 'camion') return camInit_(app);
   if (app.role) return initDirection_(app);
   var st = app.station, date = dateRapport();
   var tous = rapportsEffectifs_().filter(function (r) { return String(r.station) === st.code && !estAnnule(r); });
@@ -398,7 +409,7 @@ function initDirection_(app) {
 
 /** Mêmes fonctions que le tableau de bord Telegram, avec l'identité du téléphone de la direction. */
 function direction_(app, sous, p) {
-  if (!app.role || app.role === 'transferts') throw new UserError('Accès réservé à la direction.', 'FORBIDDEN');
+  if (!app.role || app.role === 'transferts' || app.role === 'camion') throw new UserError('Accès réservé à la direction.', 'FORBIDDEN');
   var ctx = { id: app.id, nom: app.nom, username: 'app', role: app.role, chatType: 'private', chatInstance: '', enGroupe: false };
   switch (sous) {
     case 'rapports': return listeRapports_(ctx, p);
@@ -422,6 +433,9 @@ function direction_(app, sous, p) {
     case 'messageSupprimer': exiger_(ctx, ['management']); return messageSupprimer_(ctx, p);
     case 'stock': exiger_(ctx, ['management', 'accounting']); return stockEstime_();
     case 'stockRegler': exiger_(ctx, ['management']); return stockRegler_(ctx, p);
+    case 'camion': exiger_(ctx, ['management', 'accounting']); return camListe_(p);
+    case 'camClient': exiger_(ctx, ['management', 'accounting']); return camClient_(ctx, p);
+    case 'camAnnuler': exiger_(ctx, ['management']); return camAnnuler_(ctx, p);
     default: throw new UserError('Action inconnue.');
   }
 }
@@ -430,14 +444,17 @@ function listeAppareils_() {
   var noms = {}; stations_().forEach(function (s) { noms[String(s.code)] = s.nom; });
   noms.DIRECTION = 'Direction'; noms.COMPTA = 'Comptabilité';
   var tr = agentsTransfertsSeuls_(); tr.forEach(function (t) { noms[t.code] = t.nom; });
+  var cams = camions_().filter(function (c) { return c.actif; }); cams.forEach(function (c) { noms['CAM:' + c.code] = '🚚 ' + c.nom; });
+  var partage = function (st) { st = String(st).trim().toUpperCase(); return !!ROLES_APPAREIL[st] || st === STATION_FORMATION || st === 'CAM:' + CAM_TEST; };
+  var grand = function (st) { st = String(st).trim().toUpperCase(); return st === STATION_FORMATION || st === 'CAM:' + CAM_TEST; };
   return {
-    transferts: tr,
+    transferts: tr, camions: cams.map(function (c) { return { code: 'CAM:' + c.code, nom: c.nom }; }),
     stations: stations_().filter(function (s) { return estVrai_(s.actif); }).map(function (s) { return { code: s.code, nom: s.nom }; }),
     appareils: lire_(APPAREILS).map(function (a) {
       return { code: String(a.code_activation), station: String(a.station), station_nom: noms[String(a.station).trim()] || String(a.station),
         actif: estVrai_(a.actif), utilise: !!String(a.jeton || '').trim(), enregistre_le: String(a.enregistre_le || ''),
-        partage: !!ROLES_APPAREIL[String(a.station).trim().toUpperCase()] || String(a.station).trim().toUpperCase() === STATION_FORMATION, nb: appListe_(a.appareil_id).length,
-        max: String(a.station).trim().toUpperCase() === STATION_FORMATION ? MAX_APPAREILS_FORMATION : MAX_APPAREILS_ROLE,
+        partage: partage(a.station), nb: appListe_(a.appareil_id).length,
+        max: grand(a.station) ? MAX_APPAREILS_FORMATION : MAX_APPAREILS_ROLE,
         dernier_contact: String(a.dernier_contact || ''), nom: String(a.nom || ''), push: !!String(a.push || '').trim() };
     })
   };
@@ -446,13 +463,14 @@ function listeAppareils_() {
 function ajouterAppareil_(ctx, p) {
   var station = String(p.station || '').trim().toUpperCase();
   var valides = stations_().filter(function (s) { return estVrai_(s.actif); }).map(function (s) { return String(s.code); }).concat(['DIRECTION', 'COMPTA'])
-    .concat(agentsTransfertsSeuls_().map(function (t) { return t.code; }));
+    .concat(agentsTransfertsSeuls_().map(function (t) { return t.code; })).concat(camions_().filter(function (c) { return c.actif; }).map(function (c) { return 'CAM:' + c.code; }));
   if (valides.indexOf(station) < 0) throw new UserError('Station inconnue.');
   var lock = LockService.getScriptLock(); lock.waitLock(20000);
   try {
     var existants = lire_(APPAREILS).map(function (a) { return String(a.code_activation).trim().toUpperCase(); });
-    var prefixe = station === 'DIRECTION' ? 'DIR' : station === 'COMPTA' ? 'CPT' : station.replace(/^TR:/, ''), code;
-    do { code = prefixe + '-' + (1000 + Math.floor(Math.random() * 9000)); } while (existants.indexOf(code) >= 0);
+    var prefixe = station === 'DIRECTION' ? 'DIR' : station === 'COMPTA' ? 'CPT' : station.indexOf('CAM:') === 0 ? 'CM' + station.slice(4, 5) : station.replace(/^TR:/, ''), code;
+    if (station === 'CAM:' + CAM_TEST && existants.indexOf(CAM_CODE_TEST) < 0) code = CAM_CODE_TEST;   // le code du camion de test, toujours le même
+    else do { code = prefixe + '-' + (1000 + Math.floor(Math.random() * 9000)); } while (existants.indexOf(code) >= 0);
     ajouter_(APPAREILS, { code_activation: code, station: station, actif: 'oui', note: 'créé par ' + ctx.nom + ' le ' + maintenant_(), nom: String(p.nom || '').trim().slice(0, 60) });
     journal_(ctx, 'appareil-code', code + ' → ' + station);
   } finally { lock.releaseLock(); }
@@ -664,7 +682,7 @@ function photosListe_(p) {
 /** Renvoie une photo (seulement un fichier listé dans l'onglet « Photos horaires »). */
 function photoVoir_(p) {
   var id = String(p.id || '');
-  if (!id || !(phLire_(15000).some(function (r) { return r.fichier_id === id; }) || bdLire_(5000).some(function (r) { return r.fichier_id === id; }))) throw new UserError('Photo introuvable.');
+  if (!id || !(phLire_(15000).some(function (r) { return r.fichier_id === id; }) || bdLire_(5000).some(function (r) { return r.fichier_id === id; }) || camOps_(8000).some(function (r) { return r.fichier_id === id; }))) throw new UserError('Photo introuvable.');
   var f = DriveApp.getFileById(id), b = f.getBlob();
   return { nom: f.getName(), photo: 'data:image/jpeg;base64,' + Utilities.base64Encode(b.getBytes()) };
 }
@@ -845,6 +863,15 @@ function stockEstime_() {
     var g = num(r.closing_meter) - num(r.opening_meter);
     x[0] += isNaN(g) ? 0 : g; x[1] += stkNum_(r.gas_received);
   });
+  var camRecu = {};   // livraisons des camions (application) à un client relié à une station
+  try {
+    var liens = {}; camClients_().forEach(function (c) { if (c.station) liens[c.id] = c.station; });
+    camOps_(8000).forEach(function (o) {
+      var stn = liens[o.client_id];
+      if (o.annule || o.genre !== 'livraison' || o.camion === CAM_TEST || !stn || !regl[stn]) return;
+      (camRecu[stn] = camRecu[stn] || {})[o.date] = ((camRecu[stn] || {})[o.date] || 0) + (Number(o.gallons) || 0);
+    });
+  } catch (e) { }
   var jauges = {};   // dernier niveau du manomètre tapé dans l'application
   phLire_(3000).forEach(function (r) {
     if (PH_JAUGES.indexOf(r.type) < 0 || !regl[r.station] || !(Number(r.compteur) > 0)) return;
@@ -852,11 +879,11 @@ function stockEstime_() {
     if (!j || r.pris_le > j.pris_le) jauges[r.station] = { pris_le: r.pris_le, pct: Number(r.compteur) };
   });
   var out = Object.keys(regl).map(function (code) {
-    var g = regl[code], hh = hist[code] || {}, aa = app[code] || {}, jours = {};
-    Object.keys(hh).forEach(function (d) { jours[d] = 1; }); Object.keys(aa).forEach(function (d) { jours[d] = 1; });
+    var g = regl[code], hh = hist[code] || {}, aa = app[code] || {}, cc = camRecu[code] || {}, jours = {};
+    Object.keys(hh).forEach(function (d) { jours[d] = 1; }); Object.keys(aa).forEach(function (d) { jours[d] = 1; }); Object.keys(cc).forEach(function (d) { jours[d] = 1; });
     var ds = Object.keys(jours).sort(), serie = ds.map(function (d) {
       var x = hh[d] || [0, 0, 0, 0], a = aa[d];
-      return { d: d, vendu: a ? a[0] : x[0], recu: Math.max(a ? a[1] : 0, x[1], x[2], x[3]) };
+      return { d: d, vendu: a ? a[0] : x[0], recu: Math.max(a ? a[1] : 0, x[1], x[2], x[3], cc[d] || 0) };
     });
     var methode = g.vide_le ? 'vide' : 'plus_bas', depuis = g.vide_le, cum = 0, mn = 0, mx = 0, recu = 0, vendu = 0;
     if (methode === 'plus_bas') {   // point le plus bas du solde (reçu − vendu) : on suppose la citerne vide ce jour-là
@@ -1029,4 +1056,215 @@ function messageSupprimer_(ctx, p) {
   msgFeuille_(false).getRange(m.ligne, 9).setValue('non');
   journal_(ctx, 'message-', String(m.id));
   return messagesListe_();
+}
+
+/* ============================ Camions de livraison (m1.22, 26/11/2026) ============================
+ * Décisions du propriétaire (26/11/2026) : un code par camion (3 camions pour commencer) et un camion de test qui s'ouvre sur
+ * plusieurs téléphones ; le chauffeur tape seulement les gallons, le prix est fixé par le bureau ; avant de livrer, il voit les
+ * 5 dernières opérations du client ; les achats du camion sont suivis aussi.
+ * Onglets : « Camions » (liste), « Clients camion » (clients et prix au gallon, fixés par le bureau), « Camion (app) » (une ligne par
+ * livraison, paiement reçu, chargement de propane ou autre achat). Les photos vont dans un dossier Drive privé. Rien n'est supprimé :
+ * « annuler » marque la ligne.
+ */
+var CAM_ONGLET = 'Camions', CAM_ENTETES = ['code', 'nom', 'actif', 'note'];
+var CAM_DEFAUT = [['1', 'Camion 1'], ['2', 'Camion 2'], ['3', 'Camion 3'], ['TEST', 'Camion test (formation)']];
+var CAM_TEST = 'TEST', CAM_CODE_TEST = 'CMT-0001';
+var CCL_ONGLET = 'Clients camion', CCL_ENTETES = ['id', 'nom', 'prix_gal', 'station', 'actif', 'modifie_le', 'modifie_par', 'note'];
+var CCL_DEFAUT = 'DEFAUT';   // ligne spéciale : prix pour un client qui n'a pas encore son prix
+var COP_ONGLET = 'Camion (app)';
+var COP_ENTETES = ['id', 'genre', 'date', 'camion', 'client_id', 'client', 'gallons', 'prix_gal', 'montant', 'paye', 'credit', 'devise', 'bon_no', 'fournisseur', 'detail',
+  'lat', 'lon', 'precision_m', 'pris_le', 'recu_le', 'fichier_id', 'appareil', 'cid', 'annule', 'note'];
+var COP_GENRES = ['livraison', 'paiement', 'chargement', 'achat'];
+var CAM_FOURNISSEURS = ['Sodigaz', 'Haiti Propane', 'Autre'];
+/* Prix et montants des livraisons : dans la monnaie des rapports de fermeture (CURRENCY), comme sur les bons du camion.
+ * Un paiement ou un achat peut aussi être noté en gourdes (HTG) ou en dollars US. */
+function camDevises_() { return [CURRENCY, 'HTG', 'USD'].filter(function (x, i, l) { return l.indexOf(x) === i; }); }
+
+function camFeuille_(nom, entetes, lignes) {
+  var sh = ss_().getSheetByName(nom);
+  if (!sh) { sh = ss_().insertSheet(nom); sh.appendRow(entetes); sh.setFrozenRows(1); (lignes || []).forEach(function (l) { sh.appendRow(l); }); }
+  return sh;
+}
+function camLignes_(sh, n) { return sh.getLastRow() < 2 ? [] : sh.getRange(2, 1, sh.getLastRow() - 1, n).getValues(); }
+function camions_() {
+  var sh = camFeuille_(CAM_ONGLET, CAM_ENTETES, CAM_DEFAUT.map(function (c) { return [c[0], c[1], 'oui', 'créé le ' + maintenant_() + ' (décision du propriétaire, 26/11/2026)']; }));
+  return camLignes_(sh, 3).map(function (r) { return { code: String(r[0]).trim().toUpperCase(), nom: String(r[1] || r[0]), actif: estVrai_(r[2]) }; }).filter(function (c) { return c.code; });
+}
+function camDe_(station) {   // « CAM:1 » → le camion, ou null
+  var code = String(station || '').trim().toUpperCase().replace(/^CAM:/, '');
+  return camions_().filter(function (c) { return c.code === code && c.actif; })[0] || null;
+}
+function camClients_() {
+  var sh = camFeuille_(CCL_ONGLET, CCL_ENTETES, [[CCL_DEFAUT, '(prix pour un client sans prix)', '', '', 'oui', maintenant_(), '', 'à remplir par le bureau']]);
+  return camLignes_(sh, 5).map(function (r, i) {
+    return { ligne: i + 2, id: String(r[0]).trim(), nom: String(r[1] || '').trim(), prix: stkNum_(r[2]) || 0, station: String(r[3] || '').trim().toUpperCase(), actif: estVrai_(r[4]) };
+  }).filter(function (c) { return c.id; });
+}
+function camOps_(max) {
+  var sh = camFeuille_(COP_ONGLET, COP_ENTETES), n = sh.getLastRow();
+  if (n < 2) return [];
+  var from = Math.max(2, n - (max || 8000) + 1), vide = function (v) { return v === '' || v === null ? '' : Number(v); };
+  return sh.getRange(from, 1, n - from + 1, COP_ENTETES.length).getValues().map(function (r, i) {
+    return { ligne: from + i, id: String(r[0]), genre: String(r[1]), date: phJour_(r[2]), camion: String(r[3]).trim().toUpperCase(), client_id: String(r[4] || ''), client: String(r[5] || ''),
+      gallons: vide(r[6]), prix: vide(r[7]), montant: vide(r[8]), paye: vide(r[9]), credit: vide(r[10]), devise: String(r[11] || 'HTG'), bon_no: String(r[12] || ''),
+      fournisseur: String(r[13] || ''), detail: String(r[14] || ''), lat: vide(r[15]), lon: vide(r[16]), pris_le: phTexte_(r[18]), recu_le: phTexte_(r[19]),
+      fichier_id: String(r[20] || ''), cid: String(r[22] || ''), annule: estVrai_(r[23]), note: String(r[24] || '') };
+  });
+}
+function camPourTel_(o) {   // ce que le téléphone du camion reçoit d'une opération
+  return { cid: o.cid, genre: o.genre, date: o.date, heure: o.pris_le.slice(11, 16), camion: o.camion, client_id: o.client_id, client: o.client, gallons: o.gallons, prix: o.prix,
+    montant: o.montant, paye: o.paye, credit: o.credit, devise: o.devise, bon_no: o.bon_no, fournisseur: o.fournisseur, detail: o.detail };
+}
+/** Écran de départ du téléphone d'un camion : clients et prix, 5 dernières opérations de chaque client, opérations du jour. */
+function camInit_(app) {
+  var cam = app.camion, auj = msgJour_(0), test = cam.code === CAM_TEST;
+  var clients = camClients_(), defaut = clients.filter(function (c) { return c.id === CCL_DEFAUT; })[0];
+  var ops = camOps_(8000).filter(function (o) { return !o.annule && (test || o.camion !== CAM_TEST); });
+  var hist = {};
+  ops.forEach(function (o) {
+    if (o.genre !== 'livraison' && o.genre !== 'paiement') return;
+    var k = o.client_id || ('N:' + o.client.toLowerCase());
+    (hist[k] = hist[k] || []).push(camPourTel_(o));
+  });
+  Object.keys(hist).forEach(function (k) { hist[k] = hist[k].slice(-5).reverse(); });
+  return { version: MOBILE_VERSION, mode: 'camion', devise: CURRENCY, camion: { code: cam.code, nom: cam.nom, test: test }, date: auj,
+    clients: clients.filter(function (c) { return c.actif && c.id !== CCL_DEFAUT; }).map(function (c) { return { id: c.id, nom: c.nom, prix: c.prix }; })
+      .sort(function (a, b) { return a.nom.toLowerCase() < b.nom.toLowerCase() ? -1 : 1; }),
+    prix_defaut: defaut ? defaut.prix : 0, historique: hist, fournisseurs: CAM_FOURNISSEURS, devises: camDevises_(),
+    jour: ops.filter(function (o) { return o.camion === cam.code && o.date === auj; }).map(camPourTel_) };
+}
+/** Une opération envoyée par le téléphone d'un camion. Le prix vient toujours du bureau ; le chauffeur ne tape que les gallons. */
+function camEnvoyer_(app, p) {
+  if (app.role !== 'camion' || !app.camion) throw new UserError('Réservé au téléphone d\'un camion.', 'FORBIDDEN');
+  var cam = app.camion, genre = String(p.genre || '');
+  if (COP_GENRES.indexOf(genre) < 0) throw new UserError('Opération inconnue.');
+  var cid = String(p.cid || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 60);
+  if (!cid) throw new UserError('Opération sans identifiant.');
+  var photo = String(p.photo || ''), m = photo.match(/^data:image\/jpeg;base64,(.+)$/), octets = null;
+  if (photo && !m) throw new UserError('Photo invalide.');
+  if (m) { octets = Utilities.base64Decode(m[1]); if (octets.length > 3000000) throw new UserError('Photo trop lourde.'); }
+  if (!octets && genre !== 'paiement') throw new UserError('Il faut la photo du bon ou du reçu.');
+  var recu = new Date(), auj = Utilities.formatDate(recu, TZ, 'yyyy-MM-dd'), pris = new Date(Number(p.pris_ms) || 0), note = String(p.note || '').slice(0, 200);
+  if (!(pris.getTime() > 0) || pris.getTime() > recu.getTime() + 10 * 60000) { note = (note ? note + ' ; ' : '') + 'Heure du téléphone refusée : heure de réception utilisée'; pris = recu; }
+  else if (recu.getTime() - pris.getTime() > 31 * 864e5) throw new UserError('Opération trop ancienne (plus de 31 jours).');
+  var date = Utilities.formatDate(pris, TZ, 'yyyy-MM-dd');
+  var nombre = function (v, quoi, oblig) {
+    var s = String(v === undefined || v === null ? '' : v).trim(); if (!s && !oblig) return '';
+    var x = phNombre_(s); if (!x || !(Number(x) > 0)) throw new UserError(quoi + ' illisible. Écrivez seulement les chiffres.');
+    return Number(x);
+  };
+  var devise = camDevises_().indexOf(String(p.devise)) >= 0 ? String(p.devise) : CURRENCY;
+  var l = { client_id: '', client: '', gallons: '', prix: '', montant: '', paye: '', credit: '', devise: CURRENCY, bon_no: String(p.bon_no || '').trim().slice(0, 40), fournisseur: '', detail: '' };
+  if (genre === 'livraison' || genre === 'paiement') {
+    var clients = camClients_(), c = clients.filter(function (x) { return x.id === String(p.client_id || '') && x.id !== CCL_DEFAUT; })[0];
+    l.client = c ? c.nom : String(p.client || '').trim().slice(0, 80);
+    if (!l.client) throw new UserError('Choisissez le client.');
+    l.client_id = c ? c.id : '';
+    if (genre === 'livraison') {
+      l.gallons = nombre(p.gallons, 'Nombre de gallons', true);
+      if (l.gallons > 20000) throw new UserError('Plus de 20 000 gallons : vérifiez le chiffre.');
+      var defaut = clients.filter(function (x) { return x.id === CCL_DEFAUT; })[0];
+      var prix = c && c.prix > 0 ? c.prix : (defaut && defaut.prix > 0 ? defaut.prix : 0);
+      var mode = String(p.mode || '');
+      if (['comptant', 'credit', 'partie'].indexOf(mode) < 0) throw new UserError('Dites si le client a payé, ou si c\'est à crédit.');
+      if (prix > 0) {
+        l.prix = prix; l.montant = Math.round(l.gallons * prix * 100) / 100;
+        l.paye = mode === 'comptant' ? l.montant : mode === 'credit' ? 0 : nombre(p.paye, 'Montant reçu', true);
+        if (l.paye > l.montant) throw new UserError('Le montant reçu dépasse le montant de la livraison (' + l.montant + ' ' + CURRENCY + ').');
+        l.credit = Math.round((l.montant - l.paye) * 100) / 100;
+      } else {   // pas de prix au bureau : on ne l'invente pas, le montant reste vide
+        if (mode === 'partie') l.paye = nombre(p.paye, 'Montant reçu', true); else if (mode === 'credit') l.paye = 0;
+        note = (note ? note + ' ; ' : '') + 'Prix pas encore fixé par le bureau (' + (mode === 'comptant' ? 'payé comptant' : mode === 'credit' ? 'à crédit' : 'une partie payée') + ')';
+      }
+    } else {
+      l.montant = nombre(p.montant, 'Montant reçu', true); l.paye = l.montant; l.devise = devise;
+    }
+  } else if (genre === 'chargement') {
+    l.fournisseur = String(p.fournisseur || '').trim().slice(0, 60);
+    if (!l.fournisseur) throw new UserError('Choisissez le fournisseur.');
+    l.gallons = nombre(p.gallons, 'Nombre de gallons', true);
+    if (l.gallons > 20000) throw new UserError('Plus de 20 000 gallons : vérifiez le chiffre.');
+  } else {
+    l.detail = String(p.detail || '').trim().slice(0, 120);
+    if (!l.detail) throw new UserError('Écrivez ce qui a été acheté.');
+    l.montant = nombre(p.montant, 'Montant', true); l.devise = devise;
+  }
+  var gps = function (v, max) { var x = Number(v); return v === '' || v === undefined || v === null || isNaN(x) || Math.abs(x) > max ? '' : Math.round(x * 1e6) / 1e6; };
+  var lat = gps(p.lat, 90), lon = gps(p.lon, 180), prec = lat === '' || lon === '' ? '' : Math.round(Number(p.precision) || 0);
+  if (lat === '' || lon === '') { lat = ''; lon = ''; }
+  var lock = LockService.getScriptLock(); lock.waitLock(25000);
+  try {
+    var sh = camFeuille_(COP_ONGLET, COP_ENTETES), n = sh.getLastRow(), col = COP_ENTETES.indexOf('cid') + 1;
+    if (n > 1) {
+      var from = Math.max(2, n - 2999), cids = sh.getRange(from, col, n - from + 1, 1).getValues();
+      for (var i = 0; i < cids.length; i++) if (String(cids[i][0]) === cid) return { recu: true, deja: true, cid: cid };
+    }
+    var fid = '';
+    if (octets) {
+      var nomF = 'CAM' + cam.code + '_' + genre + '_' + date + '_' + Utilities.formatDate(pris, TZ, 'HHmmss') + '.jpg';
+      var f = phDossier_({ code: 'CAM' + cam.code, nom: cam.nom }, date, 'CAM', 'RRD – Camions (app, privé)').createFile(Utilities.newBlob(octets, 'image/jpeg', nomF));
+      f.setDescription('Camion (application RRD) — ' + cam.nom + ' — ' + genre + ' — ' + (l.client || l.fournisseur || l.detail) + ' — ' + cid);
+      fid = f.getId();
+    }
+    var id = 'C' + Utilities.formatDate(recu, TZ, 'yyMMdd') + '-' + n;
+    sh.appendRow([id, genre, date, cam.code, l.client_id, l.client, l.gallons, l.prix, l.montant, l.paye, l.credit, l.devise, l.bon_no, l.fournisseur, l.detail, lat, lon, prec,
+      Utilities.formatDate(pris, TZ, 'yyyy-MM-dd HH:mm:ss'), Utilities.formatDate(recu, TZ, 'yyyy-MM-dd HH:mm:ss'), fid, app.id, cid, '', note]);
+    return { recu: true, cid: cid, id: id, prix: l.prix, montant: l.montant, paye: l.paye, credit: l.credit };
+  } finally { lock.releaseLock(); }
+}
+/** Direction / comptabilité : opérations des camions entre deux dates, totaux, clients et prix. */
+function camListe_(p) {
+  var auj = msgJour_(0), ok = function (d) { return /^\d{4}-\d{2}-\d{2}$/.test(String(d || '')); };
+  var au = ok(p.au) ? String(p.au) : auj, du = ok(p.du) ? String(p.du) : au, filtre = String(p.camion || '').trim().toUpperCase();
+  var cams = camions_(), noms = {}; cams.forEach(function (c) { noms[c.code] = c.nom; });
+  var ops = camOps_(8000).filter(function (o) { return o.date >= du && o.date <= au && (filtre ? o.camion === filtre : o.camion !== CAM_TEST); })
+    .sort(function (a, b) { return a.pris_le < b.pris_le ? 1 : -1; });
+  var t = { livre: 0, charge: 0, montant: 0, paye: 0, credit: 0, encaisse: 0, sans_prix: 0, achats: {} };
+  ops.forEach(function (o) {
+    if (o.annule) return;
+    if (o.genre === 'livraison') { t.livre += Number(o.gallons) || 0; if (o.montant === '') t.sans_prix++; else { t.montant += o.montant; t.paye += Number(o.paye) || 0; t.credit += Number(o.credit) || 0; } }
+    else if (o.genre === 'chargement') t.charge += Number(o.gallons) || 0;
+    else if (o.genre === 'paiement') { if (o.devise === CURRENCY) t.encaisse += Number(o.montant) || 0; else t.achats['Paiements reçus en ' + o.devise] = (t.achats['Paiements reçus en ' + o.devise] || 0) + (Number(o.montant) || 0); }
+    else t.achats[o.devise] = (t.achats[o.devise] || 0) + (Number(o.montant) || 0);
+  });
+  return { du: du, au: au, aujourdhui: auj, camion: filtre, camions: cams, totaux: t, devise: CURRENCY, stations: stations_().filter(function (s) { return estVrai_(s.actif); }).map(function (s) { return { code: String(s.code), nom: String(s.nom) }; }),
+    clients: camClients_().map(function (c) { return { id: c.id, nom: c.nom, prix: c.prix, station: c.station, actif: c.actif }; }),
+    ops: ops.map(function (o) { var x = camPourTel_(o); x.id = o.id; x.camion_nom = noms[o.camion] || o.camion; x.fichier = o.fichier_id; x.lat = o.lat; x.lon = o.lon; x.annule = o.annule; x.note = o.note; return x; }) };
+}
+/** Le bureau crée un client ou change son prix (aussi le prix par défaut, id = DEFAUT). Le changement ne touche pas les livraisons déjà reçues. */
+function camClient_(ctx, p) {
+  var lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    var clients = camClients_(), sh = ss_().getSheetByName(CCL_ONGLET), id = String(p.id || '').trim();
+    var prix = p.prix === undefined || p.prix === null || String(p.prix).trim() === '' ? null : Number(phNombre_(String(p.prix)));
+    if (prix !== null && !(prix > 0 && prix < 100000)) throw new UserError('Prix au gallon invalide.');
+    var station = String(p.station || '').trim().toUpperCase();
+    if (station && !stations_().some(function (s) { return String(s.code) === station; })) throw new UserError('Station inconnue.');
+    if (id) {
+      var c = clients.filter(function (x) { return x.id === id; })[0];
+      if (!c) throw new UserError('Client introuvable.');
+      var nom = id === CCL_DEFAUT ? c.nom : (String(p.nom || '').trim().slice(0, 80) || c.nom);
+      sh.getRange(c.ligne, 2, 1, 6).setValues([[nom, prix === null ? (c.prix || '') : prix, p.station === undefined ? c.station : station, p.actif === undefined ? (c.actif ? 'oui' : 'non') : (p.actif ? 'oui' : 'non'), maintenant_(), ctx.nom]]);
+      journal_(ctx, 'camion-client', id + ' ' + nom + ' prix=' + (prix === null ? c.prix : prix) + ' (avant : ' + c.prix + ')');
+    } else {
+      var nomN = String(p.nom || '').trim().slice(0, 80);
+      if (!nomN) throw new UserError('Écrivez le nom du client.');
+      if (clients.some(function (x) { return x.nom.toLowerCase() === nomN.toLowerCase(); })) throw new UserError('Ce client existe déjà.');
+      var num = 1; clients.forEach(function (x) { var k = Number(x.id.replace(/^K/, '')); if (k >= num) num = k + 1; });
+      sh.appendRow(['K' + num, nomN, prix === null ? '' : prix, station, 'oui', maintenant_(), ctx.nom, 'créé par le bureau']);
+      journal_(ctx, 'camion-client+', 'K' + num + ' ' + nomN + ' prix=' + (prix === null ? '' : prix));
+    }
+  } finally { lock.releaseLock(); }
+  return camListe_(p.vue || {});
+}
+function camAnnuler_(ctx, p) {
+  var motif = String(p.motif || '').trim().slice(0, 150);
+  if (!motif) throw new UserError('Écrivez la raison.');
+  var o = camOps_(8000).filter(function (x) { return x.id === String(p.id || ''); })[0];
+  if (!o) throw new UserError('Opération introuvable.');
+  if (o.annule) throw new UserError('Déjà annulée.');
+  var sh = ss_().getSheetByName(COP_ONGLET);
+  sh.getRange(o.ligne, COP_ENTETES.indexOf('annule') + 1, 1, 2).setValues([['oui', (o.note ? o.note + ' ; ' : '') + 'Annulée le ' + maintenant_() + ' par ' + ctx.nom + ' : ' + motif]]);
+  journal_(ctx, 'camion-annule', o.id + ' ' + o.genre + ' ' + (o.client || o.fournisseur || o.detail) + ' : ' + motif);
+  return camListe_(p.vue || {});
 }
