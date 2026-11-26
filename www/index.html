@@ -71,7 +71,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.20.1';
+var VERSION_APP = '1.21.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -207,18 +207,48 @@ function api(action, extra) {
 
 /* ======================= État ======================= */
 var S = { init: null, en_ligne: false, sync: false };
+/* Un écran rafraîchi tout seul (photo partie, réponse du bureau, minuterie) ne doit jamais remplacer un bouton pendant qu'on le touche :
+ * le toucher serait perdu. On attend que le doigt soit levé. */
+var TOUCHE = { on: false, fin: 0 };
+document.addEventListener('touchstart', function () { TOUCHE.on = true; }, { passive: true, capture: true });
+['touchend', 'touchcancel'].forEach(function (ev) { document.addEventListener(ev, function () { TOUCHE.on = false; TOUCHE.fin = Date.now(); }, { passive: true, capture: true }); });
+function fond(ecran, fn) {
+  if (TOUCHE.on || Date.now() - TOUCHE.fin < 400) return setTimeout(function () { fond(ecran, fn); }, 300);
+  if (S.ecran === ecran) fn();
+}
+/* Appareil photo. Avec l'application installée récente (build 43 et plus), la photo passe par l'appareil photo du téléphone lui-même :
+ * l'image arrive déjà réduite (plus de panne avec les très grandes photos) et on sait pourquoi quand il ne s'ouvre pas.
+ * Sinon, ou en cas de panne, on revient au bouton de fichier du navigateur. */
+function prendrePhoto(inputId, suite) {
+  var C = NAT.Camera, repli = function () { var i = $(inputId); i.value = ''; i.click(); };
+  if (!C || S.photoRepli) return repli();
+  if (S.photoEnCours && Date.now() - S.photoEnCours < 60000) return;   // l'appareil photo est déjà en train de s'ouvrir
+  S.photoEnCours = Date.now();
+  C.getPhoto({ source: 'CAMERA', resultType: 'dataUrl', quality: 80, width: 1600, correctOrientation: true, saveToGallery: false }).then(function (ph) {
+    S.photoEnCours = 0; if (ph && ph.dataUrl) suite(ph.dataUrl);
+  }, function (e) {
+    S.photoEnCours = 0;
+    var m = String((e && (e.message || e.errorMessage)) || e || '');
+    if (/cancel/i.test(m)) return;
+    if (/denied|permission/i.test(m)) return alerte('L\'appareil photo est bloqué pour RRD. Ouvrez Paramètres du téléphone > Applications > RRD > Autorisations > Appareil photo, puis choisissez « Autoriser ».');
+    S.photoRepli = true; repli();   // autre panne : l'ancien chemin sert pour le reste de la session
+  });
+}
 function majNet(t) { var n = $('net'); if (n) n.textContent = t; }
 function stationCode() { return (CFG.get('station', {}) || {}).code; }
 
 function view(html, barHtml, ecran) {
+  var avant = S.ecran, memeEcran = !!ecran && ecran === avant;
   S.ecran = ecran || '';
+  if (memeEcran && html === S.vueHtml && (barHtml || '') === S.vueBar) return;   // rien n'a changé : on ne touche pas à l'écran (un doigt est peut-être dessus)
+  S.vueHtml = html; S.vueBar = barHtml || '';
   $('app').innerHTML = html;
   $('sect').classList.toggle('hidden', !CFG.get('jeton', '') || CFG.get('role', '') === 'camion');
   var sp = $('sPhotos'), surPhotos = S.ecran.indexOf('photo') === 0;   // onglet Photos : seulement pour le téléphone d'une station
   sp.classList.toggle('hidden', !CFG.get('jeton', '') || !!CFG.get('role', '')); sp.classList.toggle('on', surPhotos); $('sect').firstChild.classList.toggle('on', !surPhotos);
   bandeauMaj();
   if (barHtml) { $('barIn').innerHTML = barHtml; $('bar').classList.remove('hidden'); } else $('bar').classList.add('hidden');
-  window.scrollTo(0, 0);
+  if (!memeEcran) window.scrollTo(0, 0);   // même écran rafraîchi : on reste où l'on est
 }
 
 /* ======================= Enregistrement du téléphone ======================= */
@@ -676,11 +706,12 @@ function ecranPhotos(msg) {
     view(h, '<button class="sec" onclick="phActualiser()">🔄 Envoyer / actualiser</button>', 'photos');
   });
 }
-function phPrendre(type) { PH.type = type; var i = $('phInput'); i.value = ''; i.click(); }
-function phPrise(input) {
-  var f = input.files && input.files[0]; if (!f) return;
+function phPrendre(type) { PH.type = type; CFG.set('phEnCours', { type: type, ms: Date.now() }); prendrePhoto('phInput', phImage); }
+function phPrise(input) { var f = input.files && input.files[0]; if (f) phImage(URL.createObjectURL(f)); }
+function phImage(url) {
   var type = PH.type, ms = Date.now(), jh = phJourHeure(ms), st = CFG.get('station', {});
-  var img = new Image(), url = URL.createObjectURL(f);
+  CFG.del('phEnCours');
+  var img = new Image();
   img.onload = function () {
     var k = Math.min(1, (type === 'BORDEREAU' ? 1600 : 1280) / Math.max(img.width, img.height));
     var cv = document.createElement('canvas'); cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
@@ -757,7 +788,7 @@ function phEnvoyer() {
         if (e.reseau || e.code === 'NON_ENREGISTRE' || e.code === 'DESACTIVE') throw e;   // pas de signal ou téléphone à réenregistrer : on réessaiera
         r.statut = 'rejete'; r.erreur = e.erreur || ''; delete r.photo;
       }).then(function () { return ptx('readwrite', function (s) { s.put(r); }); })
-        .then(function () { if (S.ecran === 'photos') ecranPhotos(); return suivant(); });
+        .then(function () { fond('photos', ecranPhotos); return suivant(); });
     }
     return suivant();
   }).catch(function () { }).then(function () {
@@ -771,7 +802,7 @@ function phEnvoyer() {
 function phActualiser() {
   majNet('envoi…');
   return phEnvoyer().then(function () { return api('photos'); }).then(function (d) { PH.serveur = d; CFG.set('phTypes', d.types); CFG.set('phSuivie', d.suivie !== false); S.en_ligne = true; }, function (e) { if (e && e.reseau) S.en_ligne = false; })
-    .then(function () { majNet(S.en_ligne ? '● en ligne' : '○ hors ligne'); if (S.ecran === 'photos') ecranPhotos(); msgCharger(true); });
+    .then(function () { majNet(S.en_ligne ? '● en ligne' : '○ hors ligne'); fond('photos', ecranPhotos); msgCharger(true); });
 }
 
 
@@ -789,7 +820,7 @@ function quandHaiti(date, h, m) {   // l'instant (ms) où il est h:m à l'heure 
 function ntDemarrer() {
   if (!LN) return pushDemarrer();
   LN.checkPermissions().then(function (p) { return p.display === 'granted' ? p : LN.requestPermissions(); })
-    .then(function (p) { NT.ok = p.display === 'granted'; msgCharger(true); ntBientot(); if (S.ecran === 'accueil') accueil(); }).catch(function () { NT.ok = false; })
+    .then(function (p) { NT.ok = p.display === 'granted'; msgCharger(true); ntBientot(); fond('accueil', accueil); }).catch(function () { NT.ok = false; })
     .then(pushDemarrer);
 }
 /* Notifications poussées (Firebase) : un message de la direction écrit pendant que l'application est fermée arrive quand même sur le
@@ -840,7 +871,7 @@ function cmActualiser(manuel) {
     majNet('● en ligne');
     if (d.mode !== 'camion') return;
     CM.d = d; CFG.set('camInit', d); CFG.set('camion', d.camion);
-    if (S.ecran === 'camion') camAccueil(manuel ? 'À jour.' : '');
+    if (manuel) { if (S.ecran === 'camion') camAccueil('À jour.'); } else fond('camion', function () { camAccueil(); });
   }).catch(function (e) {
     majNet(e && e.reseau ? '○ hors ligne' : '● en ligne');
     if (e && (e.code === 'NON_ENREGISTRE' || e.code === 'DESACTIVE')) { CFG.set('jeton', ''); CFG.set('role', ''); return ecranEnregistrer(e.erreur); }
@@ -968,7 +999,7 @@ function cmForm(genre) {
       '<div id="cmAcB" class="hidden"><label for="cmDet">Ce qui a été acheté</label><input id="cmDet" autocomplete="off" placeholder="ex. diesel, pneu, péage">' +
       '<label for="cmMtP">Montant payé</label><input id="cmMtP" inputmode="decimal" autocomplete="off" placeholder="seulement les chiffres"><label for="cmDv">Monnaie</label><select id="cmDv">' + cmOptDev() + '</select></div>';
   }
-  h += '<label for="cmNote">Note (facultatif)</label><input id="cmNote" autocomplete="off"><label>' + photoTxt + '</label><button class="sec" style="width:100%" onclick="var i=$(\'cmInput\');i.value=\'\';i.click()">📷 Prendre la photo</button><div id="cmPrev" class="mut"></div>';
+  h += '<label for="cmNote">Note (facultatif)</label><input id="cmNote" autocomplete="off"><label>' + photoTxt + '</label><button class="sec" style="width:100%" onclick="cmPrendre()">📷 Prendre la photo</button><div id="cmPrev" class="mut"></div>';
   view(h, '<button class="sec" onclick="CM.f=null;camAccueil()">Annuler</button><button onclick="cmValider()">Enregistrer</button>', 'camForm');
 }
 function cmRapport(date) {
@@ -983,7 +1014,7 @@ function cmRapport(date) {
     else h += '<div class="note">Le résumé de la journée sera calculé par le bureau avec les opérations envoyées.</div>';
     h += '<label for="crEmp">Employés du camion (chauffeur et aides) *</label><input id="crEmp" autocomplete="off" value="' + esc(CFG.get('camEmp', '')) + '" placeholder="ex. Paul Michel, Jean Rose">' +
       '<label for="crRemis">Argent remis au bureau ou déposé (' + esc(cmDev()) + ') *</label><input id="crRemis" inputmode="decimal" autocomplete="off" placeholder="seulement les chiffres, 0 si rien">' +
-      '<label for="cmNote">Note (facultatif)</label><input id="cmNote" autocomplete="off"><label>Photo de la feuille du jour ou du bordereau (facultatif)</label><button class="sec" style="width:100%" onclick="var i=$(\'cmInput\');i.value=\'\';i.click()">📷 Prendre la photo</button><div id="cmPrev" class="mut"></div>';
+      '<label for="cmNote">Note (facultatif)</label><input id="cmNote" autocomplete="off"><label>Photo de la feuille du jour ou du bordereau (facultatif)</label><button class="sec" style="width:100%" onclick="cmPrendre()">📷 Prendre la photo</button><div id="cmPrev" class="mut"></div>';
     view(h, '<button class="sec" onclick="CM.f=null;camAccueil()">Annuler</button><button onclick="cmValider()">Envoyer le rapport</button>', 'camForm');
   });
 }
@@ -1021,9 +1052,11 @@ function cmMontant() {
   if (!(c.prix > 0)) { el.textContent = 'Prix pas encore fixé par le bureau pour ce client : le montant sera calculé au bureau.'; return; }
   el.innerHTML = 'Prix du bureau : <b>' + fmt(c.prix) + ' ' + esc(cmDev()) + '</b> le gallon' + (g > 0 ? ' → montant : <b style="font-size:18px">' + fmt(Math.round(g * c.prix * 100) / 100) + ' ' + esc(cmDev()) + '</b>' : '');
 }
-function cmPhoto(input) {
-  var f = input.files && input.files[0]; if (!f || !CM.f) return;
-  var img = new Image(), url = URL.createObjectURL(f);
+function cmPrendre() { prendrePhoto('cmInput', cmImage); }
+function cmPhoto(input) { var f = input.files && input.files[0]; if (f) cmImage(URL.createObjectURL(f)); }
+function cmImage(url) {
+  if (!CM.f) return;
+  var img = new Image();
   img.onload = function () {
     var k = Math.min(1, 1600 / Math.max(img.width, img.height)), cv = document.createElement('canvas'); cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
     var c2 = cv.getContext('2d'); c2.drawImage(img, 0, 0, cv.width, cv.height); URL.revokeObjectURL(url);
@@ -1083,7 +1116,7 @@ function cmValider() {
     }
     if (!f.photo) return alerte('Prenez la photo du bon ou du reçu.');
   }
-  var garder = function () { return ptx('readwrite', function (s) { s.put(r); }).then(function () { CM.f = null; camAccueil((CM_NOMS[r.op] || 'Opération').replace(/^\S+\s/, '') + ' enregistré(e).'); cmEnvoyer().then(function () { if (S.ecran === 'camion') camAccueil(); }); },
+  var garder = function () { return ptx('readwrite', function (s) { s.put(r); }).then(function () { CM.f = null; camAccueil((CM_NOMS[r.op] || 'Opération').replace(/^\S+\s/, '') + ' enregistré(e).'); cmEnvoyer().then(function () { fond('camion', function () { camAccueil(); }); }); },
     function () { alerte('Impossible de garder l\'opération sur le téléphone (mémoire pleine ?). Réessayez.'); }); };
   var pos = function (g) { r.lat = g.lat; r.lon = g.lon; r.precision = g.acc; };
   if (r.op === 'rapport') { if (CM.gps && ms - CM.gps.ms < 5 * 60000) pos(CM.gps); return garder(); }
@@ -1255,7 +1288,7 @@ function msgCharger(force) {
     });
     Object.keys(reps).forEach(function (k) { if (!garde[k] && reps[k].statut === 'attente') garde[k] = reps[k]; else if (!garde[k]) chR = true; });
     if (chR) CFG.set('reponses', garde);
-    CFG.set('messages', l); ntBientot(); repEnvoyer(); if (S.ecran === 'accueil') accueil(); }).catch(function () { });
+    CFG.set('messages', l); ntBientot(); repEnvoyer(); fond('accueil', accueil); }).catch(function () { });
 }
 function msgHtml() {   // sur l'écran d'accueil : les conseils et messages d'aujourd'hui et d'hier dont l'heure est passée
   var now = Date.now(), jh = phJourHeure(now), hier = jourPlus(jh.date, -1), h = '';
@@ -1301,7 +1334,7 @@ function repEnvoyer() {
   REP.envoi = true;
   var i = 0;
   (function suivant() {
-    if (i >= ids.length) { REP.envoi = false; if (S.ecran === 'accueil') accueil(); return; }
+    if (i >= ids.length) { REP.envoi = false; fond('accueil', accueil); return; }
     var id = ids[i++], r = reps[id];
     api('reponse', { payload: { msg_id: Number(id), texte: r.texte, ecrit_ms: r.ecrit_ms, cid: r.cid } }).then(function () {
       var cur = CFG.get('reponses', {}) || {}; if (cur[id]) { cur[id].statut = 'envoye'; CFG.set('reponses', cur); }
@@ -1939,13 +1972,19 @@ function verifierMaj() {
     return CU.list().then(function (l) {
       var deja = ((l && l.bundles) || []).filter(function (b) { return b.version === ver && (b.status === 'success' || b.status === 'pending'); })[0];
       return deja || CU.download({ url: m.url, version: ver, checksum: String(m.checksum || '') });   // sans empreinte (checksum), le téléchargement est refusé
-    }).then(function (b) { return CU.next({ id: b.id }); }).then(function () { S.majPrete = ver; S.majErreur = ''; if (S.ecran === 'accueil') accueil(); });
+    }).then(function (b) { return CU.next({ id: b.id }); }).then(function () { S.majPrete = ver; S.majErreur = ''; fond('accueil', accueil); });
   }).catch(function (e) { S.majErreur = String((e && (e.message || e.errorMessage)) || e || '').slice(0, 90); }).then(function () { S.majEnCours = false; });
 }
 document.addEventListener('resume', function () { verifierMaj(); bandeauMaj(); phEnvoyer(); msgCharger(); ntBientot(); repEnvoyer(); pushRepli(); cmReprise(); });
-setInterval(function () { phEnvoyer(); if (S.ecran === 'photos') ecranPhotos(); msgCharger(); repEnvoyer(); cmEnvoyer(); }, 60000);   // file des photos + heure en cours à jour
+setInterval(function () { phEnvoyer(); fond('photos', ecranPhotos); msgCharger(); repEnvoyer(); cmEnvoyer(); }, 60000);   // file des photos + heure en cours à jour
 setTimeout(verifierMaj, 4000); setInterval(verifierMaj, 3 * 3600 * 1000);
 
+/* Téléphone à petite mémoire : Android peut fermer l'application pendant que l'appareil photo est ouvert. Au retour, la photo est rendue ici. */
+try { NAT.App && NAT.App.addListener && NAT.App.addListener('appRestoredResult', function (r) {
+  var d = r && r.pluginId === 'Camera' && r.methodName === 'getPhoto' && r.success && r.data && r.data.dataUrl, enc = CFG.get('phEnCours', null);
+  if (!d || !enc || Date.now() - enc.ms > 10 * 60000) return;
+  setTimeout(function () { if (CFG.get('jeton', '') && !CFG.get('role', '')) { PH.type = enc.type; phImage(d); } }, 1500);
+}); } catch (e) { }
 restaurer().then(function () {
   if (!CFG.get('jeton', '')) ecranEnregistrer();
   else if (CFG.get('role', '') === 'transferts') {   // agent de transfert sans station : pas de rapports, seulement les transferts
