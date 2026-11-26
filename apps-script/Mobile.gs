@@ -14,9 +14,9 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.1';
+var MOBILE_VERSION = 'm1.2';
 var ROLES_APPAREIL = { DIRECTION: 'management', COMPTA: 'accounting' };   // station = DIRECTION ou COMPTA → téléphone de la direction / comptabilité
-var JOURS_DIFFERE_MAX = 3;   // un rapport fait hors connexion peut arriver jusqu'à 3 jours plus tard
+var JOURS_DIFFERE_MAX = 7;   // une station peut faire un rapport manquant jusqu'à 7 jours en arrière (jamais modifier un rapport déjà envoyé)
 
 var APPAREILS = {
   name: 'Appareils',
@@ -123,15 +123,37 @@ function appareil_(jeton) {
 function initMobile_(app) {
   if (app.role) return initDirection_(app);
   var st = app.station, date = dateRapport();
-  var jour = rapportsDuJour_(st.code, date);
+  var tous = rapportsEffectifs_().filter(function (r) { return String(r.station) === st.code && !estAnnule(r); });
+  var duJour = function (d) {
+    return tous.filter(function (r) { return iso(r.date_rapport) === d; })
+      .sort(function (a, b) { return ORDRE_PERIODE[String(a.periode || '')] - ORDRE_PERIODE[String(b.periode || '')]; });
+  };
+  var prerempliPour = function (d, jour, periode) {
+    var prec = periode === 'PM' ? (jour.filter(function (r) { return String(r.periode) === 'AM'; })[0] || null) : null;
+    if (!prec) {
+      var avant = tous.filter(function (r) { return iso(r.date_rapport) < d; }).sort(function (a, b) {
+        var da = iso(a.date_rapport), db = iso(b.date_rapport);
+        if (da !== db) return da < db ? -1 : 1;
+        return ORDRE_PERIODE[String(a.periode || '')] - ORDRE_PERIODE[String(b.periode || '')];
+      });
+      prec = avant.length ? avant[avant.length - 1] : null;
+    }
+    return prec ? { opening_meter: num(prec.closing_meter), starting_cash: num(prec.counted_cash) } : null;
+  };
+  var jour = duJour(date);
   var base = {
-    version: MOBILE_VERSION, devise: CURRENCY, station: { code: st.code, nom: st.nom }, date: date,
+    version: MOBILE_VERSION, devise: CURRENCY, station: { code: st.code, nom: st.nom }, date: date, jours_max: JOURS_DIFFERE_MAX,
     champs: FIELDS, envoyes: jour.map(recuEmploye_), periodes: periodesPossibles(jour), noms_connus: nomsConnus_(st.code)
   };
-  var periode = base.periodes[0];
-  var prec = periode === 'PM' ? (jour.filter(function (r) { return String(r.periode) === 'AM'; })[0] || null) : null;
-  prec = prec || dernierRapport_(st.code, date);
-  if (prec) base.prerempli = { opening_meter: num(prec.closing_meter), starting_cash: num(prec.counted_cash) };
+  base.prerempli = prerempliPour(date, jour, base.periodes[0]);
+  // Les jours passés : ce qui est déjà envoyé (non modifiable par la station) et ce qui manque encore.
+  base.jours = [];
+  for (var i = 1; i <= JOURS_DIFFERE_MAX; i++) {
+    var d = Utilities.formatDate(new Date(new Date(date + 'T12:00:00Z').getTime() - i * 24 * 3600 * 1000), 'UTC', 'yyyy-MM-dd');
+    var j = duJour(d), per = periodesPossibles(j);
+    base.jours.push({ date: d, envoyes: j.map(function (r) { return { ref: r.ref, periode: String(r.periode || '') }; }), periodes: per,
+      prerempli: per.length ? prerempliPour(d, j, per[0]) : null });
+  }
   return base;
 }
 
@@ -173,10 +195,15 @@ function envoyerMobile_(app, p) {
     var attendue = String(p.periode === undefined || p.periode === null ? (possibles[0] || '') : p.periode);
     if (possibles.indexOf(attendue) < 0) {
       throw new UserError('Un rapport « ' + (LIBELLE_PERIODE[attendue] || attendue) + ' » existe déjà pour le ' + date.split('-').reverse().join('/') +
-        '. Ce rapport n\'a pas été enregistré. Prévenez le bureau.', 'DEJA');
+        '. Un rapport déjà envoyé ne peut pas être refait ni modifié par la station : seule la direction peut le corriger ou l\'annuler. Ce rapport n\'a pas été enregistré.', 'DEJA');
     }
     var v = val.valeurs;
     var notes = v.notes;
+    if (p.en_retard) {
+      var raison = String(p.raison_retard || '').trim().slice(0, 300);
+      if (!raison) throw new UserError('Rapport en retard : écrivez la raison du retard.', 'INVALIDE');
+      notes = (notes ? notes + ' ' : '') + '[Rapport en retard : ' + raison + ']';
+    }
     if (dv.differe) notes = (notes ? notes + ' ' : '') + '[envoyé en différé par l\'application le ' + maintenant_() + ']';
     var photoId = p.photo ? enregistrerPhoto_(p.photo, ref) : '';
     var ligne = ajouter_(SHEETS.RAPPORTS, {

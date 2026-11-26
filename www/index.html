@@ -50,7 +50,7 @@
 <script src="config.js"></script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.1.0';
+var VERSION_APP = '1.2.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -96,7 +96,8 @@ function refAleatoire(code, date) {
 /* ======================= Stockage ======================= */
 var CFG = {
   get: function (k, d) { try { var v = localStorage.getItem('rrd.' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
-  set: function (k, v) { try { localStorage.setItem('rrd.' + k, JSON.stringify(v)); } catch (e) { } }
+  set: function (k, v) { try { localStorage.setItem('rrd.' + k, JSON.stringify(v)); } catch (e) { } },
+  del: function (k) { try { localStorage.removeItem('rrd.' + k); } catch (e) { } }
 };
 /* File d'attente dans IndexedDB (les photos sont trop lourdes pour localStorage). */
 var DB = null;
@@ -173,11 +174,18 @@ function enregistrer() {
 }
 
 /* ======================= Accueil ======================= */
-function infosDuJour(liste) {
-  /* Ce qu'on sait pour aujourd'hui : rapports confirmés par le serveur + ceux en attente sur le téléphone. */
-  var date = dateRapport(), st = stationCode();
-  var cache = S.init && S.init.date === date ? S.init : null;
-  var envoyes = cache ? (cache.envoyes || []).slice() : [];
+function infoServeur(date) {
+  /* Ce que le serveur a dit (dernière connexion) pour ce jour-là, ou null si on ne sait pas. */
+  var c = S.init || CFG.get('init', null); if (!c) return null;
+  if (c.date === date) return { envoyes: c.envoyes || [], prerempli: c.prerempli || null };
+  var j = (c.jours || []).filter(function (x) { return x.date === date; })[0];
+  return j ? { envoyes: j.envoyes || [], prerempli: j.prerempli || null } : null;
+}
+function infosDuJour(liste, date) {
+  /* Ce qu'on sait pour un jour : rapports confirmés par le serveur + ceux en attente sur le téléphone. */
+  date = date || dateRapport(); var st = stationCode();
+  var cache = infoServeur(date);
+  var envoyes = cache ? cache.envoyes.slice() : [];
   var locaux = liste.filter(function (r) { return r.date === date && r.station === st && r.statut !== 'rejete'; });
   locaux.forEach(function (r) { if (!envoyes.some(function (x) { return x.ref === r.ref; })) envoyes.push({ ref: r.ref, periode: r.periode, local: r }); });
   var pers = envoyes.map(function (r) { return String(r.periode || ''); });
@@ -187,7 +195,7 @@ function infosDuJour(liste) {
   else if (pers.indexOf('AM') >= 0) periodes = ['PM'];
   else if (pers.indexOf('PM') >= 0) periodes = ['AM'];
   else periodes = ['', 'AM'];
-  return { date: date, envoyes: envoyes, periodes: periodes };
+  return { date: date, envoyes: envoyes, periodes: periodes, connu: !!cache, prerempli: cache ? cache.prerempli : null };
 }
 function accueil() {
   tous().then(function (liste) {
@@ -201,6 +209,7 @@ function accueil() {
       h += '<button class="bigbtn" onclick="nouveau()">📋 Faire le rapport de fermeture</button>';
       if (j.envoyes.length) h += '<p class="mut center">Le rapport de l\'équipe du matin est déjà fait. Ce rapport sera celui de l\'équipe du soir.</p>';
     } else h += '<div class="okb">✅ Les rapports d\'aujourd\'hui sont faits.</div>';
+    h += '<button class="sec" style="width:100%;margin-top:10px" onclick="ecranManquants()">📅 Rapport manquant (jours passés)</button>';
     var recents = liste.slice().sort(function (a, b) { return a.cree_le < b.cree_le ? 1 : -1; }).slice(0, 10);
     if (recents.length) {
       h += '<h2>Derniers rapports de ce téléphone</h2>';
@@ -209,8 +218,37 @@ function accueil() {
         h += '<div class="card" onclick="voir(\'' + esc(r.ref) + '\')"><div class="row"><div><b>' + esc(r.ref) + '</b><div class="mut">' + dfr(r.date) + ' · ' + esc(libPer(r.periode)) + '</div></div><div style="text-align:right">' + etat + '</div></div></div>';
       });
     }
-    h += '<p class="mut center" style="margin-top:24px">Version ' + VERSION_APP + ' · ' + esc(st.code || '') + '</p>';
+    h += '<p class="mut center" style="margin-top:24px">Version ' + VERSION_APP + ' · ' + esc(st.code || '') + ' · <a href="#" onclick="changerCode();return false">Changer de code</a></p>';
     view(h, '<button class="sec" onclick="synchroniser(true)">🔄 Envoyer / actualiser</button>', 'accueil');
+  });
+}
+function joursPasses() {
+  var n = (S.init && S.init.jours_max) || (CFG.get('init', null) || {}).jours_max || 7, out = [], base = new Date(dateRapport() + 'T12:00:00Z');
+  for (var i = 1; i <= n; i++) out.push(new Date(base.getTime() - i * 864e5).toISOString().slice(0, 10));
+  return out;
+}
+function ecranManquants() {
+  tous().then(function (liste) {
+    var h = '<h1>Rapport manquant</h1><div class="sub">Les ' + joursPasses().length + ' derniers jours. On peut seulement faire un rapport qui manque : un rapport déjà envoyé ne peut pas être refait ni modifié (seule la direction peut le corriger ou l\'annuler).</div>';
+    joursPasses().forEach(function (d) {
+      var j = infosDuJour(liste, d), droite;
+      if (!j.periodes.length) droite = '<span style="color:var(--ok)">✅ fait</span>';
+      else droite = '<button style="width:auto;padding:8px 14px" onclick="nouveau(\'' + d + '\')">Faire</button>';
+      var detail = !j.periodes.length ? j.envoyes.map(function (r) { return libPer(r.periode) + (r.local ? ' (⏳ sur le téléphone)' : ''); }).join(' + ')
+        : j.envoyes.length ? 'Manque : ' + libPer(j.periodes[0]) : (j.connu ? 'Aucun rapport' : 'Aucun rapport connu (pas de connexion récente)');
+      h += '<div class="card"><div class="row"><div><b>' + dfr(d) + '</b><div class="mut">' + esc(detail) + '</div></div><div style="text-align:right">' + droite + '</div></div></div>';
+    });
+    if (!S.en_ligne) h += '<p class="mut">Hors ligne : la liste vient de la dernière connexion. Si un rapport a déjà été fait entre-temps, le bureau le refusera.</p>';
+    view(h, '<button class="sec" onclick="accueil()">Retour</button>', 'manquants');
+  });
+}
+function changerCode() {
+  tous().then(function (liste) {
+    var att = liste.filter(function (r) { return r.statut === 'attente'; }).length;
+    if (att) return alert(att + ' rapport(s) pas encore envoyé(s). Attendez qu\'ils partent (bouton Envoyer / actualiser) avant de changer de code.');
+    if (!confirm('Changer le code de ce téléphone ? Il faudra un nouveau code d\'activation et internet.')) return;
+    ['jeton', 'role', 'nom', 'station', 'init', 'init_le', 'noms'].forEach(CFG.del);
+    S.init = null; D = null; ecranEnregistrer();
   });
 }
 function vuRejet(ref) { tous().then(function (l) { var r = l.filter(function (x) { return x.ref === ref; })[0]; if (r) { r.vu = true; return sauver(r); } }).then(accueil); }
@@ -218,13 +256,20 @@ function vuRejet(ref) { tous().then(function (l) { var r = l.filter(function (x)
 /* ======================= Formulaire (repris de l'app Telegram) ======================= */
 var V = {}, PHOTO = '', J = null;
 function champs() { return (S.init && S.init.champs) || CFG.get('champs', null) || CHAMPS_DEFAUT; }
-function nouveau() {
+function nouveau(date) {
   tous().then(function (liste) {
-    J = infosDuJour(liste); V = {}; PHOTO = '';
+    var auj = dateRapport();
+    if (date && joursPasses().indexOf(date) < 0) date = null;
+    J = infosDuJour(liste, date || auj); J.retard = J.date !== auj; V = {}; PHOTO = '';
+    if (!J.periodes.length) return J.retard ? ecranManquants() : accueil();
     V.periode = J.periodes[0];
-    var dernier = liste.filter(function (r) { return r.station === stationCode() && r.statut !== 'rejete'; }).sort(function (a, b) { return a.cree_le < b.cree_le ? 1 : -1; })[0];
-    var serveur = S.init && S.init.prerempli;
-    if (dernier && (!S.init || dernier.cree_le > (CFG.get('init_le', '') || ''))) { V.opening_meter = dernier.closing_meter; V.starting_cash = dernier.counted_cash; }
+    var ordre = { '': 0, AM: 0, PM: 1 };
+    // Dernier rapport du téléphone AVANT ce jour/cette équipe (pour un jour passé, on ne prend pas un rapport plus récent).
+    var dernier = liste.filter(function (r) {
+      return r.station === stationCode() && r.statut !== 'rejete' && (r.date < J.date || (r.date === J.date && ordre[r.periode || ''] < ordre[V.periode || '']));
+    }).sort(function (a, b) { return a.date !== b.date ? (a.date < b.date ? 1 : -1) : (a.cree_le < b.cree_le ? 1 : -1); })[0];
+    var serveur = J.prerempli;
+    if (dernier && (!serveur || !S.init || dernier.cree_le > (CFG.get('init_le', '') || ''))) { V.opening_meter = dernier.closing_meter; V.starting_cash = dernier.counted_cash; }
     else if (serveur) { V.opening_meter = serveur.opening_meter; V.starting_cash = serveur.starting_cash; }
     ecranFormulaire();
   });
@@ -236,8 +281,10 @@ function champHtml(f) {
 }
 function ecranFormulaire(msgErr) {
   var st = CFG.get('station', {});
-  var h = '<h1>Rapport de fermeture</h1><div class="sub">' + esc(st.nom) + ' · ' + dfr(J.date) + '</div>';
+  var h = '<h1>' + (J.retard ? 'Rapport manquant' : 'Rapport de fermeture') + '</h1><div class="sub">' + esc(st.nom) + ' · ' + dfr(J.date) + '</div>';
   if (msgErr) h += '<div class="err">' + esc(msgErr) + '</div>';
+  if (J.retard) h += '<div class="wait">📅 Rapport en retard pour le <b>' + dfr(J.date) + '</b>. Mettez les chiffres de CE jour-là (registre), pas ceux d\'aujourd\'hui.</div>' +
+    '<label for="f_raison">Raison du retard *</label><textarea id="f_raison" placeholder="ex. Pas de signal ce soir-là, téléphone en panne…">' + esc(V.raison_retard || '') + '</textarea>';
   if (J.periodes.length > 1) {
     h += '<label>Ce rapport couvre</label>' + J.periodes.map(function (p) {
       return '<label style="display:flex;gap:10px;align-items:center;color:var(--txt);font-size:16px;margin:6px 0"><input type="radio" name="per" style="width:auto" value="' + p + '"' + (V.periode === p ? ' checked' : '') + ' onchange="V.periode=this.value">' +
@@ -265,6 +312,7 @@ function lireChamps() {
   V.other_expenses_detail = (($('f_other_expenses_detail') || {}).value || '').trim();
   V.notes = (($('f_notes') || {}).value || '').trim();
   V.employes_service = (($('f_employes_service') || {}).value || '').trim();
+  if (J.retard) V.raison_retard = (($('f_raison') || {}).value || '').trim();
   var r = document.querySelector('input[name="per"]:checked'); if (r) V.periode = r.value;
 }
 function majGallons() {
@@ -297,9 +345,11 @@ function verifier() {
   if (!err.length && nb(V.closing_meter) - nb(V.opening_meter) > 5000) err.push('Plus de 5 000 gallons vendus : vérifiez les compteurs.');
   if (!err.length && nb(V.other_expenses) > 0 && !V.other_expenses_detail) err.push('Autres dépenses : écrivez le détail.');
   if (!V.employes_service) err.unshift('Employé(s) de service : obligatoire.');
+  if (J.retard && !V.raison_retard) err.unshift('Raison du retard : obligatoire.');
   if (err.length) return ecranFormulaire(err.join('\n'));
   var st = CFG.get('station', {});
-  var h = '<h1>Vérifiez avant d\'envoyer</h1><div class="sub">' + esc(st.nom) + ' · ' + dfr(J.date) + ' · ' + esc(libPer(V.periode)) + '</div><div class="card"><table>' +
+  var h = '<h1>Vérifiez avant d\'envoyer</h1><div class="sub">' + esc(st.nom) + ' · ' + dfr(J.date) + ' · ' + esc(libPer(V.periode)) + '</div>' +
+    (J.retard ? '<div class="wait">📅 Rapport en retard pour le ' + dfr(J.date) + '.\nRaison : ' + esc(V.raison_retard) + '</div>' : '') + '<div class="card"><table>' +
     '<tr><td>Employé(s) de service</td><td class="n"><b>' + esc(V.employes_service) + '</b></td></tr>';
   champs().forEach(function (f) {
     if (V[f.k] === '' && !f.req) return;
@@ -314,10 +364,12 @@ function verifier() {
 }
 function enregistrerRapport() {
   var b = $('bEnv'); b.disabled = true; b.textContent = 'Enregistrement…';
-  if (dateRapport() !== J.date) { alert('La journée a changé pendant la saisie. Recommencez le rapport.'); return accueil(); }
+  if (!J.retard && dateRapport() !== J.date) { alert('La journée a changé pendant la saisie. Recommencez le rapport.'); return accueil(); }
+  if (J.retard && joursPasses().indexOf(J.date) < 0) { alert('Ce jour est trop ancien (plus de 7 jours). Prévenez le bureau.'); return accueil(); }
   var st = CFG.get('station', {});
   var r = { ref: refAleatoire(st.code, J.date), station: st.code, date: J.date, periode: V.periode || '', cree_le: maintenant(), statut: 'attente', photo: PHOTO };
   Object.keys(V).forEach(function (k) { if (k !== 'periode') r[k] = V[k]; });
+  if (J.retard) r.en_retard = true; else delete r.raison_retard;
   sauver(r).then(function () { ecranRecu(r, true); synchroniser(); });
 }
 function ecranRecu(r, nouveau) {
@@ -369,7 +421,8 @@ function synchroniser(manuel) {
     });
   }).then(function () {
     S.sync = false; majNet(S.en_ligne ? '● en ligne' : '○ hors ligne');
-    if (!arret && (S.ecran === 'accueil' || manuel)) accueil();
+    if (!arret && S.ecran === 'manquants') ecranManquants();
+    else if (!arret && (S.ecran === 'accueil' || manuel)) accueil();
   });
 }
 
@@ -394,7 +447,7 @@ function demarrerDirection(msg) {
 function entete() {
   var tabs = [['rapports', 'Rapports'], ['resume', 'Résumé du jour'], ['prix', 'Prix']];
   if (D.utilisateur.role === 'management') tabs.push(['appareils', 'Téléphones']);
-  return '<h1>Tableau de bord</h1><div class="sub">' + esc(D.utilisateur.nom) + ' · ' + (D.utilisateur.role === 'management' ? 'Direction' : 'Comptabilité') + ' · montants en ' + DEV + '</div>' +
+  return '<h1>Tableau de bord</h1><div class="sub">' + esc(D.utilisateur.nom) + ' · ' + (D.utilisateur.role === 'management' ? 'Direction' : 'Comptabilité') + ' · montants en ' + DEV + ' · <a href="#" onclick="changerCode();return false">Changer de code</a></div>' +
     '<div class="tabs">' + tabs.map(function (t) { return '<button class="' + (T.onglet === t[0] ? '' : 'sec') + '" onclick="tableau(\'' + t[0] + '\')">' + t[1] + '</button>'; }).join('') + '</div>';
 }
 function charge() { view(entete() + '<p class="mut center">Chargement…</p>'); }
