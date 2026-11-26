@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.5';
+var MOBILE_VERSION = 'm1.6';
 var ROLES_APPAREIL = { DIRECTION: 'management', COMPTA: 'accounting' };   // station = DIRECTION ou COMPTA → téléphone de la direction / comptabilité
 /* Contrôles avant d'accepter un rapport (chiffres « visiblement faux »). Réglables ici. */
 var CTRL = {
@@ -96,14 +96,16 @@ function enregistrerAppareil_(b) {
     var ligne = lire_(APPAREILS).filter(function (a) { return String(a.code_activation).trim().toUpperCase() === code; })[0];
     if (!ligne || !estVrai_(ligne.actif)) throw new UserError('Code d\'activation inconnu ou désactivé.', 'CODE');
     // Un code déjà utilisé ne peut resservir que sur le MÊME téléphone (ex. après « Changer de code » pour tester).
-    var memeTel = String(b.appareil_id || '').trim() && String(ligne.appareil_id || '').trim() === String(b.appareil_id).trim();
+    // Les identifiants sont séparés par « | » (identifiant de l'app + identifiant fixe du téléphone) : un seul en commun suffit.
+    var ancien = String(ligne.appareil_id || '').split('|').filter(String), envoye = String(b.appareil_id || '').split('|').filter(String);
+    var memeTel = envoye.some(function (x) { return ancien.indexOf(x) >= 0; });
     if (String(ligne.jeton || '').trim() && !memeTel) throw new UserError('Ce code a déjà été utilisé sur un autre téléphone. Demandez un nouveau code à la direction.', 'CODE_UTILISE');
     var role = ROLES_APPAREIL[String(ligne.station).trim().toUpperCase()] || '';
     var st = role ? null : stations_().filter(function (s) { return String(s.code) === String(ligne.station).trim() && estVrai_(s.actif); })[0];
     if (!role && !st) throw new UserError('La station de ce code n\'existe pas ou est inactive.', 'CODE');
     var jeton = jetonAleatoire_();
     majCellule_(APPAREILS, ligne._ligne, 'jeton', jeton);
-    majCellule_(APPAREILS, ligne._ligne, 'appareil_id', String(b.appareil_id || '').slice(0, 64));
+    majCellule_(APPAREILS, ligne._ligne, 'appareil_id', String(b.appareil_id || '').slice(0, 160));
     majCellule_(APPAREILS, ligne._ligne, 'modele', String(b.modele || '').slice(0, 80));
     majCellule_(APPAREILS, ligne._ligne, 'enregistre_le', maintenant_());
     journal_({ id: 'APP', nom: 'Appareil ' + code }, 'appareil+', role || st.code);

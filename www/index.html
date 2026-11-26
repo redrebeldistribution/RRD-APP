@@ -55,7 +55,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.4.0';
+var VERSION_APP = '1.5.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -112,9 +112,44 @@ function refAleatoire(code, date) {
 /* ======================= Stockage ======================= */
 var CFG = {
   get: function (k, d) { try { var v = localStorage.getItem('rrd.' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
-  set: function (k, v) { try { localStorage.setItem('rrd.' + k, JSON.stringify(v)); } catch (e) { } },
-  del: function (k) { try { localStorage.removeItem('rrd.' + k); } catch (e) { } }
+  set: function (k, v) { try { localStorage.setItem('rrd.' + k, JSON.stringify(v)); } catch (e) { } if (CLES_SURES.indexOf(k) >= 0) copieNative(); },
+  del: function (k) { try { localStorage.removeItem('rrd.' + k); } catch (e) { } if (CLES_SURES.indexOf(k) >= 0) copieNative(); }
 };
+/* Copie de sécurité dans le stockage natif du téléphone : la mise à jour de l'APK peut vider le stockage web. */
+var NAT = (window.Capacitor && Capacitor.Plugins) || {};
+var CLES_SURES = ['jeton', 'role', 'nom', 'station', 'api', 'appareil', 'init', 'init_le', 'champs', 'noms'];
+function copieNative() {
+  if (!NAT.Preferences) return;
+  var o = {}; CLES_SURES.forEach(function (k) { var v = localStorage.getItem('rrd.' + k); if (v !== null) o[k] = v; });
+  NAT.Preferences.set({ key: 'rrd.sauvegarde', value: JSON.stringify(o) }).catch(function () { });
+}
+var FS_DOSSIER = 'rapports';
+function copieRapport(r) {
+  if (!NAT.Filesystem) return Promise.resolve();
+  return NAT.Filesystem.writeFile({ path: FS_DOSSIER + '/' + r.ref + '.json', directory: 'DATA', data: JSON.stringify(r), encoding: 'utf8', recursive: true }).catch(function () { });
+}
+/* Au démarrage : identité fixe du téléphone + restauration de ce que le stockage web aurait perdu. */
+function restaurer() {
+  var etapes = [];
+  if (NAT.Preferences) etapes.push(NAT.Preferences.get({ key: 'rrd.sauvegarde' }).then(function (x) {
+    if (!x || !x.value) return copieNative();
+    var o = JSON.parse(x.value);
+    Object.keys(o).forEach(function (k) { if (localStorage.getItem('rrd.' + k) === null) localStorage.setItem('rrd.' + k, o[k]); });
+  }).catch(function () { }));
+  if (NAT.Device) etapes.push(NAT.Device.getId().then(function (x) { if (x && x.identifier) S.idFixe = 'D' + x.identifier; }).catch(function () { }));
+  if (NAT.Filesystem) etapes.push(NAT.Filesystem.readdir({ path: FS_DOSSIER, directory: 'DATA' }).then(function (d) {
+    return tous().then(function (liste) {
+      var connus = {}; liste.forEach(function (r) { connus[r.ref] = r; });
+      return Promise.all((d.files || []).map(function (f) {
+        var nom = typeof f === 'string' ? f : f.name; if (!/\.json$/.test(nom)) return;
+        var ref = nom.replace(/\.json$/, ''); if (connus[ref]) return;
+        return NAT.Filesystem.readFile({ path: FS_DOSSIER + '/' + nom, directory: 'DATA', encoding: 'utf8' })
+          .then(function (c) { return tx('readwrite', function (s) { s.put(JSON.parse(c.data)); }); }).catch(function () { });
+      }));
+    });
+  }).catch(function () { }));
+  return Promise.all(etapes);
+}
 /* File d'attente dans IndexedDB (les photos sont trop lourdes pour localStorage). */
 var DB = null;
 function db() {
@@ -135,7 +170,7 @@ function tx(mode, fn) {
   });
 }
 function tous() { return tx('readonly', function (s) { return s.getAll(); }); }
-function sauver(r) { return tx('readwrite', function (s) { s.put(r); }); }
+function sauver(r) { return tx('readwrite', function (s) { s.put(r); }).then(function () { return copieRapport(r); }); }
 
 /* ======================= Serveur ======================= */
 function api(action, extra) {
@@ -181,7 +216,8 @@ function enregistrer() {
   if (url) CFG.set('api', url);
   var b = $('bEnr'); b.disabled = true; b.textContent = 'Enregistrement…';
   var id = CFG.get('appareil', '') || ('A' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)); CFG.set('appareil', id);
-  api('enregistrer', { code: code, appareil_id: id, modele: navigator.userAgent.slice(0, 80) }).then(function (d) {
+  var ids = [id]; if (S.idFixe && S.idFixe !== id) ids.push(S.idFixe);
+  api('enregistrer', { code: code, appareil_id: ids.join('|'), modele: navigator.userAgent.slice(0, 80) }).then(function (d) {
     CFG.set('jeton', d.jeton);
     if (d.role) { CFG.set('role', d.role); CFG.set('nom', d.nom); return demarrerDirection(); }
     CFG.set('role', ''); CFG.set('station', d.station);
@@ -732,7 +768,9 @@ function verifierMaj() {
 document.addEventListener('resume', function () { verifierMaj(); bandeauMaj(); });
 setTimeout(verifierMaj, 4000); setInterval(verifierMaj, 3 * 3600 * 1000);
 
-if (!CFG.get('jeton', '')) ecranEnregistrer(); else if (CFG.get('role', '')) demarrerDirection(); else { accueil(); synchroniser(); }
+restaurer().then(function () {
+  if (!CFG.get('jeton', '')) ecranEnregistrer(); else if (CFG.get('role', '')) demarrerDirection(); else { accueil(); synchroniser(); }
+});
 </script>
 </body>
 </html>
