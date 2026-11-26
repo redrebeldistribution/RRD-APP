@@ -68,7 +68,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.15.0';
+var VERSION_APP = '1.16.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -1101,14 +1101,14 @@ function exporterCsv() {
 }
 
 function entete() {
-  var tabs = [['rapports', 'Rapports'], ['analyse', '📊 Analyse'], ['resume', 'Résumé du jour'], ['photos', '📷 Photos'], ['bordereaux', '🧾 Bordereaux'], ['messages', '✉️ Messages'], ['prix', 'Prix']];
+  var tabs = [['rapports', 'Rapports'], ['analyse', '📊 Analyse'], ['resume', 'Résumé du jour'], ['photos', '📷 Photos'], ['bordereaux', '🧾 Bordereaux'], ['stock', '🛢 Stock'], ['messages', '✉️ Messages'], ['prix', 'Prix']];
   if (D.utilisateur.role === 'management') tabs.push(['appareils', 'Téléphones']);
   return '<h1>Tableau de bord</h1><div class="sub">' + esc(D.utilisateur.nom) + ' · ' + (D.utilisateur.role === 'management' ? 'Direction' : 'Comptabilité') + ' · montants en ' + DEV + ' · <a href="#" onclick="changerCode();return false">Changer de code</a></div>' +
     '<div class="tabs">' + tabs.map(function (t) { return '<button class="' + (T.onglet === t[0] ? '' : 'sec') + '" onclick="tableau(\'' + t[0] + '\')">' + t[1] + '</button>'; }).join('') + '</div>';
 }
 function charge() { view(entete() + '<p class="mut center">Chargement…</p>'); }
 function errTab(e) { view(entete() + '<div class="err">' + esc(e.reseau ? 'Pas de connexion. Réessayez.' : e.erreur) + '</div>', '<button class="sec" onclick="tableau(T.onglet)">Réessayer</button>'); }
-function tableau(o) { T.retour = ''; T.onglet = o; charge(); ({ rapports: ongletRapports, analyse: function () { ongletAnalyse(); }, resume: ongletResume, photos: ongletPhotos, bordereaux: ongletBordereaux, messages: function () { ongletMessages(); }, prix: ongletPrix, appareils: ongletAppareils })[o](); }
+function tableau(o) { T.retour = ''; T.onglet = o; charge(); ({ rapports: ongletRapports, analyse: function () { ongletAnalyse(); }, resume: ongletResume, photos: ongletPhotos, bordereaux: ongletBordereaux, stock: function () { ongletStock(); }, messages: function () { ongletMessages(); }, prix: ongletPrix, appareils: ongletAppareils })[o](); }
 function badgeEcart(e) {
   if (e === null || e === undefined) return '<span class="badge b-warn">prix manquant</span>';
   if (Math.abs(e) < 1) return '<span class="badge b-ok">écart 0</span>';
@@ -1284,6 +1284,39 @@ function phVoir(id, i) {
 
 
 /* ----- Direction : bordereaux de dépôt envoyés par les stations ----- */
+/* Stock estimé de propane par station : reçu − vendu depuis la dernière fois « à sec » (ou, sans date connue, depuis le point le plus bas). */
+function ongletStock(data, msg) {
+  var rendre = function (d) {
+    var gestion = D.utilisateur.role === 'management', h = entete();
+    if (msg) h += '<div class="okb">' + esc(msg) + '</div>';
+    h += '<div class="note">Estimation = propane reçu − propane vendu depuis la dernière fois que la station était à sec. Elle vaut ce que valent les rapports : une livraison qui n\'est pas notée fausse le calcul.</div>';
+    d.stations.forEach(function (x) {
+      var p = Math.max(0, Math.min(100, x.pct));
+      h += '<div class="card"><b>' + esc(x.nom) + '</b><div class="mut">Citerne : ' + fmt(x.capacite) + ' gal</div>';
+      if (!x.dernier) h += '<div class="mut" style="margin-top:6px">Aucun rapport depuis juin 2026.</div>';
+      else {
+        h += '<div class="big" style="margin-top:6px">' + (x.methode === 'plus_bas' ? 'au moins ' : '≈ ') + fmt(x.stock) + ' gal · ' + x.pct + ' %</div>' +
+          '<div style="background:var(--sec);border-radius:6px;height:10px;margin:6px 0;overflow:hidden"><div style="height:10px;width:' + p + '%;background:' + (x.alerte ? 'var(--warn)' : p <= 15 ? 'var(--bad)' : p <= 35 ? 'var(--warn)' : 'var(--ok)') + '"></div></div>' +
+          '<div class="mut">' + (x.methode === 'vide' ? 'Depuis le ' + dfr(x.depuis) + ' (à sec)' : 'Pas de date « à sec » connue : calcul depuis le point le plus bas des rapports (' + dfr(x.depuis) + ')') +
+          ' : reçu ' + fmt(x.recu) + ' gal, vendu ' + fmt(x.vendu) + ' gal. Rapports jusqu\'au ' + dfr(x.dernier) + '.</div>' +
+          (x.source ? '<div class="mut">' + esc(x.source) + '</div>' : '') +
+          (x.alerte ? '<div class="wait">⚠️ ' + esc(x.alerte) + '</div>' : '') +
+          (x.jauge ? '<div class="mut">Manomètre (application) le ' + esc(String(x.jauge.le).slice(8, 10) + '/' + String(x.jauge.le).slice(5, 7)) + ' : ' + x.jauge.pct + ' % ≈ ' + fmt(x.jauge.gal) + ' gal</div>' : '');
+      }
+      if (gestion) h += '<div class="row" style="margin-top:8px;align-items:flex-end"><div><label>À sec le</label><input type="date" id="sv_' + esc(x.code) + '" value="' + esc(x.methode === 'vide' ? x.depuis : '') + '" max="' + D.aujourdhui + '"></div>' +
+        '<div style="flex:none"><button class="sec" onclick="stockRegler(\'' + esc(x.code) + '\')">Enregistrer</button></div></div>';
+      h += '</div>';
+    });
+    h += '<p class="mut">Calculé le ' + esc(d.calcule_le) + '. Pour une station sans date « à sec », laissez la date vide.</p>';
+    view(h);
+  };
+  if (data) return rendre(data);
+  call('stock').then(rendre).catch(errTab);
+}
+function stockRegler(code) {
+  var d = $('sv_' + code).value;
+  call('stockRegler', { station: code, vide_le: d }).then(function (r) { ongletStock(r, 'Date enregistrée pour ' + nomStation(code) + '.'); }).catch(function (e) { alerte(e.erreur || 'Pas de connexion.'); });
+}
 function ongletBordereaux() {
   call('bordereaux', { du: T.bdu || '', au: T.bau || '' }).then(function (d) {
     T.bdu = d.du; T.bau = d.au;

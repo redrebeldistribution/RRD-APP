@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.17';
+var MOBILE_VERSION = 'm1.18';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var MAX_APPAREILS_ROLE = 5;   // un code DIR ou CPT peut servir sur 5 appareils en même temps (demande du propriétaire, 26/11/2026)
 var ROLES_APPAREIL = { DIRECTION: 'management', COMPTA: 'accounting' };   // station = DIRECTION ou COMPTA → téléphone de la direction / comptabilité
@@ -408,6 +408,8 @@ function direction_(app, sous, p) {
     case 'messages': exiger_(ctx, ['management', 'accounting']); return messagesListe_();
     case 'messageAjouter': exiger_(ctx, ['management']); return messageAjouter_(ctx, p);
     case 'messageSupprimer': exiger_(ctx, ['management']); return messageSupprimer_(ctx, p);
+    case 'stock': exiger_(ctx, ['management', 'accounting']); return stockEstime_();
+    case 'stockRegler': exiger_(ctx, ['management']); return stockRegler_(ctx, p);
     default: throw new UserError('Action inconnue.');
   }
 }
@@ -736,7 +738,143 @@ function resumeApp_(date) {
     return '• ' + (noms[r.station] || r.station) + ' : ' + r.montant.toLocaleString('fr-FR') + ' ' + r.devise + ' — ' + r.beneficiaire + (r.numero ? ' — n° ' + r.numero : '') +
       (r.date_depot !== date ? ' — dépôt du ' + r.date_depot.split('-').reverse().join('/') : '');
   }).join('\n');
+  try {
+    var stk = stockEstime_().stations.filter(function (x) { return x.dernier; });
+    if (stk.length) t += '\n\n🛢 Stock estimé (reçu − vendu, d\'après les rapports)\n' + stk.map(function (x) {
+      return (x.alerte ? '⚠️ ' : '• ') + x.nom + ' : ' + (x.methode === 'plus_bas' ? 'au moins ' : 'environ ') + x.stock.toLocaleString('fr-FR') + ' gal (' + x.pct + ' %) — rapports jusqu\'au ' +
+        x.dernier.split('-').reverse().join('/') + (x.alerte ? ' — à vérifier' : '');
+    }).join('\n');
+  } catch (e) { console.error(e && e.stack || e); }   // le stock ne doit jamais empêcher le résumé de partir
   return t;
+}
+
+/* ============================ Stock estimé de propane par station (m1.18, 26/11/2026) ============================
+ * Stock = propane reçu − propane vendu depuis la dernière fois que la station était à sec (décision du propriétaire, 26/11/2026).
+ * Sources, jour par jour : les rapports de l'application (compteur et « gaz reçu ») ; pour les jours sans rapport dans l'application,
+ * l'historique de l'Activity Log (« Daily Station Reports » : gallons vendus, gaz acheté ; « Truck Deliveries » : livraisons du camion).
+ * Pour les livraisons d'un jour, on garde le plus grand des chiffres connus (rapport, colonne automatique, camion).
+ * Sans date « à sec » connue, le calcul part du point le plus bas des rapports depuis STK_DEBUT : c'est alors un minimum.
+ * Réglages (taille de la citerne, date « à sec ») : onglet « Stock (réglages) », modifiable par la direction dans le tableau de bord.
+ * Rien n'est inventé : si les rapports ne notent pas une livraison, le calcul est faux et l'alerte le dit. */
+var STK_ONGLET = 'Stock (réglages)';
+var STK_ENTETES = ['station', 'capacite_gal', 'vide_le', 'source', 'modifie_le', 'modifie_par'];
+var STK_DEBUT = '2026-06-01';
+var STK_DEFAUT = {   // tailles données par le propriétaire le 26/11/2026 ; dates « à sec » trouvées dans l'historique (à confirmer par la direction)
+  BRO: [1000, '2026-10-05', 'Historique : aucune vente le 05/10/2026 (à confirmer)'],
+  A32: [2000, '2026-08-08', 'Historique : aucune vente le 08/08/2026 (à confirmer)'],
+  DED: [1000, '', ''],
+  M83: [1000, '', ''],
+  LEO: [1000, '', ''],
+  DIQ: [1000, '2026-10-04', 'Historique, note du rapport du 04/10/2026 : station à sec à 12 h 06'],
+  ESA: [1000, '', '']
+};
+function stkCode_(nom) {
+  var n = String(nom || '').toLowerCase();
+  if (/naupi/.test(n)) return '';   // client extérieur
+  if (/broch/.test(n)) return 'BRO';
+  if (/arcachon/.test(n)) return 'A32';
+  if (/ded|d\.e\.d|lamentin|raile|\bray\b/.test(n)) return 'DED';
+  if (/mahot|rrd ?83|waney/.test(n)) return 'M83';
+  if (/l[ée]og|aka|bon zanmi/.test(n)) return 'LEO';
+  if (/diquini/.test(n)) return 'DIQ';
+  if (/esans|thor 67/.test(n)) return 'ESA';
+  return '';
+}
+function stkNum_(v) { var n = Number(String(v === null || v === undefined ? '' : v).replace(/[\s\u00a0\u202f,]/g, '')); return isFinite(n) ? n : 0; }
+function stkFeuille_() {
+  var sh = ss_().getSheetByName(STK_ONGLET);
+  if (!sh) {
+    sh = ss_().insertSheet(STK_ONGLET); sh.appendRow(STK_ENTETES); sh.setFrozenRows(1); sh.getRange('C:C').setNumberFormat('@');
+    Object.keys(STK_DEFAUT).forEach(function (c) { sh.appendRow([c, STK_DEFAUT[c][0], STK_DEFAUT[c][1], STK_DEFAUT[c][2], maintenant_(), 'Claude (historique)']); });
+  }
+  return sh;
+}
+function stkReglages_() {
+  var sh = stkFeuille_(), o = {};
+  if (sh.getLastRow() > 1) sh.getRange(2, 1, sh.getLastRow() - 1, 4).getValues().forEach(function (r, i) {
+    var c = String(r[0]).trim(); if (!c) return;
+    o[c] = { ligne: i + 2, capacite: stkNum_(r[1]) || 1000, vide_le: /^\d{4}-\d{2}-\d{2}/.test(phJour_(r[2])) ? phJour_(r[2]) : '', source: String(r[3] || '') };
+  });
+  return o;
+}
+/** Historique de l'Activity Log depuis STK_DEBUT : { code: { date: [vendu, recu_rapport, recu_auto, recu_camion] } } (gardé 6 h en mémoire). */
+function stkHistorique_() {
+  var cache = CacheService.getScriptCache(), c = cache.get('stk_hist_v1');
+  if (c) return JSON.parse(c);
+  var log = SpreadsheetApp.openById(DSR_ACTIVITY_LOG_ID), tz = log.getSpreadsheetTimeZone(), h = {};
+  var jour = function (v) { return v instanceof Date ? Utilities.formatDate(v, tz, 'yyyy-MM-dd') : String(v || '').slice(0, 10); };
+  var cas = function (code, d) { var s = h[code] = h[code] || {}; return s[d] = s[d] || [0, 0, 0, 0]; };
+  var sh = log.getSheetByName('Daily Station Reports'), n = sh ? sh.getLastRow() : 0;
+  if (n > 1) sh.getRange(2, 1, n - 1, 16).getValues().forEach(function (r) {
+    var d = jour(r[0]), code = stkCode_(r[1]);
+    if (!code || !/^\d{4}-\d{2}-\d{2}$/.test(d) || d < STK_DEBUT) return;
+    var x = cas(code, d); x[0] += stkNum_(r[4]); x[1] += stkNum_(r[14]); x[2] = Math.max(x[2], stkNum_(r[15]));
+  });
+  sh = log.getSheetByName('Truck Deliveries'); n = sh ? sh.getLastRow() : 0;
+  if (n > 1) sh.getRange(2, 1, n - 1, 5).getValues().forEach(function (r) {
+    var d = jour(r[0]), code = stkCode_(r[3]);
+    if (!code || !/^\d{4}-\d{2}-\d{2}$/.test(d) || d < STK_DEBUT) return;
+    cas(code, d)[3] += stkNum_(r[4]);
+  });
+  Object.keys(h).forEach(function (k) { Object.keys(h[k]).forEach(function (d) { h[k][d] = h[k][d].map(function (v) { return Math.round(v * 10) / 10; }); }); });
+  try { cache.put('stk_hist_v1', JSON.stringify(h), 21600); } catch (e) { }
+  return h;
+}
+function stockEstime_() {
+  var regl = stkReglages_(), hist = stkHistorique_(), app = {}, noms = {};
+  stations_().forEach(function (s) { noms[String(s.code)] = String(s.nom); });
+  rapportsEffectifs_().forEach(function (r) {
+    if (estAnnule(r)) return;
+    var code = String(r.station), d = iso(r.date_rapport);
+    if (!regl[code] || !/^\d{4}-\d{2}-\d{2}$/.test(d) || d < STK_DEBUT) return;
+    var x = (app[code] = app[code] || {})[d] = (app[code][d] || [0, 0]);
+    var g = num(r.closing_meter) - num(r.opening_meter);
+    x[0] += isNaN(g) ? 0 : g; x[1] += stkNum_(r.gas_received);
+  });
+  var jauges = {};   // dernier niveau du manomètre tapé dans l'application
+  phLire_(3000).forEach(function (r) {
+    if (PH_JAUGES.indexOf(r.type) < 0 || !regl[r.station] || !(Number(r.compteur) > 0)) return;
+    var j = jauges[r.station];
+    if (!j || r.pris_le > j.pris_le) jauges[r.station] = { pris_le: r.pris_le, pct: Number(r.compteur) };
+  });
+  var out = Object.keys(regl).map(function (code) {
+    var g = regl[code], hh = hist[code] || {}, aa = app[code] || {}, jours = {};
+    Object.keys(hh).forEach(function (d) { jours[d] = 1; }); Object.keys(aa).forEach(function (d) { jours[d] = 1; });
+    var ds = Object.keys(jours).sort(), serie = ds.map(function (d) {
+      var x = hh[d] || [0, 0, 0, 0], a = aa[d];
+      return { d: d, vendu: a ? a[0] : x[0], recu: Math.max(a ? a[1] : 0, x[1], x[2], x[3]) };
+    });
+    var methode = g.vide_le ? 'vide' : 'plus_bas', depuis = g.vide_le, cum = 0, mn = 0, mx = 0, recu = 0, vendu = 0;
+    if (methode === 'plus_bas') {   // point le plus bas du solde (reçu − vendu) : on suppose la citerne vide ce jour-là
+      var c0 = 0, bas = 0; depuis = ds.length ? ds[0] : '';
+      serie.forEach(function (x) { c0 += x.recu - x.vendu; if (c0 <= bas) { bas = c0; depuis = x.d; } });
+    }
+    serie.forEach(function (x) {
+      if (x.d <= depuis) return;
+      recu += x.recu; vendu += x.vendu; cum += x.recu - x.vendu;
+      if (cum < mn) mn = cum; if (cum > mx) mx = cum;
+    });
+    var alerte = '';
+    if (mx > g.capacite + 50) alerte = 'Le calcul dépasse la taille de la citerne : une livraison est peut-être comptée deux fois, ou des ventes manquent.';
+    else if (mn < -50) alerte = 'Le calcul passe sous zéro : des livraisons manquent dans les rapports, ou la date « à sec » est à revoir.';
+    var j = jauges[code];
+    return { code: code, nom: noms[code] || code, capacite: g.capacite, methode: methode, depuis: depuis, source: g.source, recu: Math.round(recu), vendu: Math.round(vendu),
+      stock: Math.round(cum), pct: Math.round(100 * cum / g.capacite), alerte: alerte, dernier: ds.length ? ds[ds.length - 1] : '',
+      jauge: j ? { le: j.pris_le, pct: j.pct, gal: Math.round(j.pct * g.capacite / 100) } : null };
+  });
+  return { calcule_le: maintenant_(), stations: out };
+}
+function stockRegler_(ctx, p) {
+  var regl = stkReglages_(), code = String(p.station || ''), g = regl[code];
+  if (!g) throw new UserError('Station inconnue.');
+  var d = String(p.vide_le || '').trim();
+  if (d && (!/^\d{4}-\d{2}-\d{2}$/.test(d) || d > msgJour_(0))) throw new UserError('Date invalide.');
+  var cap = p.capacite === undefined || p.capacite === '' ? g.capacite : stkNum_(p.capacite);
+  if (!(cap >= 100 && cap <= 100000)) throw new UserError('Taille de citerne invalide.');
+  var sh = stkFeuille_();
+  sh.getRange(g.ligne, 2, 1, 5).setValues([[cap, d, d ? 'Saisi par la direction' : '', maintenant_(), ctx.nom]]);
+  journal_(ctx, 'stock-reglage', code + ' vide_le=' + (d || '(aucune)') + ' capacite=' + cap + ' (avant : ' + (g.vide_le || '(aucune)') + ', ' + g.capacite + ')');
+  return stockEstime_();
 }
 
 /* ============================ Messages et conseils aux stations (m1.14, 26/11/2026) ============================
