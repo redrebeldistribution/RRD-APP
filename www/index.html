@@ -59,7 +59,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.5.0';
+var VERSION_APP = '1.5.1';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -588,12 +588,12 @@ function ongletRapports() {
   T.du = T.du || D.aujourdhui; T.au = T.au || D.aujourdhui;
   call('rapports', { du: T.du, au: T.au, station: T.station }).then(function (l) {
     var h = entete() + '<div class="row"><div><label>Du</label><input type="date" id="du" value="' + T.du + '"></div><div><label>Au</label><input type="date" id="au" value="' + T.au + '"></div></div>' +
+      '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><button class="sec" style="flex:1" onclick="plage(0)">Aujourd\'hui</button><button class="sec" style="flex:1" onclick="plage(6)">7 jours</button><button class="sec" style="flex:1" onclick="plage(\'mois\')">Ce mois</button><button class="sec" style="flex:1" onclick="plage(\'moisPrec\')">Mois passé</button></div>' +
       '<label>Station</label><select id="stF">' + optStations(T.station, true) + '</select>' +
       '<div style="margin-top:10px"><button onclick="T.du=$(\'du\').value;T.au=$(\'au\').value;T.station=$(\'stF\').value;tableau(\'rapports\')">Afficher</button></div>';
     if (!l.length) h += '<div class="note">Aucun rapport pour cette période.</div>';
     else {
-      var g = 0; l.forEach(function (r) { if (!r.annule) g += Number(r.gallons) || 0; });
-      h += '<div class="note">' + l.length + ' rapport(s) · ' + fmt(g) + ' gallons (hors annulés)</div>';
+      h += totauxPeriode(l);
     }
     l.forEach(function (r) {
       h += '<div class="card" onclick="ouvrir(\'' + esc(r.ref) + '\')" style="cursor:pointer' + (r.annule ? ';opacity:.55' : '') + '"><div class="row"><div><b>' + esc(nomStation(r.station)) + '</b>' + (r.periode ? ' <span class="badge">' + esc(r.periode === 'AM' ? 'matin' : 'soir') + '</span>' : '') +
@@ -602,6 +602,39 @@ function ongletRapports() {
     });
     view(h);
   }).catch(errTab);
+}
+function plage(n) {
+  var d = new Date(D.aujourdhui + 'T12:00:00Z'), iso = function (x) { return x.toISOString().slice(0, 10); };
+  if (n === 'mois') { T.du = D.aujourdhui.slice(0, 8) + '01'; T.au = D.aujourdhui; }
+  else if (n === 'moisPrec') { var f = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 0, 12)); T.au = iso(f); T.du = T.au.slice(0, 8) + '01'; }
+  else { T.au = D.aujourdhui; T.du = iso(new Date(d.getTime() - n * 864e5)); }
+  T.station = $('stF').value; tableau('rapports');
+}
+/* Totaux de la période (rapports annulés exclus). Les soldes de caisse ne s'additionnent pas : on montre l'écart. */
+function totauxPeriode(l) {
+  var ok = l.filter(function (r) { return !r.annule; }), annules = l.length - ok.length;
+  var cles = [['gallons', 'Gallons vendus', 0], ['ventes_attendues', 'Ventes attendues', 1], ['bank_deposit', 'Dépôts en banque', 1], ['other_cash_in', 'Autres entrées', 1],
+    ['generator_fuel', 'Carburant génératrice', 1], ['withdrawals', 'Prélèvements', 1], ['other_expenses', 'Autres dépenses', 1], ['ecart', 'Écart de caisse', 1], ['gas_received', 'Gaz reçu (gal)', 0]];
+  var somme = function (liste, k) { return liste.reduce(function (t, r) { return t + (Number(r[k]) || 0); }, 0); };
+  var sansPrix = ok.filter(function (r) { return r.ecart === null || r.ecart === undefined; }).length;
+  var jours = {}; ok.forEach(function (r) { jours[r.date] = 1; });
+  var h = '<h2>Totaux de la période</h2><div class="card"><div class="mut">' + ok.length + ' rapport(s) sur ' + Object.keys(jours).length + ' jour(s)' + (annules ? ' · ' + annules + ' annulé(s) non comptés' : '') + '</div><table>';
+  cles.forEach(function (c) {
+    var v = somme(ok, c[0]); if (!v && c[0] !== 'gallons' && c[0] !== 'ecart') return;
+    h += '<tr><td>' + c[1] + '</td><td class="n"><b>' + (c[0] === 'ecart' ? badgeEcart(Math.round(v * 100) / 100) : fmt(Math.round(v * 100) / 100)) + '</b></td></tr>';
+  });
+  h += '</table>' + (sansPrix ? '<div class="mut">⚠️ ' + sansPrix + ' rapport(s) sans prix : pas compris dans les ventes ni l\'écart.</div>' : '') + '</div>';
+  var st = {}; ok.forEach(function (r) { (st[r.station] = st[r.station] || []).push(r); });
+  var codes = Object.keys(st).sort();
+  if (codes.length > 1) {
+    h += '<div class="card" style="overflow-x:auto"><table><tr><td><b>Station</b></td><td class="n"><b>Gal</b></td><td class="n"><b>Ventes</b></td><td class="n"><b>Dépôts</b></td><td class="n"><b>Écart</b></td></tr>';
+    codes.forEach(function (c) {
+      var x = st[c];
+      h += '<tr><td>' + esc(nomStation(c)) + ' <span class="mut">(' + x.length + ')</span></td><td class="n">' + fmt(somme(x, 'gallons')) + '</td><td class="n">' + fmt(Math.round(somme(x, 'ventes_attendues'))) + '</td><td class="n">' + fmt(Math.round(somme(x, 'bank_deposit'))) + '</td><td class="n">' + badgeEcart(Math.round(somme(x, 'ecart') * 100) / 100) + '</td></tr>';
+    });
+    h += '</table></div>';
+  }
+  return h + '<h2>Rapports</h2>';
 }
 function ouvrir(ref) { charge(); call('detail', { ref: ref }).then(function (r) { R = r; ecranDetail(); }).catch(errTab); }
 function ecranDetail(apercu, msg, annul) {
