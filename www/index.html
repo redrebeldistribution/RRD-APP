@@ -71,7 +71,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.18.0';
+var VERSION_APP = '1.19.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -827,7 +827,7 @@ function pushRepli() { if (!PUSH.refus) pushDemarrer(); }   // au retour dans l'
  * Téléphone d'un camion (code CM…) : livraisons (le chauffeur tape les gallons, le prix vient du bureau), paiements reçus,
  * chargements de propane et autres achats. Tout est gardé sur le téléphone puis envoyé dès qu'il y a du signal. */
 var CM = { d: null, f: null, gps: null, envoi: false };
-var CM_NOMS = { livraison: '🚚 Livraison', paiement: '💵 Paiement reçu', chargement: '⛽ Chargement de propane', achat: '🧾 Achat' };
+var CM_NOMS = { livraison: '🚚 Livraison', paiement: '💵 Paiement reçu', chargement: '⛽ Chargement de propane', achat: '🧾 Achat', photo: '📷 Photo', rapport: '📋 Rapport du jour' };
 function cmCode() { return 'CAM:' + ((CFG.get('camion', {}) || {}).code || ''); }
 function cmDev() { return (CM.d && CM.d.devise) || DEV; }
 function cmMiens() { var c = cmCode(); return phTous().then(function (l) { return l.filter(function (r) { return r.genre === 'cam' && r.station === c; }); }); }
@@ -854,6 +854,8 @@ function cmLigne(o) {   // une opération en une ligne (historique d'un client, 
     else t += ' · ' + fmt(Number(o.montant)) + ' ' + dv + ' · ' + (Number(o.credit) > 0 ? (Number(o.paye) > 0 ? 'payé ' + fmt(Number(o.paye)) + ', ' : '') + '<b style="color:var(--bad)">crédit ' + fmt(Number(o.credit)) + '</b>' : '<span style="color:var(--ok)">payé</span>');
   } else if (o.genre === 'paiement') t = 'paiement reçu <b>' + fmt(Number(o.montant)) + ' ' + esc(dv) + '</b>';
   else if (o.genre === 'chargement') t = fmt(Number(o.gallons)) + ' gal chargés';
+  else if (o.genre === 'photo') t = esc(o.detail || '');
+  else if (o.genre === 'rapport') t = 'argent remis ' + fmt(Number(o.remis)) + ' ' + esc(dv);
   else t = fmt(Number(o.montant)) + ' ' + esc(dv);
   return t;
 }
@@ -861,7 +863,7 @@ function cmLocal(r) {   // une opération encore sur le téléphone, dans la mê
   var s = r.srv || {}, g = nb(r.gallons);
   return { cid: r.cid, genre: r.op, date: r.date, heure: r.heure_txt, client_id: r.client_id, client: r.client, gallons: g === null ? '' : g, devise: r.devise || cmDev(),
     montant: r.op === 'livraison' ? (s.montant !== undefined ? s.montant : r.montant_est) : nb(r.montant), paye: s.paye !== undefined ? s.paye : r.paye_est, credit: s.credit !== undefined ? s.credit : r.credit_est,
-    fournisseur: r.fournisseur, detail: r.detail, bon_no: r.bon_no, statut: r.statut, erreur: r.erreur };
+    fournisseur: r.fournisseur, detail: r.detail, bon_no: r.bon_no, statut: r.statut, erreur: r.erreur, remis: r.remis };
 }
 function camAccueil(msg, err) {
   if (CFG.get('role', '') !== 'camion') return;
@@ -876,9 +878,18 @@ function camAccueil(msg, err) {
       h += '<div class="err">❌ ' + esc(CM_NOMS[r.op] || r.op) + ' refusé(e) par le bureau :\n' + esc(r.erreur || '') + '\n<button class="sec" style="margin-top:8px" onclick="cmVu(\'' + esc(r.cid) + '\')">J\'ai compris</button></div>';
     });
     if (!d.clients) h += '<div class="note">Liste des clients pas encore reçue. Il faut internet une première fois.</div>';
-    h += '<button class="bigbtn" onclick="cmForm(\'livraison\')">🚚 Nouvelle livraison</button><button class="bigbtn sec" onclick="cmForm(\'paiement\')">💵 Paiement reçu d\'un client</button><button class="bigbtn sec" onclick="cmForm(\'achat\')">⛽ Chargement ou achat</button>';
+    h += '<button class="bigbtn" onclick="cmForm(\'livraison\')">🚚 Nouvelle livraison</button><button class="bigbtn sec" onclick="cmForm(\'paiement\')">💵 Paiement reçu d\'un client</button><button class="bigbtn sec" onclick="cmForm(\'achat\')">⛽ Chargement ou achat</button><button class="bigbtn sec" onclick="cmForm(\'photo\')">📷 Photo (compteur du client, station, autre)</button>';
+    var rap = function (date) {   // '' = pas fait, sinon 'att' ou 'ok'
+      var loc = l.filter(function (r) { return r.op === 'rapport' && r.date_rapport === date && r.statut !== 'rejete'; })[0];
+      if (loc) return loc.statut === 'envoye' ? 'ok' : 'att';
+      var srv = ((d.rapports || []).filter(function (x) { return x.date === date; })[0]) || {};
+      return srv.fait ? 'ok' : '';
+    };
+    var hier = jourPlus(auj, -1), rh = ((d.rapports || []).filter(function (x) { return x.date === hier; })[0]) || {}, ra = rap(auj);
+    if (rh.ops > 0 && !rap(hier)) h += '<div class="wait">📋 Le rapport d\'hier (' + dfr(hier).slice(0, 5) + ') n\'est pas fait.<br><button style="margin-top:8px" onclick="cmRapport(\'' + hier + '\')">Faire le rapport d\'hier</button></div>';
+    h += ra ? '<div class="okb">📋 Rapport du jour ' + (ra === 'ok' ? 'reçu par le bureau ✓' : 'enregistré, en attente de signal ⏳') + '</div>' : '<button class="bigbtn" style="background:var(--ok)" onclick="cmRapport(\'' + auj + '\')">📋 Rapport du jour (fin de journée)</button>';
     var vus = {}, jour = [];
-    l.forEach(function (r) { if (r.date === auj && r.statut !== 'rejete') { vus[r.cid] = 1; jour.push(cmLocal(r)); } });
+    l.forEach(function (r) { if (r.date === auj && r.statut !== 'rejete' && r.op !== 'rapport') { vus[r.cid] = 1; jour.push(cmLocal(r)); } });
     if (d.date === auj) (d.jour || []).forEach(function (o) { if (!vus[o.cid]) { o.statut = 'envoye'; jour.push(o); } });
     jour.sort(function (a, b) { return String(a.heure) < String(b.heure) ? 1 : -1; });
     var tot = { charge: 0, livre: 0, paye: 0 };
@@ -906,8 +917,12 @@ function cmOptClients() {
 function cmOptDev() { return ((CM.d && CM.d.devises) || [cmDev(), 'HTG', 'USD']).map(function (x) { return '<option value="' + esc(x) + '">' + esc(x === 'HTG' ? 'gourdes (HTG)' : x === 'USD' ? 'dollars US (USD)' : x) + '</option>'; }).join(''); }
 function cmForm(genre) {
   CM.f = { genre: genre, photo: '' }; cmGps();
-  var h, photoTxt = genre === 'livraison' ? 'Photo du bon de livraison' : genre === 'paiement' ? 'Photo du reçu (facultatif)' : 'Photo du bon ou du reçu';
-  if (genre === 'livraison') {
+  var h, photoTxt = genre === 'livraison' ? 'Photo du bon de livraison' : genre === 'paiement' ? 'Photo du reçu (facultatif)' : genre === 'photo' ? 'Photo' : 'Photo du bon ou du reçu';
+  if (genre === 'photo') {
+    h = '<h1>Photo pour le bureau</h1><div class="sub">Compteur ou station du client, ou autre chose à montrer en cas de réclamation. La date, l\'heure et le lieu sont notés.</div>' +
+      '<label for="cmTp">Ce que montre la photo</label><select id="cmTp">' + ((CM.d && CM.d.types_photo) || ['Compteur du client', 'Station du client', 'Autre']).map(function (x) { return '<option>' + esc(x) + '</option>'; }).join('') + '</select>' +
+      '<label for="cmCli">Client (facultatif)</label><select id="cmCli" onchange="cmCliChange()">' + cmOptClients() + '</select><div id="cmNomB" class="hidden"><label for="cmNom">Nom du client</label><input id="cmNom" autocomplete="off"></div><div id="cmHist" class="hidden"></div>';
+  } else if (genre === 'livraison') {
     h = '<h1>Nouvelle livraison</h1><label for="cmCli">Client</label><select id="cmCli" onchange="cmCliChange()">' + cmOptClients() + '</select>' +
       '<div id="cmNomB" class="hidden"><label for="cmNom">Nom du client</label><input id="cmNom" autocomplete="off"></div><div id="cmHist"></div>' +
       '<label for="cmGal">Gallons livrés</label><input id="cmGal" inputmode="decimal" autocomplete="off" placeholder="seulement les chiffres" oninput="cmMontant()"><div class="note" id="cmMt">Choisissez le client et écrivez les gallons.</div>' +
@@ -930,6 +945,22 @@ function cmForm(genre) {
   h += '<label for="cmNote">Note (facultatif)</label><input id="cmNote" autocomplete="off"><label>' + photoTxt + '</label><button class="sec" style="width:100%" onclick="var i=$(\'cmInput\');i.value=\'\';i.click()">📷 Prendre la photo</button><div id="cmPrev" class="mut"></div>';
   view(h, '<button class="sec" onclick="CM.f=null;camAccueil()">Annuler</button><button onclick="cmValider()">Enregistrer</button>', 'camForm');
 }
+function cmRapport(date) {
+  cmMiens().catch(function () { return []; }).then(function (l) {
+    var d = CM.d || {}, auj = phJourHeure(Date.now()).date, srv = ((d.rapports || []).filter(function (x) { return x.date === date; })[0]) || {}, t = srv.totaux || null;
+    var att = l.filter(function (r) { return r.statut === 'attente' && r.op !== 'rapport'; }).length;
+    CM.f = { genre: 'rapport', photo: '', date: date };
+    var h = '<h1>Rapport du jour</h1><div class="sub">' + esc((CFG.get('camion', {}) || {}).nom || '') + ' · ' + dfr(date) + '</div>';
+    if (att) h += '<div class="wait">⏳ ' + att + ' opération(s) pas encore envoyée(s). Elles seront comptées par le bureau quand elles partiront.</div>';
+    if (t && !(att && date === auj)) h += '<div class="note"><b>Résumé reçu par le bureau</b><div>Chargé : <b>' + fmt(t.charge) + ' gal</b> · livré : <b>' + fmt(t.livre) + ' gal</b> (' + t.nb + ' livraison(s))</div><div>Argent reçu : <b>' + fmt(Math.round((t.recu + t.paiements) * 100) / 100) + ' ' + esc(cmDev()) + '</b> · crédit : <b>' + fmt(t.credit) + '</b></div><div>Achats payés : <b>' + fmt(t.achats) + ' ' + esc(cmDev()) + '</b>' +
+      Object.keys(t.autres || {}).map(function (k) { return ' · ' + esc(k) + ' : ' + fmt(t.autres[k]); }).join('') + '</div>' + (t.sans_prix ? '<div class="mut">' + t.sans_prix + ' livraison(s) sans prix : le bureau calculera.</div>' : '') + '</div>';
+    else h += '<div class="note">Le résumé de la journée sera calculé par le bureau avec les opérations envoyées.</div>';
+    h += '<label for="crEmp">Employés du camion (chauffeur et aides) *</label><input id="crEmp" autocomplete="off" value="' + esc(CFG.get('camEmp', '')) + '" placeholder="ex. Paul Michel, Jean Rose">' +
+      '<label for="crRemis">Argent remis au bureau ou déposé (' + esc(cmDev()) + ') *</label><input id="crRemis" inputmode="decimal" autocomplete="off" placeholder="seulement les chiffres, 0 si rien">' +
+      '<label for="cmNote">Note (facultatif)</label><input id="cmNote" autocomplete="off"><label>Photo de la feuille du jour ou du bordereau (facultatif)</label><button class="sec" style="width:100%" onclick="var i=$(\'cmInput\');i.value=\'\';i.click()">📷 Prendre la photo</button><div id="cmPrev" class="mut"></div>';
+    view(h, '<button class="sec" onclick="CM.f=null;camAccueil()">Annuler</button><button onclick="cmValider()">Envoyer le rapport</button>', 'camForm');
+  });
+}
 function cmTypeChange() { var ch = $('cmType').value === 'chargement'; $('cmChB').classList.toggle('hidden', !ch); $('cmAcB').classList.toggle('hidden', ch); }
 function cmClient() {   // le client choisi : { id, nom, prix } (prix 0 = pas encore fixé par le bureau)
   var v = ($('cmCli') || {}).value || '', d = CM.d || {};
@@ -942,7 +973,7 @@ function cmCliChange() {
   var v = $('cmCli').value, d = CM.d || {};
   $('cmNomB').classList.toggle('hidden', v !== '__autre');
   var box = $('cmHist'); box.innerHTML = '';
-  if (v && v !== '__autre') {
+  if (v && v !== '__autre' && !(CM.f && CM.f.genre === 'photo')) {
     cmMiens().catch(function () { return []; }).then(function (l) {
       if (!$('cmHist') || $('cmCli').value !== v) return;
       var vus = {}, hist = [];
@@ -956,6 +987,7 @@ function cmCliChange() {
   if ($('cmMt')) cmMontant();
 }
 function cmMontant() {
+  if (!$('cmPayeB')) return;
   var c = cmClient(), g = nb(($('cmGal') || {}).value || ''), el = $('cmMt'), mode = (document.querySelector('input[name="cmMode"]:checked') || {}).value || '';
   $('cmPayeB').classList.toggle('hidden', mode !== 'partie');
   if (!el) return;
@@ -968,8 +1000,14 @@ function cmPhoto(input) {
   var img = new Image(), url = URL.createObjectURL(f);
   img.onload = function () {
     var k = Math.min(1, 1600 / Math.max(img.width, img.height)), cv = document.createElement('canvas'); cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
-    cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height); URL.revokeObjectURL(url);
+    var c2 = cv.getContext('2d'); c2.drawImage(img, 0, 0, cv.width, cv.height); URL.revokeObjectURL(url);
     if (!CM.f) return;
+    if (CM.f.genre === 'photo') {   // date, heure et camion écrits dans l'image
+      var jh = phJourHeure(Date.now()), fs = Math.max(20, Math.round(cv.width / 18)), l2 = (CFG.get('camion', {}) || {}).nom || 'Camion';
+      c2.font = 'bold ' + fs + 'px sans-serif'; var w1 = Math.max(c2.measureText(jh.txt).width, c2.measureText(l2).width);
+      c2.fillStyle = 'rgba(0,0,0,.55)'; c2.fillRect(0, cv.height - fs * 2.7, w1 + fs, fs * 2.7);
+      c2.fillStyle = '#ffd400'; c2.fillText(jh.txt, fs / 2, cv.height - fs * 1.5); c2.fillStyle = '#fff'; c2.fillText(l2, fs / 2, cv.height - fs * 0.4);
+    }
     CM.f.photo = cv.toDataURL('image/jpeg', 0.7);
     if ($('cmPrev')) $('cmPrev').innerHTML = '<img class="prev" style="max-height:220px" src="' + CM.f.photo + '"><div>Photo prête ✓</div>';
   };
@@ -981,7 +1019,15 @@ function cmValider() {
   var ms = Date.now(), jh = phJourHeure(ms), val = function (id) { return String(($(id) || {}).value || '').trim(); };
   var r = { cid: 'C' + ms.toString(36) + Math.random().toString(36).slice(2, 8), genre: 'cam', op: f.genre, station: cmCode(), pris_ms: ms, date: jh.date, heure: jh.heure, heure_txt: jh.txt.slice(-5), statut: 'attente', photo: f.photo, note: val('cmNote'), bon_no: val('cmBon') };
   var chiffres = function (v, quoi) { var n = nb(v); if (n === null || !(n > 0)) { alerte(quoi + ' : écrivez seulement les chiffres (ex. 300).'); return null; } return n; };
-  if (f.genre === 'livraison' || f.genre === 'paiement') {
+  if (f.genre === 'rapport') {
+    r.date_rapport = f.date; r.employes = val('crEmp'); r.remis = val('crRemis');
+    if (!r.employes) return alerte('Écrivez les employés du camion.');
+    if (r.remis !== '0' && (nb(r.remis) === null || nb(r.remis) < 0)) return alerte('Argent remis : écrivez seulement les chiffres (0 si rien).');
+    r.remis = String(nb(r.remis)); CFG.set('camEmp', r.employes);
+  } else if (f.genre === 'photo') {
+    var cp = cmClient(); r.client_id = cp ? cp.id : ''; r.client = cp ? cp.nom : ''; r.detail = val('cmTp');
+    if (!f.photo) return alerte('Prenez la photo.');
+  } else if (f.genre === 'livraison' || f.genre === 'paiement') {
     var c = cmClient();
     if (!c || !c.nom) return alerte(c ? 'Écrivez le nom du client.' : 'Choisissez le client.');
     r.client_id = c.id; r.client = c.nom;
@@ -1026,7 +1072,7 @@ function cmEnvoyer() {
       if (i >= file.length) return;
       var r = file[i++];
       return api('camion', { payload: { genre: r.op, cid: r.cid, pris_ms: r.pris_ms, photo: r.photo, client_id: r.client_id, client: r.client, gallons: r.gallons, mode: r.mode, paye: r.paye, montant: r.montant, devise: r.devise,
-        bon_no: r.bon_no, fournisseur: r.fournisseur, detail: r.detail, note: r.note, lat: r.lat, lon: r.lon, precision: r.precision } }).then(function (x) {
+        bon_no: r.bon_no, fournisseur: r.fournisseur, detail: r.detail, note: r.note, lat: r.lat, lon: r.lon, precision: r.precision, date: r.date_rapport, employes: r.employes, remis: r.remis } }).then(function (x) {
         r.statut = 'envoye'; r.photo = ''; r.srv = { montant: x.montant, paye: x.paye, credit: x.credit };
         return ptx('readwrite', function (s) { s.put(r); }).then(suivant);
       }, function (e) {
@@ -1586,6 +1632,14 @@ function ongletCamion(data, msg) {
       '<div>Paiements reçus (anciens crédits) : <b>' + fmt(t.encaisse) + ' ' + esc(dv) + '</b></div>' + Object.keys(t.achats).map(function (k) { return '<div>' + (k.indexOf('Paiements') === 0 ? esc(k) : 'Achats en ' + esc(k)) + ' : <b>' + fmt(t.achats[k]) + '</b></div>'; }).join('') +
       (t.sans_prix ? '<div class="wait">' + t.sans_prix + ' livraison(s) sans prix : le montant est resté vide. Fixez le prix du client plus bas ; les prochaines livraisons seront calculées.</div>' : '') +
       '<div class="mut">Gallons tapés par le chauffeur, prix du bureau. Vérifiez avec la photo du bon.</div></div>';
+    if ((d.rapports || []).length) h += '<h2>Rapports du jour</h2>' + d.rapports.map(function (r, i) {
+      var k = r.totaux;
+      return '<div class="card"><div class="row"><div><b>' + dfr(r.date).slice(0, 5) + ' · ' + esc(r.camion_nom) + '</b><div class="mut">chargé ' + fmt(k.charge) + ' gal · livré ' + fmt(k.livre) + ' gal (' + k.nb + ') · reçu ' + fmt(Math.round((k.recu + k.paiements) * 100) / 100) + ' · crédit ' + fmt(k.credit) + ' · achats ' + fmt(k.achats) + '</div>' +
+        (r.fait ? '<div>✅ ' + esc(r.employes) + ' — argent remis <b>' + fmt(r.remis) + ' ' + esc(dv) + '</b> (attendu ' + fmt(k.attendu) + ')' + (r.difference ? ' — <b style="color:var(--bad)">différence ' + fmt(r.difference) + '</b>' : '') + '</div>' +
+          (r.change ? '<div class="mut">Des opérations ont été reçues ou annulées après ce rapport.</div>' : '') + (r.note ? '<div class="mut">' + esc(r.note) + '</div>' : '')
+          : '<div><b style="color:var(--bad)">⚠️ rapport du jour pas fait</b></div>') + '</div><div style="text-align:right">' + (r.fichier ? '<button class="sec" style="padding:6px 10px" onclick="phVoir(\'' + esc(r.fichier) + '\',\'r' + i + '\')">Voir</button>' : '') +
+        (r.fait && dir ? '<div><a href="#" onclick="camRapAnnuler(\'' + esc(r.id) + '\');return false">Annuler</a></div>' : '') + '</div></div><div id="phvr' + i + '"></div></div>';
+    }).join('') + '<h2>Opérations</h2>';
     if (!d.ops.length) h += '<p class="mut">Aucune opération pour ces dates.</p>';
     else h += '<table><tr><th>Date</th><th>Opération</th><th class="n">Détail</th><th></th></tr>' + d.ops.map(function (o, i) {
       return '<tr' + (o.annule ? ' style="opacity:.5"' : '') + '><td>' + dfr(o.date).slice(0, 5) + '<div class="mut">' + esc(o.heure) + '</div></td><td><b>' + esc(o.client || o.fournisseur || o.detail) + '</b>' + (o.annule ? ' <span class="badge">annulée</span>' : '') +
@@ -1621,6 +1675,10 @@ function camActif(id, actif) { call('camClient', { id: id, actif: actif, vue: ca
 function camClientAjouter() {
   $('bCc').disabled = true;
   call('camClient', { nom: $('ccNom').value, prix: $('ccPrix').value, station: $('ccSt').value, vue: camVue() }).then(function (d) { ongletCamion(d, 'Client ajouté.'); }).catch(function (e) { $('bCc').disabled = false; alerte(e.erreur || 'Pas de connexion.'); });
+}
+function camRapAnnuler(id) {
+  var m = prompt('Pourquoi annuler ce rapport ? (le chauffeur pourra le refaire)'); if (m === null || !String(m).trim()) return;
+  call('camRapportAnnuler', { id: id, motif: String(m).trim(), vue: camVue() }).then(function (d) { ongletCamion(d, 'Rapport annulé.'); }).catch(function (e) { alerte(e.erreur || 'Pas de connexion.'); });
 }
 function camAnnulerOp(id) {
   var m = prompt('Pourquoi annuler cette opération ? (elle reste dans l\'historique, marquée annulée)'); if (m === null || !String(m).trim()) return;

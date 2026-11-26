@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.22';
+var MOBILE_VERSION = 'm1.23';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var STATION_FORMATION = 'TST', MAX_APPAREILS_FORMATION = 50;   // les codes de la station de test servent à la formation : plusieurs téléphones avec le même code (propriétaire, 26/11/2026)
 var MAX_APPAREILS_ROLE = 5;   // un code DIR ou CPT peut servir sur 5 appareils en même temps (demande du propriétaire, 26/11/2026)
@@ -79,7 +79,7 @@ function apiMobile_(action, b) {
       case 'messages': return ok_(messagesStation_(app));
       case 'pushToken': return ok_(pushToken_(app, payload));
       case 'reponse': return ok_(reponseStation_(app, payload));
-      case 'camion': return ok_(camEnvoyer_(app, payload));
+      case 'camion': return ok_(String(payload.genre) === 'rapport' ? camRapport_(app, payload) : camEnvoyer_(app, payload));
       case 'dir': return ok_(direction_(app, String(b.sous_action || ''), payload));
       default: throw new UserError('Action inconnue.');
     }
@@ -436,6 +436,7 @@ function direction_(app, sous, p) {
     case 'camion': exiger_(ctx, ['management', 'accounting']); return camListe_(p);
     case 'camClient': exiger_(ctx, ['management', 'accounting']); return camClient_(ctx, p);
     case 'camAnnuler': exiger_(ctx, ['management']); return camAnnuler_(ctx, p);
+    case 'camRapportAnnuler': exiger_(ctx, ['management']); return camRapportAnnuler_(ctx, p);
     default: throw new UserError('Action inconnue.');
   }
 }
@@ -682,7 +683,7 @@ function photosListe_(p) {
 /** Renvoie une photo (seulement un fichier listé dans l'onglet « Photos horaires »). */
 function photoVoir_(p) {
   var id = String(p.id || '');
-  if (!id || !(phLire_(15000).some(function (r) { return r.fichier_id === id; }) || bdLire_(5000).some(function (r) { return r.fichier_id === id; }) || camOps_(8000).some(function (r) { return r.fichier_id === id; }))) throw new UserError('Photo introuvable.');
+  if (!id || !(phLire_(15000).some(function (r) { return r.fichier_id === id; }) || bdLire_(5000).some(function (r) { return r.fichier_id === id; }) || camOps_(8000).some(function (r) { return r.fichier_id === id; }) || camRapports_(3000).some(function (r) { return r.fichier_id === id; }))) throw new UserError('Photo introuvable.');
   var f = DriveApp.getFileById(id), b = f.getBlob();
   return { nom: f.getName(), photo: 'data:image/jpeg;base64,' + Utilities.base64Encode(b.getBytes()) };
 }
@@ -777,6 +778,14 @@ function resumeApp_(date) {
         x.dernier.split('-').reverse().join('/') + (x.alerte ? ' — à vérifier' : '');
     }).join('\n');
   } catch (e) { console.error(e && e.stack || e); }   // le stock ne doit jamais empêcher le résumé de partir
+  try {
+    var jr = date, cr = camRapportsVue_(jr, jr, '');
+    if (cr.length) t += '\n\n🚚 Camions (' + jr.split('-').reverse().join('/') + ', ' + CURRENCY + ')\n' + cr.map(function (x) {
+      var k = x.totaux, n = function (v) { return Number(v).toLocaleString('fr-FR'); };
+      return '• ' + x.camion_nom + ' : chargé ' + n(k.charge) + ' gal, livré ' + n(k.livre) + ' gal (' + k.nb + ' livraison(s)), reçu ' + n(k.recu + k.paiements) + ', crédit ' + n(k.credit) + ', achats ' + n(k.achats) +
+        (k.sans_prix ? ', ' + k.sans_prix + ' livraison(s) sans prix' : '') + (x.fait ? ' — rapport fait : argent remis ' + n(x.remis) + (x.difference ? ', différence ' + n(x.difference) : '') : ' — ⚠️ rapport du jour pas encore fait');
+    }).join('\n');
+  } catch (e) { console.error(e && e.stack || e); }   // les camions non plus
   return t;
 }
 
@@ -1074,7 +1083,8 @@ var CCL_DEFAUT = 'DEFAUT';   // ligne spéciale : prix pour un client qui n'a pa
 var COP_ONGLET = 'Camion (app)';
 var COP_ENTETES = ['id', 'genre', 'date', 'camion', 'client_id', 'client', 'gallons', 'prix_gal', 'montant', 'paye', 'credit', 'devise', 'bon_no', 'fournisseur', 'detail',
   'lat', 'lon', 'precision_m', 'pris_le', 'recu_le', 'fichier_id', 'appareil', 'cid', 'annule', 'note'];
-var COP_GENRES = ['livraison', 'paiement', 'chargement', 'achat'];
+var COP_GENRES = ['livraison', 'paiement', 'chargement', 'achat', 'photo'];   // photo = preuve (compteur ou station du client, autre) pour une réclamation
+var CAM_PHOTOS = ['Compteur du client', 'Station du client', 'Autre'];
 var CAM_FOURNISSEURS = ['Sodigaz', 'Haiti Propane', 'Autre'];
 /* Prix et montants des livraisons : dans la monnaie des rapports de fermeture (CURRENCY), comme sur les bons du camion.
  * Un paiement ou un achat peut aussi être noté en gourdes (HTG) ou en dollars US. */
@@ -1130,8 +1140,8 @@ function camInit_(app) {
   return { version: MOBILE_VERSION, mode: 'camion', devise: CURRENCY, camion: { code: cam.code, nom: cam.nom, test: test }, date: auj,
     clients: clients.filter(function (c) { return c.actif && c.id !== CCL_DEFAUT; }).map(function (c) { return { id: c.id, nom: c.nom, prix: c.prix }; })
       .sort(function (a, b) { return a.nom.toLowerCase() < b.nom.toLowerCase() ? -1 : 1; }),
-    prix_defaut: defaut ? defaut.prix : 0, historique: hist, fournisseurs: CAM_FOURNISSEURS, devises: camDevises_(),
-    jour: ops.filter(function (o) { return o.camion === cam.code && o.date === auj; }).map(camPourTel_) };
+    prix_defaut: defaut ? defaut.prix : 0, historique: hist, fournisseurs: CAM_FOURNISSEURS, types_photo: CAM_PHOTOS, devises: camDevises_(),
+    jour: ops.filter(function (o) { return o.camion === cam.code && o.date === auj; }).map(camPourTel_), rapports: camRapportsTel_(cam.code, ops) };
 }
 /** Une opération envoyée par le téléphone d'un camion. Le prix vient toujours du bureau ; le chauffeur ne tape que les gallons. */
 function camEnvoyer_(app, p) {
@@ -1179,6 +1189,10 @@ function camEnvoyer_(app, p) {
     } else {
       l.montant = nombre(p.montant, 'Montant reçu', true); l.paye = l.montant; l.devise = devise;
     }
+  } else if (genre === 'photo') {
+    var cp = camClients_().filter(function (x) { return x.id === String(p.client_id || '') && x.id !== CCL_DEFAUT; })[0];
+    l.client = cp ? cp.nom : String(p.client || '').trim().slice(0, 80); l.client_id = cp ? cp.id : '';
+    l.detail = CAM_PHOTOS.indexOf(String(p.detail)) >= 0 ? String(p.detail) : 'Autre';
   } else if (genre === 'chargement') {
     l.fournisseur = String(p.fournisseur || '').trim().slice(0, 60);
     if (!l.fournisseur) throw new UserError('Choisissez le fournisseur.');
@@ -1225,9 +1239,9 @@ function camListe_(p) {
     if (o.genre === 'livraison') { t.livre += Number(o.gallons) || 0; if (o.montant === '') t.sans_prix++; else { t.montant += o.montant; t.paye += Number(o.paye) || 0; t.credit += Number(o.credit) || 0; } }
     else if (o.genre === 'chargement') t.charge += Number(o.gallons) || 0;
     else if (o.genre === 'paiement') { if (o.devise === CURRENCY) t.encaisse += Number(o.montant) || 0; else t.achats['Paiements reçus en ' + o.devise] = (t.achats['Paiements reçus en ' + o.devise] || 0) + (Number(o.montant) || 0); }
-    else t.achats[o.devise] = (t.achats[o.devise] || 0) + (Number(o.montant) || 0);
+    else if (o.genre === 'achat') t.achats[o.devise] = (t.achats[o.devise] || 0) + (Number(o.montant) || 0);
   });
-  return { du: du, au: au, aujourdhui: auj, camion: filtre, camions: cams, totaux: t, devise: CURRENCY, stations: stations_().filter(function (s) { return estVrai_(s.actif); }).map(function (s) { return { code: String(s.code), nom: String(s.nom) }; }),
+  return { du: du, au: au, aujourdhui: auj, camion: filtre, camions: cams, totaux: t, devise: CURRENCY, rapports: camRapportsVue_(du, au, filtre), stations: stations_().filter(function (s) { return estVrai_(s.actif); }).map(function (s) { return { code: String(s.code), nom: String(s.nom) }; }),
     clients: camClients_().map(function (c) { return { id: c.id, nom: c.nom, prix: c.prix, station: c.station, actif: c.actif }; }),
     ops: ops.map(function (o) { var x = camPourTel_(o); x.id = o.id; x.camion_nom = noms[o.camion] || o.camion; x.fichier = o.fichier_id; x.lat = o.lat; x.lon = o.lon; x.annule = o.annule; x.note = o.note; return x; }) };
 }
@@ -1267,4 +1281,108 @@ function camAnnuler_(ctx, p) {
   sh.getRange(o.ligne, COP_ENTETES.indexOf('annule') + 1, 1, 2).setValues([['oui', (o.note ? o.note + ' ; ' : '') + 'Annulée le ' + maintenant_() + ' par ' + ctx.nom + ' : ' + motif]]);
   journal_(ctx, 'camion-annule', o.id + ' ' + o.genre + ' ' + (o.client || o.fournisseur || o.detail) + ' : ' + motif);
   return camListe_(p.vue || {});
+}
+
+/* ============================ Rapport du jour des camions (m1.23, 26/11/2026) ============================
+ * Demande du propriétaire (26/11/2026) : un rapport par camion et par jour. Le téléphone du camion montre le résumé de la journée
+ * (calculé avec les opérations déjà reçues) ; le chauffeur écrit seulement les employés du camion et l'argent remis. Le bureau garde
+ * une photo des totaux au moment du rapport dans « Rapports camion (app) ». Un seul rapport par camion et par jour ; « annuler »
+ * (direction) marque la ligne et le chauffeur peut le refaire.
+ */
+var CRP_ONGLET = 'Rapports camion (app)';
+var CRP_ENTETES = ['id', 'date', 'camion', 'employes', 'charge_gal', 'livre_gal', 'nb_livraisons', 'montant_livraisons', 'recu_livraisons', 'credit', 'paiements_recus', 'achats',
+  'autres_monnaies', 'argent_attendu', 'argent_remis', 'difference', 'sans_prix', 'note', 'fait_le', 'recu_le', 'fichier_id', 'appareil', 'cid', 'annule'];
+/** Totaux d'un camion pour un jour, dans la monnaie des rapports. Les gourdes sont converties (5 gourdes = 1 dollar haïtien) ; les dollars US sont listés à part. */
+function camTotauxJour_(ops, camion, date) {
+  var t = { charge: 0, livre: 0, nb: 0, montant: 0, recu: 0, credit: 0, paiements: 0, achats: 0, autres: {}, sans_prix: 0 };
+  var conv = function (o, signe) {   // montant dans la monnaie des rapports, ou null (à lister à part)
+    if (o.devise === CURRENCY) return Number(o.montant) || 0;
+    if (o.devise === 'HTG' && CURRENCY === 'dollars haïtiens') return Math.round((Number(o.montant) || 0) / 5 * 100) / 100;
+    var k = (signe > 0 ? 'Paiements reçus en ' : 'Achats en ') + o.devise; t.autres[k] = (t.autres[k] || 0) + (Number(o.montant) || 0); return null;
+  };
+  ops.forEach(function (o) {
+    if (o.annule || o.camion !== camion || o.date !== date) return;
+    if (o.genre === 'chargement') t.charge += Number(o.gallons) || 0;
+    else if (o.genre === 'livraison') { t.nb++; t.livre += Number(o.gallons) || 0; if (o.montant === '') t.sans_prix++; else { t.montant += o.montant; t.credit += Number(o.credit) || 0; } t.recu += Number(o.paye) || 0; }
+    else if (o.genre === 'paiement') { var p = conv(o, 1); if (p !== null) t.paiements += p; }
+    else if (o.genre === 'achat') { var a = conv(o, -1); if (a !== null) t.achats += a; }
+  });
+  ['charge', 'livre', 'montant', 'recu', 'credit', 'paiements', 'achats'].forEach(function (k) { t[k] = Math.round(t[k] * 100) / 100; });
+  t.attendu = Math.round((t.recu + t.paiements - t.achats) * 100) / 100;
+  return t;
+}
+function camRapports_(max) {
+  var sh = camFeuille_(CRP_ONGLET, CRP_ENTETES), n = sh.getLastRow();
+  if (n < 2) return [];
+  var from = Math.max(2, n - (max || 3000) + 1), nbr = function (v) { return v === '' || v === null ? '' : Number(v); };
+  return sh.getRange(from, 1, n - from + 1, CRP_ENTETES.length).getValues().map(function (r, i) {
+    return { ligne: from + i, id: String(r[0]), date: phJour_(r[1]), camion: String(r[2]).trim().toUpperCase(), employes: String(r[3] || ''), charge: nbr(r[4]), livre: nbr(r[5]), nb: nbr(r[6]), montant: nbr(r[7]),
+      recu: nbr(r[8]), credit: nbr(r[9]), paiements: nbr(r[10]), achats: nbr(r[11]), autres: String(r[12] || ''), attendu: nbr(r[13]), remis: nbr(r[14]), difference: nbr(r[15]), sans_prix: nbr(r[16]),
+      note: String(r[17] || ''), fait_le: phTexte_(r[18]), fichier_id: String(r[20] || ''), cid: String(r[22] || ''), annule: estVrai_(r[23]) };
+  });
+}
+/** Pour le téléphone du camion : rapports d'aujourd'hui et d'hier (faits ou non). */
+function camRapportsTel_(code, ops) {
+  var raps = camRapports_(3000).filter(function (r) { return r.camion === code && !r.annule; });
+  return [msgJour_(0), msgJour_(-1)].map(function (d) {
+    var r = raps.filter(function (x) { return x.date === d; })[0], t = camTotauxJour_(ops, code, d);
+    return { date: d, fait: !!r, employes: r ? r.employes : '', remis: r ? r.remis : '', fait_le: r ? r.fait_le : '', ops: t.nb + (t.charge > 0 ? 1 : 0) + (t.paiements > 0 ? 1 : 0) + (t.achats > 0 ? 1 : 0), totaux: t };
+  });
+}
+function camRapport_(app, p) {
+  if (app.role !== 'camion' || !app.camion) throw new UserError('Réservé au téléphone d\'un camion.', 'FORBIDDEN');
+  var cam = app.camion, cid = String(p.cid || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 60);
+  if (!cid) throw new UserError('Rapport sans identifiant.');
+  var date = String(p.date || ''), auj = msgJour_(0);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > auj || date < msgJour_(-7)) throw new UserError('Date du rapport invalide.');
+  var employes = String(p.employes || '').trim().slice(0, 150);
+  if (!employes) throw new UserError('Écrivez les employés du camion.');
+  var rs = String(p.remis === undefined || p.remis === null ? '' : p.remis).trim(), remis = rs === '0' ? '0' : phNombre_(rs);
+  if (remis === '') throw new UserError('Argent remis illisible. Écrivez seulement les chiffres (0 si rien).');
+  remis = Number(remis);
+  var photo = String(p.photo || ''), m = photo.match(/^data:image\/jpeg;base64,(.+)$/), octets = null;
+  if (photo && !m) throw new UserError('Photo invalide.');
+  if (m) { octets = Utilities.base64Decode(m[1]); if (octets.length > 3000000) throw new UserError('Photo trop lourde.'); }
+  var recu = new Date(), fait = new Date(Number(p.pris_ms) || 0);
+  if (!(fait.getTime() > 0) || fait.getTime() > recu.getTime() + 10 * 60000) fait = recu;
+  var lock = LockService.getScriptLock(); lock.waitLock(25000);
+  try {
+    var deja = camRapports_(3000).filter(function (r) { return r.camion === cam.code && r.date === date && !r.annule; })[0];
+    if (deja) { if (deja.cid === cid) return { recu: true, deja: true, cid: cid }; throw new UserError('Le rapport du ' + date.split('-').reverse().join('/') + ' est déjà fait pour ce camion. Pour le corriger, prévenez la direction.', 'DEJA'); }
+    var t = camTotauxJour_(camOps_(8000), cam.code, date), fid = '';
+    if (octets) {
+      var f = phDossier_({ code: 'CAM' + cam.code, nom: cam.nom }, date, 'CAM', 'RRD – Camions (app, privé)').createFile(Utilities.newBlob(octets, 'image/jpeg', 'CAM' + cam.code + '_rapport_' + date + '.jpg'));
+      f.setDescription('Rapport du jour (application RRD) — ' + cam.nom + ' — ' + date + ' — ' + cid); fid = f.getId();
+    }
+    var sh = camFeuille_(CRP_ONGLET, CRP_ENTETES), id = 'RC' + date.replace(/-/g, '').slice(2) + '-' + cam.code + '-' + sh.getLastRow();
+    sh.appendRow([id, date, cam.code, employes, t.charge, t.livre, t.nb, t.montant, t.recu, t.credit, t.paiements, t.achats, Object.keys(t.autres).map(function (k) { return k + ' : ' + t.autres[k]; }).join(' ; '),
+      t.attendu, remis, Math.round((t.attendu - remis) * 100) / 100, t.sans_prix, String(p.note || '').slice(0, 300), Utilities.formatDate(fait, TZ, 'yyyy-MM-dd HH:mm:ss'), Utilities.formatDate(recu, TZ, 'yyyy-MM-dd HH:mm:ss'), fid, app.id, cid, '']);
+    return { recu: true, cid: cid, id: id };
+  } finally { lock.releaseLock(); }
+}
+function camRapportAnnuler_(ctx, p) {
+  var motif = String(p.motif || '').trim().slice(0, 150);
+  if (!motif) throw new UserError('Écrivez la raison.');
+  var r = camRapports_(3000).filter(function (x) { return x.id === String(p.id || ''); })[0];
+  if (!r) throw new UserError('Rapport introuvable.');
+  if (r.annule) throw new UserError('Déjà annulé.');
+  var sh = ss_().getSheetByName(CRP_ONGLET);
+  sh.getRange(r.ligne, CRP_ENTETES.indexOf('annule') + 1).setValue('oui');
+  sh.getRange(r.ligne, CRP_ENTETES.indexOf('note') + 1).setValue((r.note ? r.note + ' ; ' : '') + 'Annulé le ' + maintenant_() + ' par ' + ctx.nom + ' : ' + motif);
+  journal_(ctx, 'camion-rapport-annule', r.id + ' : ' + motif);
+  return camListe_(p.vue || {});
+}
+/** Rapports du jour pour le tableau de bord et le résumé du soir : un par camion et par jour où il y a eu une opération ou un rapport. */
+function camRapportsVue_(du, au, filtre) {
+  var ops = camOps_(8000), raps = camRapports_(3000).filter(function (r) { return !r.annule; }), noms = {}, cles = {}, out = [];
+  camions_().forEach(function (c) { noms[c.code] = c.nom; });
+  var garder = function (cam, d) { return d >= du && d <= au && (filtre ? cam === filtre : cam !== CAM_TEST); };
+  ops.forEach(function (o) { if (!o.annule && garder(o.camion, o.date)) cles[o.date + '|' + o.camion] = 1; });
+  raps.forEach(function (r) { if (garder(r.camion, r.date)) cles[r.date + '|' + r.camion] = 1; });
+  Object.keys(cles).sort().reverse().forEach(function (k) {
+    var d = k.split('|')[0], cam = k.split('|')[1], r = raps.filter(function (x) { return x.date === d && x.camion === cam; })[0], t = camTotauxJour_(ops, cam, d);
+    out.push({ date: d, camion: cam, camion_nom: noms[cam] || cam, totaux: t, fait: !!r, id: r ? r.id : '', employes: r ? r.employes : '', remis: r ? r.remis : '', fait_le: r ? r.fait_le : '', note: r ? r.note : '', fichier: r ? r.fichier_id : '',
+      difference: r ? Math.round((t.attendu - r.remis) * 100) / 100 : '', change: !!r && (r.attendu !== t.attendu || r.livre !== t.livre) });
+  });
+  return out;
 }
