@@ -18,6 +18,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+          cache: gradle
 
       - uses: actions/setup-node@v4
         with:
@@ -39,7 +40,7 @@ jobs:
           RRD_VERSION_CODE: ${{ github.run_number }}
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon
+          ./gradlew assembleRelease --no-daemon || (echo 'Nouvel essai dans 60 s (serveur Maven occupé)'; sleep 60; ./gradlew assembleRelease --no-daemon)
 
       - name: APK, automatic-update bundle and manifest
         run: |
