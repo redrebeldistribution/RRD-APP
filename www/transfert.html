@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111827">
+<title>Transferts RRD</title>
+<link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="icon-180.png">
+<style>
+  :root { color-scheme: light; --bg:#f6f7f9; --card:#fff; --ink:#1b1f24; --mute:#5f6b7a; --ok:#0f7b3f; --okbg:#e6f6ec; --no:#b3261e; --nobg:#fdecea; --warn:#8a5a00; --warnbg:#fff4dc; --line:#e3e6ea; --pri:#1d4ed8; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:16px/1.4 system-ui,-apple-system,Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:14px 16px; background:#111827; color:#fff; }
+  header b { font-size:17px; } header small { display:block; color:#cbd5e1; margin-top:2px; }
+  nav { display:flex; background:#1f2937; }
+  nav button { flex:1; margin:0; border-radius:0; background:transparent; color:#cbd5e1; padding:12px 4px; font-size:15px; border:0; border-bottom:3px solid transparent; font-weight:600; }
+  nav button.on { color:#fff; border-bottom-color:#60a5fa; }
+  main { padding:14px; max-width:560px; margin:0 auto; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:12px; }
+  label { display:block; font-size:14px; color:var(--mute); margin:10px 0 4px; }
+  input, select { width:100%; font-size:17px; padding:11px; border:1px solid #cbd2d9; border-radius:10px; background:#fff; color:var(--ink); -webkit-text-fill-color:var(--ink); caret-color:var(--ink); }
+  input::placeholder { color:#8a94a3; -webkit-text-fill-color:#8a94a3; opacity:1; }
+  button { width:100%; font-size:17px; font-weight:600; padding:13px; border:0; border-radius:10px; margin-top:12px; background:var(--pri); color:#fff; }
+  button.sec { background:#e5e7eb; color:var(--ink); } button.go { background:var(--ok); } button.danger { background:var(--no); }
+  button.mini { width:auto; font-size:13px; padding:6px 9px; margin:4px 4px 0 0; }
+  button:disabled { opacity:.5; }
+  .big { font-size:30px; font-weight:800; margin:6px 0; letter-spacing:1px; }
+  .ok { background:var(--okbg); border-color:#b7e3c6; } .no { background:var(--nobg); border-color:#f4c7c3; } .warn { background:var(--warnbg); border-color:#f1d79a; }
+  .row { display:flex; justify-content:space-between; gap:10px; padding:5px 0; border-bottom:1px dashed var(--line); font-size:15px; }
+  .row:last-child { border-bottom:0; } .row span:first-child { color:var(--mute); } .row span:last-child { text-align:right; }
+  h3 { margin:0 0 8px; font-size:16px; } .muted { color:var(--mute); font-size:14px; } .err { color:var(--no); font-weight:600; margin-top:8px; }
+  .hide { display:none; }
+  table { width:100%; border-collapse:collapse; font-size:13px; } td, th { padding:5px 4px; border-bottom:1px solid var(--line); vertical-align:top; text-align:left; } th { font-size:12px; color:var(--mute); }
+  .st { font-size:12px; padding:1px 6px; border-radius:8px; white-space:nowrap; } .st.p { background:var(--okbg); color:var(--ok); } .st.r { background:#e0e7ff; color:#1e3a8a; } .st.w { background:var(--warnbg); color:var(--warn); } .st.x { background:var(--nobg); color:var(--no); }
+  .seg { display:flex; gap:8px; } .seg button { margin-top:0; background:#e5e7eb; color:var(--ink); font-size:15px; padding:11px 6px; } .seg button.on { background:var(--pri); color:#fff; } .seg button.sec { font-size:14px; }
+</style>
+</head>
+<body>
+<header style="display:flex;align-items:center;gap:12px;padding-top:max(14px,env(safe-area-inset-top))"><a href="index.html" style="color:#fff;text-decoration:none;font-size:22px">←</a><div style="flex:1"><b>💸 Transferts RRD</b><small id="who">Chargement…</small></div><small id="net" style="color:#cbd5e1"></small></header>
+<nav id="nav"></nav>
+<main>
+  <div id="msg" class="card hide"></div>
+  <div id="act" class="card warn hide">
+    <h3 id="actTitle"></h3><div id="actText" class="muted"></div>
+    <div id="actInputWrap"><label id="actLabel" for="actInput"></label><input id="actInput" autocomplete="off"></div>
+    <button id="actOk">Confirmer</button><button class="sec" id="actNo">Annuler</button><div id="actErr" class="err"></div>
+  </div>
+  <div id="view"></div>
+  <div class="muted" style="text-align:center;margin:10px 0 20px">Transferts RRD dans l’application — version 3.8-app</div>
+</main>
+
+<script src="config.js"></script>
+<script src="build.js"></script>
+<script>
+var INIT = '', ME = null, TAB = '';
+var C = { dir: 'UH', holder: 'HQ', last: null, mine: null, f: {} };          // screen 1
+var P = { mode: 'num', q: {}, res: null, done: null, names: null, pick: null };                        // screen 2
+var R = { agent: '', from: '', to: '', status: '', data: null, msg: '' };     // reports
+var H = null, ROWS = {}, ACT = null, EDIT = null, CEDIT = null;                             // direction
+var $ = function (id) { return document.getElementById(id); };
+var MOTS = [[/\b(un|ce|le|du|Un|Ce|Le) Zelle\b/g, function (m, d) { return d + ' transfert'; }], [/\bdes Zelle\b/g, 'des transferts'], [/\bPlusieurs Zelle\b/g, 'Plusieurs transferts'],
+  [/\b(Aucun|aucun) Zelle\b/g, '$1 transfert'], [/\bpar Zelle\b/g, 'par virement'], [/\bZelle disponibles?\b/g, 'transferts disponibles'], [/\bZelle (introuvable|reçu|lié)/g, 'Transfert $1'], [/\bcompte Zelle\b/g, 'compte']];
+function sansMarque(s) { s = String(s); if (s.indexOf('Zelle') < 0 || s.indexOf('Demandes Zelle') >= 0 || s.indexOf('Zelle reçus') >= 0 && s.indexOf('«') >= 0) return s; MOTS.forEach(function (m) { s = s.replace(m[0], m[1]); }); return s; }
+function esc(s) { return sansMarque(String(s == null ? '' : s)).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+function show(id, on) { $(id).classList.toggle('hide', !on); }
+function msg(html, cls) { var m = $('msg'); m.className = 'card ' + (cls || ''); m.innerHTML = html; show('msg', !!html); }
+function val(id) { return $(id) ? $(id).value.trim() : ''; }
+function dirTxt(d) { return d === 'HU' ? 'Haïti → USA' : 'USA → Haïti'; }
+function stTag(s) { var c = s === 'Payé' ? 'p' : s === 'Prêt' ? 'r' : s === 'Annulé' ? 'x' : 'w'; return '<span class="st ' + c + '">' + esc(s) + '</span>'; }
+function row(a, b) { return '<div class="row"><span>' + a + '</span><span>' + b + '</span></div>'; }
+
+/* ---------- transport : le serveur des transferts (Apps Script), le téléphone est reconnu par son code d'activation ---------- */
+function lireCfg(k) { try { var v = localStorage.getItem('rrd.' + k); return v === null ? '' : JSON.parse(v); } catch (e) { return ''; } }
+function zUrl() { return (window.RRD_CONFIG && RRD_CONFIG.ZELLE_URL) || ''; }
+function envoi(action, payload) {
+  if (!zUrl()) return Promise.reject({ ok: false, error: 'Adresse du serveur des transferts pas encore configurée. Prévenez la direction.', config: true });
+  var ctl = new AbortController(), t = setTimeout(function () { ctl.abort(); }, 60000);
+  return fetch(zUrl(), { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: action, jeton: lireCfg('jeton'), payload: payload || {} }), redirect: 'follow', signal: ctl.signal })
+    .then(function (r) { clearTimeout(t); return r.text(); }, function () { clearTimeout(t); throw { ok: false, error: 'Pas de connexion internet.', reseau: true }; })
+    .then(function (txt) { try { return JSON.parse(txt); } catch (e) { throw { ok: false, error: 'Réponse illisible du serveur des transferts.', reseau: true }; } });
+}
+function api(action, payload, cb, btn) {
+  if (btn) btn.disabled = true;
+  envoi(action, payload).then(function (r) {
+    if (btn) btn.disabled = false; $('net').textContent = '● en ligne';
+    if (r && (r.code === 'NON_ENREGISTRE' || r.code === 'DESACTIVE')) { location.href = 'index.html'; return; }
+    cb(r || { ok: false, error: 'Pas de réponse' });
+  }, function (e) {
+    if (btn) btn.disabled = false; $('net').textContent = e.reseau ? '○ hors ligne' : '';
+    if (action === 'create' && e.reseau) return cb(mettreEnAttente(payload));   // créé sans connexion : envoyé plus tard
+    cb(e && e.error ? e : { ok: false, error: 'Connexion impossible.' });
+  });
+}
+
+/* ---------- ordres créés sans connexion ---------- */
+var NAT = (window.Capacitor && Capacitor.Plugins) || {};
+function fileZ() { try { return JSON.parse(localStorage.getItem('rrd.zelleFile') || '[]'); } catch (e) { return []; } }
+function sauverFileZ(l) {
+  localStorage.setItem('rrd.zelleFile', JSON.stringify(l));
+  if (NAT.Preferences) NAT.Preferences.set({ key: 'rrd.zelleFile', value: JSON.stringify(l) }).catch(function () { });   // copie de sécurité
+}
+function restaurerFileZ() {
+  if (!NAT.Preferences || localStorage.getItem('rrd.zelleFile') !== null) return Promise.resolve();
+  return NAT.Preferences.get({ key: 'rrd.zelleFile' }).then(function (x) { if (x && x.value) localStorage.setItem('rrd.zelleFile', x.value); }).catch(function () { });
+}
+function mettreEnAttente(p) {
+  var l = fileZ();
+  p.cid = p.cid || (Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+  l.push({ cid: p.cid, p: p, cree_le: new Date().toLocaleString('fr-FR'), etat: 'attente' });
+  sauverFileZ(l);
+  return { ok: false, queued: true };
+}
+var Z_SYNC = false;
+function envoyerFileZ() {
+  if (Z_SYNC || !zUrl()) return;
+  var l = fileZ(), a = l.filter(function (x) { return x.etat === 'attente'; });
+  if (!a.length) return;
+  Z_SYNC = true;
+  a.reduce(function (pr, x) {
+    return pr.then(function () {
+      return envoi('create', x.p).then(function (r) {
+        var l2 = fileZ(), y = l2.filter(function (z) { return z.cid === x.cid; })[0]; if (!y) return;
+        if (r.ok) { y.etat = 'envoye'; y.order = r.order; } else { y.etat = 'refuse'; y.erreur = r.error; }
+        sauverFileZ(l2);
+      });
+    });
+  }, Promise.resolve()).catch(function () { }).then(function () { Z_SYNC = false; if (TAB === 'create') { keep(); render(); } if (ME && ME.agent) loadMine(); });
+}
+function vFileZ() {
+  var l = fileZ(); if (!l.length) return '';
+  var h = '<div class="card warn"><h3>Ordres créés sans connexion</h3>';
+  l.slice().reverse().forEach(function (x) {
+    var p = x.p;
+    h += '<div style="border-bottom:1px dashed var(--line);padding:6px 0">' + esc(p.sender) + ' → ' + esc(p.recv) + ' · ' + esc(p.usd) + ' USD <span class="muted">(' + esc(x.cree_le) + ')</span><br>' +
+      (x.etat === 'attente' ? '⏳ En attente de connexion. <b>Pas encore de numéro de confirmation</b> : il apparaîtra ici.'
+        : x.etat === 'envoye' ? '✅ Envoyé. N° de confirmation : <b style="font-size:20px">' + esc(x.order && x.order.num) + '</b> · suivi ' + esc(x.order && x.order.track) + '<br><span class="muted">' + esc(x.order && x.order.state) + '</span>'
+        : '❌ Refusé : ' + esc(x.erreur)) +
+      (x.etat !== 'attente' ? ' <button class="mini sec" data-zdel="' + esc(x.cid) + '">Retirer</button>' : '') + '</div>';
+  });
+  return h + '<button class="sec" id="zSync">🔄 Envoyer maintenant</button></div>';
+}
+function telechargerPdf(r) {
+  var nom = r.name || 'rapport-zelle.pdf';
+  if (NAT.Filesystem && window.Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform()) {
+    return NAT.Filesystem.writeFile({ path: nom, directory: 'DOCUMENTS', data: r.data })
+      .then(function () { return 'PDF enregistré dans « Documents » : ' + nom + ' (' + r.n + ' ordres).'; }, function () { return 'Impossible d’enregistrer le PDF sur ce téléphone. Utilisez la version web.'; });
+  }
+  var b = atob(r.data), u = new Uint8Array(b.length); for (var i = 0; i < b.length; i++) u[i] = b.charCodeAt(i);
+  var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([u], { type: 'application/pdf' })); a.download = nom; document.body.appendChild(a); a.click(); a.remove();
+  return Promise.resolve('PDF téléchargé (' + r.n + ' ordres).');
+}
+
+function demarrer() {
+  if (!lireCfg('jeton')) { $('who').textContent = ''; return msg('Ce téléphone n’est pas encore enregistré. <a href="index.html">Retour à l’application</a>', 'warn'); }
+  api('init', {}, function (r) {
+    if (!r.ok) { $('who').textContent = ''; return msg(esc(r.error) + (r.reseau ? '<br>Le paiement d’un transfert demande internet : la banque doit confirmer. Vous pouvez quand même <b>créer</b> un ordre sans connexion quand la page a déjà été ouverte une fois.' : ''), r.reseau ? 'warn' : 'no'); }
+    ME = r; try { localStorage.setItem('rrd.zelleMe', JSON.stringify(r)); } catch (e) { }
+    $('who').textContent = (r.agent ? r.agent.name + (r.agent.type === 'US' ? ' — agent' : ' — station') : (r.lecture ? 'Comptabilité (lecture)' : 'Direction')) + ' — ' + r.user;
+    if (r.agent && r.agent.type === 'Station') { C.dir = 'UH'; }
+    go(r.agent ? agentTabs()[0][0] : 'hq');
+    envoyerFileZ();
+  });
+}
+/* Sans connexion : on garde l'écran « Créer » avec les réglages de la dernière connexion (le paiement, lui, demande toujours internet). */
+function demarrerHorsLigne() {
+  var me = null; try { me = JSON.parse(localStorage.getItem('rrd.zelleMe') || 'null'); } catch (e) { }
+  if (!me || !me.agent) return false;
+  ME = me; $('who').textContent = me.agent.name + ' — hors ligne';
+  go(agentTabs()[0][0]);
+  return true;
+}
+restaurerFileZ().then(function () {
+  if (navigator.onLine === false && demarrerHorsLigne()) return;
+  demarrer();
+});
+window.addEventListener('online', envoyerFileZ);
+document.addEventListener('resume', envoyerFileZ);
+setInterval(envoyerFileZ, 120000);
+
+// the screens this agent may use, as set by the direction (the server refuses the others too)
+function agentTabs() {
+  var a = ME.agent, t = [];
+  if (a.canCreate !== false) t.push(['create', a.canPay === false ? 'Créer' : '1 · Créer']);
+  if (a.canPay !== false) t.push(['pay', a.canCreate === false ? 'Payer' : '2 · Payer']);
+  if (a.canReport !== false) t.push(['rep', 'Rapport']);
+  return t;
+}
+function go(tab) {
+  stopCam(); TAB = tab; msg(''); show('act', false); ACT = null;
+  var tabs = ME.agent ? agentTabs() : [['hq', 'Direction'], ['rep', 'Rapports']];
+  $('nav').innerHTML = tabs.map(function (t) { return '<button data-tab="' + t[0] + '" class="' + (t[0] === TAB ? 'on' : '') + '">' + t[1] + '</button>'; }).join('');
+  render();
+  if (tab === 'create' && !C.mine) loadMine();
+  if (tab === 'pay' && ME.agent.type === 'US' && !C.mine) loadMine();
+  if (tab === 'pay' && P.mode === 'name' && ME.agent.nameList && !P.names) loadNames();
+  if (tab === 'hq' && !H) loadHq();
+  if (tab === 'rep' && !R.data) loadRep();
+}
+function render() { $('view').innerHTML = TAB === 'create' ? vCreate() : TAB === 'pay' ? vPay() : TAB === 'rep' ? vRep() : vHq(); }
+function loadMine() { api('mine', {}, function (r) { if (r.ok) { C.mine = r; if (TAB === 'create' || (TAB === 'pay' && !P.res && !val('pNum') && !val('pName'))) { keep(); render(); } } }); }
+function loadHq(btn) { api('hq', {}, function (r) { if (!r.ok) return msg(esc(r.error), 'no'); H = r; if (TAB === 'hq') render(); }, btn); }
+function loadRep(btn) { api('report', { agent: R.agent, from: R.from, to: R.to, status: R.status }, function (r) { if (!r.ok) return msg(esc(r.error), 'no'); R.data = r; if (TAB === 'rep') render(); }, btn); }
+// keep what is typed in the create form when the screen is redrawn
+function keep() { ['cSender', 'cUsd', 'cRecv', 'cContact'].forEach(function (k) { if ($(k)) C.f[k] = $(k).value; }); }
+
+// ---------- screen 1: create ----------
+function vCreate() {
+  var a = ME.agent, h = vFileZ();
+  if (C.last) {
+    var o = C.last, hu = o.dir === 'HU', cls = o.state === 'Prêt' ? 'ok' : 'warn';
+    h += '<div class="card ' + cls + '"><h3>Ordre créé — numéro de confirmation</h3><div class="big">' + esc(o.num) + '</div>' +
+      (hu ? '<div class="muted">À encaisser de l’expéditeur</div><div class="big" style="font-size:24px">' + esc(o.collectTxt) + ' gourdes</div>' : '') +
+      '<div>' + (o.state === 'Prêt' ? (hu ? '✅ Prêt : un agent aux USA va envoyer le transfert au bénéficiaire.' : '✅ Prêt : donnez ce numéro au bénéficiaire.')
+               : o.state === 'En attente du transfert' ? '⏳ En attente du transfert sur le compte HQ. Le numéro sera payable dès que la banque confirme.'
+               : '⚠ ' + esc(o.state) + '. La direction a été prévenue.') + '</div>' +
+      row('N° de suivi', esc(o.track)) + row('Sens', dirTxt(o.dir)) + row('Bénéficiaire', esc(o.recv) + ' — ' + esc(o.contact)) +
+      row(hu ? 'Payé par l’expéditeur' : 'Envoyé', esc(o.usd) + ' USD' + (hu ? ' × ' + esc(o.rate) : '')) + row('À payer au bénéficiaire', esc(o.netUsd) + (hu ? ' USD par virement' : ' USD en gourdes')) +
+      row('Frais', esc(o.feeUsd) + ' USD') + row('Votre commission (' + esc(o.createPct) + ' % des frais)', esc(o.commUsd) + ' USD') +
+      '<div class="muted" style="margin-top:6px">Le numéro de confirmation est secret : seul le bénéficiaire doit l’avoir. Le numéro de suivi peut être partagé.</div>' +
+      '<button class="sec" id="newOrder">Nouvel ordre</button></div>';
+  } else {
+    var hu2 = C.dir === 'HU', f = C.f;
+    h += '<div class="card"><h3>Créer un transfert</h3>' +
+      '<label>Sens du transfert</label><div class="seg"><button id="dUH" class="' + (hu2 ? '' : 'on') + '">USA → Haïti</button><button id="dHU" class="' + (hu2 ? 'on' : '') + '">Haïti → USA</button></div>' +
+      '<label>' + (hu2 ? 'Nom de l’expéditeur (prénom et nom)' : 'Nom du compte de l’expéditeur (prénom et nom)') + '</label><input id="cSender" autocomplete="off" value="' + esc(f.cSender) + '">' +
+      '<label>' + (hu2 ? 'Montant à remettre aux USA (USD, dollars entiers)' : 'Montant envoyé (USD)') + '</label><input id="cUsd" inputmode="decimal" value="' + esc(f.cUsd) + '">' +
+      (hu2 ? '<div class="muted" style="margin-top:6px">Les frais s’ajoutent : pour 250 USD à remettre, l’expéditeur paie 275 USD.' + (ME.rateHU ? ' Taux Haïti → USA : <b>' + esc(ME.rateHU) + '</b> gourdes pour 1 USD.' : ' <b>Aucun taux Haïti → USA : contactez la direction.</b>') + '</div>' : '') +
+      '<label>L’argent est reçu par</label><div class="seg"><button id="hHQ" class="' + (C.holder === 'HQ' ? 'on' : '') + '">Compte HQ</button><button id="hAG" class="' + (C.holder === 'AGENT' ? 'on' : '') + '">Moi (' + (a.type === 'US' ? 'agent' : 'station') + ')</button></div>' +
+      '<label>' + (hu2 ? 'Bénéficiaire aux USA (prénom et nom)' : 'Bénéficiaire en Haïti (prénom et nom)') + '</label><input id="cRecv" autocomplete="off" value="' + esc(f.cRecv) + '">' +
+      '<label>' + (hu2 ? 'Compte du bénéficiaire (téléphone ou e-mail)' : 'Téléphone du bénéficiaire') + '</label><input id="cContact" autocomplete="off" value="' + esc(f.cContact) + '">' +
+      '<button id="cGo">Créer et obtenir le numéro</button><div id="cErr" class="err"></div></div>';
+  }
+  var m = C.mine;
+  if (m) {
+    var b = Number(m.balanceUsd);
+    h += '<div class="card"><h3>Mon solde</h3><div class="muted">Argent encaissé et gardé, moins ce que j’ai payé de ma caisse, moins mes commissions.</div>' +
+      row(b >= 0 ? 'Je dois à HQ' : 'HQ me doit', '<b>' + Math.abs(b).toFixed(2) + ' USD</b>') + row('Ma limite de crédit', esc(m.limit) + ' USD') + '</div>' +
+      '<div class="card"><h3>Mes ordres</h3><table>' + (m.orders.length ? m.orders.map(function (o) {
+        return '<tr><td>' + esc(o.track) + (o.num ? '<br><b>' + esc(o.num) + '</b>' : '') + '<br><span class="muted">' + dirTxt(o.dir) + ' · ' + esc(o.recv || '—') + (o.paid && !o.mine ? ' · payé par moi' : '') + '</span></td><td>' + esc(o.usd) + ' USD</td><td>' + stTag(o.state) + '</td></tr>';
+      }).join('') : '<tr><td class="muted">Aucun ordre</td></tr>') + '</table></div>';
+  }
+  return h;
+}
+
+// ---------- screen 2: pay ----------
+// v3.7 : agents set on « liste » pick the sender in a list (no amounts shown) and type only the amount
+function vNames(q) {
+  var amt = '<label>Montant envoyé, selon le client (USD)</label><input id="pUsd" inputmode="decimal" autocomplete="off" value="' + esc(q.usd || '') + '"><div class="muted">Demandez le montant au client. ' + esc(ME.agent.tryMax) + ' montants incorrects bloquent ce nom.</div>';
+  if (P.pick) return '<label>1. Expéditeur choisi</label><div class="row"><span><b>✓ ' + esc(P.pick.name) + '</b> <span class="muted">' + esc(P.pick.at) + '</span></span><span><button type="button" class="mini sec" id="pUnpick">Changer</button></span></div>' + amt.replace('<label>', '<label>2. ');
+  if (!P.names) return '<div class="muted" style="margin-top:8px">Chargement de la liste…</div>';
+  return '<label>1. Touchez le nom de l’expéditeur donné par le client</label><input id="pFilter" autocomplete="off" placeholder="Chercher un nom">' +
+    '<div id="pList" style="max-height:240px;overflow:auto;margin-top:6px">' + (P.names.length ? P.names.map(function (n, i) {
+      return '<button type="button" class="sec" data-pick="' + i + '" data-n="' + esc(n.name.toLowerCase()) + '" style="display:block;width:100%;text-align:left;margin:4px 0"' + (n.locked ? ' disabled' : '') + '>' + esc(n.name) + ' <span class="muted">' + esc(n.at) + (n.locked ? ' · bloqué' : '') + '</span></button>'; }).join('')
+      : '<div class="muted">Aucun transfert à payer dans les ' + esc(ME.agent.listDays) + ' derniers jours.</div>') + '</div>' +
+    '<div class="muted">Transferts des ' + esc(ME.agent.listDays) + ' derniers jours. Nom absent : demandez le numéro de confirmation ou contactez la direction.</div><button type="button" class="sec" id="pReload">Actualiser la liste</button>' + amt.replace('<label>', '<label>2. ');
+}
+function loadNames(btn) { api('names', {}, function (r) { if (!r.ok) return msg(esc(r.error), 'no'); P.names = r.names; if (TAB === 'pay' && P.mode === 'name' && !P.pick && !P.res) { P.q = { usd: val('pUsd') }; render(); } }, btn); }
+function vPay() {
+  var us = ME.agent.type === 'US', q = P.q, h = '';
+  var todo = us && C.mine ? C.mine.todo : [];
+  h += '<div class="card"><h3>Payer un transfert</h3><div class="muted">' + (us ? 'Aux USA : vous envoyez le transfert au bénéficiaire, en USD.' : (ME.rateUH ? 'Taux du jour : <b>' + esc(ME.rateUH) + ' gourdes pour 1 USD</b>' : '<b>Aucun taux pour cette station : contactez la direction.</b>')) + '</div>' +
+    (us ? '<div class="muted" style="margin-top:6px">Ordres Haïti → USA à payer : ' + (todo.length ? todo.map(function (o) { return '<b>' + esc(o.track) + '</b> (' + esc(o.netUsd) + ' USD, ' + esc(o.recv) + ')'; }).join(', ') : 'aucun') + '</div>' : '') +
+    '<label>Le client a</label><div class="seg"><button id="mNum" class="' + (P.mode === 'num' ? 'on' : '') + '">Un numéro de confirmation</button><button id="mName" class="' + (P.mode === 'name' ? 'on' : '') + '">Nom et montant</button></div>' +
+    (P.mode === 'num' ? '<label>Numéro de confirmation</label><input id="pNum" inputmode="numeric" autocomplete="off" placeholder="ex. 4821-7305" value="' + esc(q.num) + '">'
+      : ME.agent.nameList ? vNames(q)
+      : '<label>Nom de l’expéditeur (prénom et nom)</label><input id="pName" autocomplete="off" value="' + esc(q.name) + '"><label>Montant (USD)</label><input id="pUsd" inputmode="decimal" value="' + esc(q.usd) + '">') +
+    '<button id="pGo">Vérifier</button><div id="pErr" class="err"></div></div>';
+  var back = '<button class="sec" id="pBack">Retour</button>';
+  if (P.done) {
+    var d = P.done;
+    h += '<div class="card ok"><h3>✅ Paiement enregistré</h3><div class="big" style="font-size:24px">' + esc(d.paidTxt) + '</div>' + row('N° de suivi', '<b>' + esc(d.track) + '</b>') + row('Heure', esc(d.paidAt)) + row('Votre commission de paiement', esc(d.commUsd) + ' USD') +
+      '<div class="muted">La direction a reçu la confirmation.</div>' + (d.photo === 'failed' ? '<div class="err">La photo de la pièce n’a pas été enregistrée. Le paiement, lui, est bien enregistré.</div>' : '') + '<button id="pBack">Nouveau client</button></div>';
+  } else if (P.res) {
+    var r = P.res, o = r.order;
+    if (r.result === 'unknown') h += '<div class="card no"><h3>⛔ Numéro inconnu — NE PAS PAYER</h3><div>Vérifiez le numéro avec le client.</div></div>';
+    else if (r.result === 'wrongamount') h += '<div class="card no"><h3>⛔ Montant incorrect — NE PAS PAYER</h3><div>Ce montant ne correspond pas à « ' + esc(P.pick ? P.pick.name : '') + ' ». Redemandez le montant exact au client. Il reste <b>' + esc(r.left) + ' essai</b> ; ensuite ce nom sera bloqué et la direction prévenue.</div></div>';
+    else if (r.result === 'locked') h += '<div class="card no"><h3>⛔ Nom bloqué — NE PAS PAYER</h3><div>Trop de montants incorrects pour « ' + esc(P.pick ? P.pick.name : '') + ' ». La direction a été prévenue ; elle seule peut débloquer ce nom.</div>' + back + '</div>';
+    else if (r.result === 'notfound') h += '<div class="card no"><h3>⛔ Pas encore reçu — NE PAS PAYER</h3><div>Aucun ordre et aucun transfert de ce montant à ce nom. Vérifiez le nom et le montant avec le client. La direction a été prévenue.</div></div>';
+    else if (r.result === 'many') h += '<div class="card warn"><h3>⚠ Plusieurs ordres — NE PAS PAYER</h3><div>Plusieurs ordres ont ce nom et ce montant. Demandez le numéro de confirmation au client.</div></div>';
+    else if (r.result === 'ambiguous') h += '<div class="card warn"><h3>⚠ À vérifier — NE PAS PAYER</h3><div>Plusieurs transferts correspondent. La direction a été prévenue.</div></div>';
+    else if (r.result === 'toosmall') h += '<div class="card warn"><h3>Montant trop petit</h3><div>Rien à payer après les frais.</div></div>';
+    else if (o.state === 'Payé') h += '<div class="card no"><h3>⛔ Déjà payé — NE PAS PAYER</h3><div>Suivi ' + esc(o.track) + ' : ' + esc(o.paidTxt) + ', ' + esc(o.paidBy) + ', ' + esc(o.paidAt) + '.</div>' + back + '</div>';
+    else if (o.state !== 'Prêt') h += '<div class="card warn"><h3>⚠ ' + esc(o.state) + ' — NE PAS PAYER</h3><div>Suivi ' + esc(o.track) + '. ' +
+      (o.state === 'En attente du transfert' ? 'La banque n’a pas encore confirmé ce transfert.' : o.state === 'Annulé' ? 'Cet ordre a été annulé.' : o.state === 'Taux manquant' ? 'La direction doit ajouter le taux de la station ; elle a été prévenue.' : 'La direction doit débloquer cet ordre ; elle a été prévenue.') + '</div>' + back + '</div>';
+    else if (!o.here) h += '<div class="card warn"><h3>⚠ Cet ordre se paie ' + (o.dir === 'HU' ? 'aux USA' : 'en Haïti') + ' — NE PAS PAYER ICI</h3><div>Suivi ' + esc(o.track) + ', ' + dirTxt(o.dir) + '.</div>' + back + '</div>';
+    else if (o.dir === 'HU') h += '<div class="card ok"><h3>✅ Ordre confirmé — envoyez le transfert</h3><div class="muted">À envoyer par virement</div><div class="big">' + esc(o.netUsd) + ' USD</div>' +
+      row('N° de suivi', esc(o.track)) + row('Bénéficiaire', '<b>' + esc(o.recv) + '</b>') + row('Compte du bénéficiaire', esc(o.contact)) + row('Expéditeur (Haïti)', esc(o.sender)) +
+      '<label>Référence du transfert envoyé (facultatif)</label><input id="pRef" autocomplete="off"><div id="payErr" class="err"></div>' +
+      '<button class="go" id="pPay">J’ai envoyé ' + esc(o.netUsd) + ' USD par virement</button><button class="sec" id="pBack">Annuler</button></div>';
+    else h += '<div class="card ok"><h3>✅ Ordre confirmé — vous pouvez payer</h3><div class="muted">À payer</div><div class="big">' + esc(o.gourdesTxt) + ' gourdes</div>' +
+      row('N° de suivi', esc(o.track)) +
+      (o.needRecv ? '<div class="muted" style="margin-top:6px">Client sans numéro : écrivez qui reçoit l’argent.</div><label>Bénéficiaire (prénom et nom)</label><input id="pRecv" autocomplete="off"><label>Téléphone du bénéficiaire</label><input id="pPhone" inputmode="tel" autocomplete="off">'
+                  : row('Bénéficiaire', '<b>' + esc(o.recv) + '</b>') + row('Téléphone', esc(o.contact))) +
+      row('Expéditeur', esc(o.sender)) + row('Envoyé', esc(o.usd) + ' USD') + row('Net', esc(o.netUsd) + ' USD × ' + esc(o.rate)) +
+      (o.needRecv ? '' : '<div class="muted" style="margin-top:8px">Vérifiez que la personne devant vous est bien le bénéficiaire (nom et téléphone).</div>') +
+      '<h3 style="margin-top:14px">Pièce d’identité du bénéficiaire (facultatif)</h3>' +
+      '<label>Type de pièce</label><select id="pIdType"><option value="">— aucune —</option><option>CIN</option><option>Passeport</option><option>Permis de conduire</option><option>Autre</option></select>' +
+      '<label>Numéro de la pièce</label><input id="pIdNum" autocomplete="off">' +
+      '<label>Photo de la pièce</label><div class="seg"><button type="button" class="sec" id="pCamBtn">📷 Prendre une photo</button><button type="button" class="sec" id="pGalBtn">🖼 Choisir dans la galerie</button></div>' +
+      '<input id="pIdPhoto" type="file" accept="image/*" capture="environment" class="hide"><input id="pIdPhotoGal" type="file" accept="image/*" class="hide">' +
+      '<div id="pCamBox" class="hide" style="margin-top:8px"><video id="pCamVideo" playsinline autoplay muted style="width:100%;border-radius:10px;background:#000"></video>' +
+      '<button type="button" class="go" id="pCamShot">Capturer la photo</button><button type="button" class="sec" id="pCamCancel">Fermer l’appareil photo</button></div>' +
+      '<div id="pPhotoInfo" class="muted" style="margin-top:6px">Aucune photo.</div>' +
+      (ME.agent.pin ? '<h3 style="margin-top:14px">Caissier</h3><label>Votre nom</label><select id="pCash"><option value="">— choisir —</option>' + (ME.cashiers || []).map(function (x) { return '<option value="' + esc(x.id) + '">' + esc(x.name) + '</option>'; }).join('') + '</select>' +
+        '<label>Votre code personnel (4 chiffres)</label><input id="pPin" type="password" inputmode="numeric" maxlength="4" autocomplete="off"><div class="muted">Ne donnez jamais votre code à un collègue : chaque paiement est enregistré à votre nom.</div>' : '') +
+      '<div id="payErr" class="err"></div><button class="go" id="pPay">J’ai payé ' + esc(o.gourdesTxt) + ' gourdes</button><button class="sec" id="pBack">Annuler</button>' +
+      '<div class="muted" style="margin-top:8px">Ne payez jamais une partie. Si la caisse ne suffit pas, envoyez le client à une autre station RRD : l’ordre reste payable.</div></div>';
+  }
+  return h;
+}
+
+// "Prendre une photo" opens the camera inside the page. Where the phone or the viewer refuses the camera,
+// it falls back to the phone's own picker (which usually offers the camera too).
+var CAM = null;
+function stopCam() {
+  if (CAM) { try { CAM.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {} CAM = null; }
+  if ($('pCamBox')) show('pCamBox', false);
+}
+// The camera could not open. Nothing is opened automatically: the cashier can try again (the first try often
+// fails while the phone is still granting the permission) or open the phone's own picker with the button shown.
+function camFailed(err) {
+  stopCam();
+  if (!$('pPhotoInfo')) return;
+  var why = err && (err.name || err.message) ? ' (' + (err.name || err.message) + ')' : '';
+  $('pPhotoInfo').innerHTML = 'L’appareil photo n’a pas pu s’ouvrir dans l’app' + esc(why) + '. Touchez encore « Prendre une photo » pour réessayer. ' +
+    'Si cela ne marche toujours pas, utilisez le sélecteur du téléphone et choisissez « Appareil photo ».<br><button type="button" class="mini sec" id="pPickBtn">Ouvrir le sélecteur du téléphone</button>';
+}
+function startCam(retry) {
+  var md = navigator.mediaDevices;
+  if (!md || !md.getUserMedia) return $('pIdPhoto').click();          // very old browser: only the picker exists
+  if ($('pPhotoInfo')) $('pPhotoInfo').textContent = 'Ouverture de l’appareil photo…';
+  md.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false }).then(function (st) {
+    if (!$('pCamVideo')) { st.getTracks().forEach(function (t) { t.stop(); }); return; }
+    stopCam(); CAM = st; var v = $('pCamVideo'); v.srcObject = st; show('pCamBox', true);
+    var pl = v.play && v.play(); if (pl && pl.catch) pl.catch(function () {});
+    $('pPhotoInfo').textContent = 'Cadrez la pièce, puis touchez « Capturer la photo ».';
+  }).catch(function (err) {
+    // right after the permission is granted the first request can still fail: try once more by itself
+    if (!retry) return setTimeout(function () { if ($('pCamVideo') && !CAM) startCam(true); }, 700);
+    camFailed(err);
+  });
+}
+function shootCam() {
+  var v = $('pCamVideo'), w = v.videoWidth, h = v.videoHeight;
+  if (!w || !h) return $('pPhotoInfo').textContent = 'L’image n’est pas encore prête. Attendez une seconde et touchez « Capturer la photo ».';
+  var k = Math.min(1, 1280 / Math.max(w, h)), c = document.createElement('canvas');
+  c.width = Math.round(w * k); c.height = Math.round(h * k);
+  c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+  var b64 = c.toDataURL('image/jpeg', 0.7).split(',')[1] || '';
+  stopCam();
+  if (!b64) return $('pPhotoInfo').textContent = 'La photo n’a pas pu être prise. Réessayez ou choisissez dans la galerie.';
+  P.photoB64 = b64; P.photoFile = null;
+  $('pPhotoInfo').innerHTML = '✓ Photo prise avec l’appareil photo <button type="button" class="mini sec" id="pPhotoDel">Retirer</button>';
+}
+
+// Shrinks the ID photo in the phone before sending (longest side 1280 px, JPEG).
+function readPhoto(file, cb) {
+  if (!file) return cb('');
+  var fr = new FileReader();
+  fr.onerror = function () { cb(null); };
+  fr.onload = function () {
+    var img = new Image();
+    img.onerror = function () { cb(null); };
+    img.onload = function () {
+      var k = Math.min(1, 1280 / Math.max(img.width, img.height)), c = document.createElement('canvas');
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      cb(c.toDataURL('image/jpeg', 0.7).split(',')[1] || null);
+    };
+    img.src = fr.result;
+  };
+  fr.readAsDataURL(file);
+}
+
+function doPay(btn) {
+  var o = P.res.order, p = { track: o.track };
+  $('payErr').textContent = '';
+  if (o.dir === 'HU') {
+    p.zelleRef = val('pRef');
+    if (!confirm('Confirmez : vous avez envoyé ' + o.netUsd + ' USD par virement à ' + o.recv + ' ?')) return;
+    return sendPay(p, btn);
+  }
+  p.gourdes = o.gourdes; p.idType = val('pIdType'); p.idNum = val('pIdNum');
+  if (o.needRecv) {
+    p.recvName = val('pRecv'); p.recvPhone = val('pPhone');
+    if (p.recvName.split(/\s+/).length < 2) return $('payErr').textContent = 'Écrivez le prénom et le nom de la personne qui reçoit l’argent.';
+    if (p.recvPhone.replace(/\D/g, '').length < 8) return $('payErr').textContent = 'Écrivez son téléphone (8 chiffres ou plus).';
+  }
+  if (ME.agent.pin) {
+    p.cashier = val('pCash'); p.pin = val('pPin');
+    if (!p.cashier) return $('payErr').textContent = 'Choisissez votre nom de caissier.';
+    if (!/^\d{4}$/.test(p.pin)) return $('payErr').textContent = 'Écrivez votre code personnel (4 chiffres).';
+  }
+  if (p.idNum && !p.idType) return $('payErr').textContent = 'Choisissez le type de pièce.';
+  if (p.idType && p.idNum.length < 4) return $('payErr').textContent = 'Écrivez le numéro de la pièce.';
+  if (!confirm('Confirmez : vous avez remis ' + o.gourdesTxt + ' gourdes à ' + (o.recv || p.recvName) + ' ?')) return;
+  stopCam();
+  if (P.photoB64) { p.photo = P.photoB64; return sendPay(p, btn); }
+  var file = P.photoFile || null;
+  btn.disabled = true;
+  readPhoto(file, function (b64) {
+    if (b64 === null && !confirm('La photo n’a pas pu être lue. Enregistrer le paiement sans photo ?')) { btn.disabled = false; return; }
+    p.photo = b64 || ''; sendPay(p, btn);
+  });
+}
+function sendPay(p, btn) {
+  api('pay', p, function (r) {
+    if (!r.ok) { if ($('pPin')) $('pPin').value = ''; return $('payErr') ? $('payErr').textContent = r.error : msg(esc(r.error), 'no'); }
+    if (r.result === 'paid') { P.done = r; P.res = null; P.q = {}; P.photoFile = null; P.photoB64 = ''; render(); return loadMine(); }
+    P.res = { result: 'order', order: { track: p.track, state: r.result === 'already' ? 'Payé' : r.state, paidTxt: '', paidBy: r.paidBy, paidAt: r.paidAt, dir: P.res.order.dir, here: true } };
+    render();
+  }, btn);
+}
+
+// ---------- reports ----------
+function vRep() {
+  var d = R.data, hq = !ME.agent;
+  var h = '<div class="card"><h3>Rapport des transferts</h3>' +
+    (hq ? '<label>Agent ou station</label><select id="fAgent"><option value="">Tous</option>' + (d && d.agents ? d.agents.map(function (a) { return '<option value="' + esc(a.code) + '"' + (R.agent === a.code ? ' selected' : '') + '>' + esc(a.name) + '</option>'; }).join('') : '') +
+            '<option value="DIRECT"' + (R.agent === 'DIRECT' ? ' selected' : '') + '>Clients directs (sans agent)</option></select>' : '<div class="muted">Vos ordres : créés ou payés par vous.</div>') +
+    '<label>Du</label><input id="fFrom" type="date" value="' + esc(R.from) + '"><label>Au</label><input id="fTo" type="date" value="' + esc(R.to) + '">' +
+    '<label>Statut</label><select id="fStatus">' + [['', 'Tous'], ['paid', 'Payés'], ['open', 'Non payés'], ['cancel', 'Annulés']].map(function (x) { return '<option value="' + x[0] + '"' + (R.status === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('') + '</select>' +
+    '<button id="fPdf">Télécharger le rapport en PDF</button><div id="fMsg" class="muted">' + esc(R.msg) + '</div></div>';
+  if (!d) return h + '<div class="card muted">Chargement…</div>';
+  var t = d.totals;
+  h += '<div class="card"><h3>' + esc(d.title) + '</h3>' + row('Ordres', t.n + ' (' + t.paid + ' payés)') + row('Montant', esc(t.usd) + ' USD') +
+    (d.own ? row('Ma commission de création', esc(t.cc) + ' USD') + row('Ma commission de paiement', esc(t.cp) + ' USD')
+           : row('Commission création', esc(t.cc) + ' USD') + row('Commission paiement', esc(t.cp) + ' USD') + row('Commission HQ', esc(t.ch) + ' USD') + row('Résultat de change', (t.fx >= 0 ? 'gain ' : 'PERTE ') + fmtG(Math.abs(t.fx)) + ' gdes')) +
+    '<div style="overflow-x:auto"><table><tr><th>Suivi</th><th>Date</th><th>Sens</th><th>Créé</th><th>Payé par</th><th>USD</th><th>Statut</th></tr>' +
+    (d.rows.length ? d.rows.map(function (o) { return '<tr><td>' + esc(o.track) + '</td><td>' + esc(o.date.slice(5)) + '</td><td>' + (o.dir === 'HU' ? 'H→US' : 'US→H') + '</td><td>' + esc(o.agent) + '</td><td>' + esc(o.payer) + '</td><td>' + esc(o.usd) + '</td><td>' + stTag(o.state) + '</td></tr>'; }).join('')
+      : '<tr><td colspan="7" class="muted">Aucun ordre pour ces filtres</td></tr>') + '</table></div></div>';
+  return h;
+}
+function fmtG(n) { return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' '); }
+
+// ---------- direction ----------
+function btn(kind, x, label, cls) { var id = x.track || x.id; ROWS[id] = x; return '<button class="mini ' + (cls || 'sec') + '" data-k="' + kind + '" data-id="' + esc(id) + '">' + label + '</button>'; }
+function vHq() {
+  if (!H) return '<div class="card muted">Chargement…</div>';
+  ROWS = {};
+  var t = H.today, h = '';
+  h += '<div class="card"><h3>Aujourd’hui</h3>' + row('Ordres payés', t.n + ' — ' + esc(t.usd) + ' USD') + row('Commission HQ', esc(t.hqUsd) + ' USD') + row('Résultat de change', (t.fx >= 0 ? 'gain ' : 'PERTE ') + fmtG(Math.abs(t.fx)) + ' gdes') + '</div>';
+  h += '<div class="card"><h3>Ordres ouverts</h3><table>' + (H.open.length ? H.open.map(function (o) {
+      return '<tr><td>' + esc(o.track) + '<br><span class="muted">' + dirTxt(o.dir) + ' · ' + esc(o.agent) + ' · ' + esc(o.at) + '</span></td><td>' + esc(o.usd) + ' USD<br>' + stTag(o.state) + '</td><td>' +
+        (o.state.indexOf('À approuver') === 0 ? btn('approve', o, 'Approuver', '') : '') + btn('cancel', o, 'Annuler', 'danger') + '</td></tr>'; }).join('') : '<tr><td class="muted">Aucun</td></tr>') + '</table></div>';
+  h += '<div class="card"><h3>Agents et stations</h3><div class="muted">Parts en % des frais de chaque ordre ; HQ garde le reste. Solde : ce que l’agent doit à HQ, ou ce que HQ lui doit.</div><table><tr><th>Agent</th><th>Création</th><th>Paiement</th><th>Limite</th><th>Solde USD</th></tr>' +
+    H.agents.map(function (a) { var b = Number(a.balanceUsd);
+      return '<tr><td>' + esc(a.name) + '<br><span class="muted">' + esc(a.code) + ' · ' + (a.type === 'US' ? 'USA' : a.rrd ? 'Station RRD' : 'Haïti (groupe)') + (a.active ? '' : ' · inactif') + (a.type !== 'US' && !a.hasGroup ? ' · groupe manquant' : '') + (!a.canCreate ? ' · payer seulement' : !a.canPay ? ' · créer seulement' : '') + (a.canReport ? '' : ' · sans rapport') + (a.nameList ? ' · liste de noms' : '') + (a.pin ? ' · code caissier' : '') + '</span><br><button class="mini sec" data-edit="' + esc(a.code) + '">Modifier</button>' +
+        (a.hasGroup ? '<button class="mini sec" data-sendbtn="' + esc(a.code) + '">Envoyer le bouton au groupe</button>' : '') + '</td><td>' + esc(a.createPct) + ' %</td><td>' + esc(a.payPct) + ' %</td><td>' + esc(a.limit) + '</td><td><b>' + Math.abs(b).toFixed(2) + '</b><br><span class="muted">' + (b > 0 ? 'doit à HQ' : b < 0 ? 'HQ lui doit' : 'à zéro') + '</span>' +
+        (b ? '<br><button class="mini sec" data-settle="' + esc(a.code) + '">' + (b > 0 ? 'Règlement reçu' : 'HQ a payé') + '</button>' : '') + '</td></tr>'; }).join('') + '</table>' +
+    '<button class="sec" data-edit="">Ajouter un agent</button></div>';
+  if (EDIT) {
+    var e = EDIT, st = e.type === 'Station';
+    h += '<div class="card warn" id="agForm"><h3>' + (e.isNew ? 'Nouvel agent' : 'Modifier ' + esc(e.name)) + '</h3>' +
+      (e.isNew ? '<label>Où est l’agent ?</label><div class="seg"><button id="aTypeUS" class="' + (st ? '' : 'on') + '">Aux USA</button><button id="aTypeHT" class="' + (st ? 'on' : '') + '">En Haïti (groupe Telegram)</button></div>' +
+                 '<label>Code (2 à 8 lettres ou chiffres, ex. ' + (st ? 'KADO' : 'MIA') + ')</label><input id="aCode" autocomplete="off" value="' + esc(e.code || '') + '"><label>Nom</label><input id="aName" autocomplete="off" value="' + esc(e.name || '') + '">' : '') +
+      (st ? (e.rrd ? '' : '<label>ID du groupe Telegram (nombre négatif)</label><input id="aGrp" autocomplete="off" value="' + esc(e.groupId) + '"><div class="muted">Ajoutez d’abord @rrdadminbot au groupe. Pour trouver l’ID : ouvrez le groupe dans Telegram Web (web.telegram.org) ; c’est le nombre à la fin de l’adresse, par exemple -1001234567890. Les membres de ce groupe pourront créer et payer des transferts.</div>')
+          : '<label>ID Telegram de l’agent (chiffres)</label><input id="aTg" inputmode="numeric" value="' + esc(e.tgId) + '"><div class="muted">L’agent trouve son ID en écrivant à @userinfobot dans Telegram.</div>') +
+      '<label>Part création (% des frais)</label><input id="aCp" inputmode="decimal" value="' + esc(e.createPct) + '"><label>Part paiement (% des frais)</label><input id="aPp" inputmode="decimal" value="' + esc(e.payPct) + '">' +
+      '<label>Limite de crédit (USD)</label><input id="aLim" inputmode="decimal" value="' + esc(e.limit) + '">' +
+      '<label>Peut créer des ordres</label><select id="aCanC"><option value="1"' + (e.canCreate !== false ? ' selected' : '') + '>Oui</option><option value="0"' + (e.canCreate === false ? ' selected' : '') + '>Non</option></select>' +
+      '<label>Peut payer des ordres</label><select id="aCanP"><option value="1"' + (e.canPay !== false ? ' selected' : '') + '>Oui</option><option value="0"' + (e.canPay === false ? ' selected' : '') + '>Non</option></select>' +
+      '<label>Peut voir le rapport</label><select id="aCanR"><option value="1"' + (e.canReport !== false ? ' selected' : '') + '>Oui</option><option value="0"' + (e.canReport === false ? ' selected' : '') + '>Non</option></select>' +
+      (st ? '<label>Pour payer par nom, l’agent</label><select id="aList"><option value="0"' + (e.nameList ? '' : ' selected') + '>Écrit le nom complet et le montant</option><option value="1"' + (e.nameList ? ' selected' : '') + '>Choisit le nom dans une liste, puis écrit le montant</option></select><div class="muted">Avec la liste : l’agent voit le nom de tous les expéditeurs des 7 derniers jours, sans les montants. 2 montants incorrects bloquent le nom et vous êtes prévenu.</div>' : '') +
+      (st ? '<label>Code personnel du caissier pour payer</label><select id="aPin"><option value="0"' + (e.pin ? '' : ' selected') + '>Non</option><option value="1"' + (e.pin ? ' selected' : '') + '>Oui — chaque caissier choisit son nom et écrit son code</option></select><div class="muted">Pour une station dont tous les employés utilisent le même téléphone. Enregistrez d’abord les caissiers dans la carte « Caissiers ».</div>' : '') +
+      '<div class="muted">Pour « payer seulement » : mettez « Peut créer » sur Non. L’écran disparaît pour cet agent et le serveur refuse aussi l’action.</div>' +
+      '<label>Actif</label><select id="aAct"><option value="1"' + (e.active ? ' selected' : '') + '>Oui</option><option value="0"' + (e.active ? '' : ' selected') + '>Non</option></select>' +
+      '<button id="aSave">Enregistrer</button><button class="sec" id="aCancel">Annuler</button><div id="aErr" class="err"></div></div>';
+  }
+  h += '<div class="card"><h3>Caissiers (code personnel)</h3><div class="muted">Pour les stations où tout le monde utilise le même téléphone. Le code n’est jamais affiché ni écrit en clair ; pour le changer, « Modifier » et écrire un nouveau code.</div><table>' +
+    (H.cashiers && H.cashiers.length ? H.cashiers.map(function (x) { return '<tr><td>' + esc(x.name) + '<br><span class="muted">' + esc(x.agentName) + (x.active ? '' : ' · inactif') + '</span></td><td><button class="mini sec" data-cash="' + esc(x.id) + '">Modifier</button></td></tr>'; }).join('') : '<tr><td class="muted">Aucun caissier enregistré</td></tr>') + '</table>' +
+    '<button class="sec" data-cash="">Ajouter un caissier</button></div>';
+  if (CEDIT) {
+    var ce = CEDIT;
+    h += '<div class="card warn" id="cashForm"><h3>' + (ce.id ? 'Modifier ' + esc(ce.name) : 'Nouveau caissier') + '</h3>' +
+      '<label>Station ou agent en Haïti</label><select id="cAg">' + H.agents.filter(function (a) { return a.type !== 'US'; }).map(function (a) { return '<option value="' + esc(a.code) + '"' + (a.code === ce.agent ? ' selected' : '') + '>' + esc(a.name) + '</option>'; }).join('') + '</select>' +
+      '<label>Nom du caissier</label><input id="cName" autocomplete="off" value="' + esc(ce.name || '') + '">' +
+      '<label>' + (ce.id ? 'Nouveau code (4 chiffres) — laissez vide pour garder le code actuel' : 'Code personnel (4 chiffres)') + '</label><input id="cPin" type="password" inputmode="numeric" maxlength="4" autocomplete="off">' +
+      '<div class="muted">Donnez le code au caissier en personne, jamais dans un groupe.</div>' +
+      '<label>Actif</label><select id="cAct"><option value="1"' + (ce.active !== false ? ' selected' : '') + '>Oui</option><option value="0"' + (ce.active === false ? ' selected' : '') + '>Non</option></select>' +
+      '<button id="cSave">Enregistrer</button><button class="sec" id="cCancel">Annuler</button><div id="cErr" class="err"></div></div>';
+  }
+  h += '<div class="card"><h3>Taux de change (en vigueur aujourd’hui)</h3><table>' + H.rates.map(function (x) { return '<tr><td>' + esc(x.station) + '</td><td><b>' + (x.rate ? esc(x.rate) : '—') + '</b>' + (x.since ? ' <span class="muted">depuis ' + esc(x.since) + '</span>' : '') + (x.next ? '<br><span class="muted">prochain : ' + esc(x.next) + '</span>' : '') + '</td></tr>'; }).join('') + '</table>' +
+    '<div class="muted" style="margin-top:6px">Stations : gourdes payées au client pour 1 USD (USA → Haïti). « Haïti → USA » : gourdes demandées au client pour 1 USD. « Banque / fournisseur » : gourdes que vaut 1 USD quand la banque ou le fournisseur prend le dollar.</div>' +
+    '<label>Taux à changer</label><select id="rStation"><option value="*">Tous les agents en Haïti (USA → Haïti)</option>' + H.rateKeys.map(function (s) { return '<option>' + esc(s) + '</option>'; }).join('') + '</select>' +
+    '<label>Date d’effet</label><input id="rDate" type="date" value="' + new Date(Date.now() - 5 * 3600000).toISOString().slice(0, 10) + '"><label>Taux (gourdes pour 1 USD)</label><input id="rRate" inputmode="decimal">' +
+    '<button id="btnRate">Enregistrer le taux</button><div class="muted">Un taux reste valable jusqu’à la prochaine date d’effet. Les anciens taux ne sont jamais modifiés.</div><div id="rErr" class="err"></div></div>';
+  h += '<div class="card"><h3>Paiements récents (3 jours)</h3><div class="muted">« Annuler ce paiement » seulement s’il a été enregistré par erreur.</div><table>' + (H.recent.length ? H.recent.map(function (o) {
+      return '<tr><td>' + esc(o.track) + '<br><span class="muted">' + esc(o.paidAt) + ' · ' + esc(o.payer) + '</span></td><td>' + esc(o.usd) + ' USD → ' + esc(o.paidTxt) + '<br><span class="muted">remis à ' + esc(o.recv) + (o.idTxt ? ', ' + esc(o.idTxt) : '') + (o.hasPhoto ? ', photo ✓' : '') + '</span><br>' + btn('cancelPay', o, 'Annuler ce paiement', 'danger') + '</td></tr>'; }).join('') : '<tr><td class="muted">Aucun</td></tr>') + '</table></div>';
+  if (H.locks && H.locks.length) h += '<div class="card warn"><h3>Montants ou codes incorrects</h3><div class="muted">« Débloquer » remet le compteur à zéro (nom de la liste pour cet agent, ou caissier).</div><table>' + H.locks.map(function (x) {
+      return '<tr><td>' + esc(x.at) + '</td><td>' + esc(x.name) + '<br><span class="muted">' + esc(x.agent) + '</span><br>' + btn('unlock', { id: x.id, txt: x.name + ' — ' + x.agent + '.' }, 'Débloquer') + '</td><td>' + esc(x.kind === 'code' ? 'code caissier' : 'montant') + '<br>' + (x.locked ? '<b>bloqué</b>' : esc(x.n) + ' essai') + '</td></tr>'; }).join('') + '</table></div>';
+  h += '<div class="card"><h3>Transferts reçus sans ordre</h3><div class="muted">« Hors station » : ce transfert n’est pas un transfert ; personne ne pourra le payer.</div><table>' + (H.available.length ? H.available.map(function (x) {
+      return '<tr><td>' + esc(x.at) + '</td><td>' + esc(x.name) + (x.manual ? ' <span class="muted">(manuel)</span>' : '') + '<br>' + btn('setAside', x, 'Hors station') + '</td><td>' + esc(x.usd) + ' USD</td></tr>'; }).join('') : '<tr><td class="muted">Aucun</td></tr>') + '</table></div>';
+  h += '<div class="card"><h3>Hors station</h3><table>' + (H.aside.length ? H.aside.map(function (x) { return '<tr><td>' + esc(x.at) + '</td><td>' + esc(x.name) + '<br>' + btn('restore', x, 'Remettre disponible') + '</td><td>' + esc(x.usd) + ' USD</td></tr>'; }).join('') : '<tr><td class="muted">Aucun</td></tr>') + '</table></div>';
+  h += '<div class="card"><h3>Confirmer un transfert à la main</h3><div class="muted">Seulement après l’avoir vu sur le compte Bank of America (SMS manquant ou téléphone éteint).</div>' +
+    '<label>Nom de l’expéditeur</label><input id="mName2" autocomplete="off"><label>Montant reçu (USD)</label><input id="mUsd" inputmode="decimal"><label>Note (facultatif)</label><input id="mNote" autocomplete="off">' +
+    '<button id="btnMan" class="sec">Confirmer comme reçu</button><div id="mErr" class="err"></div></div><button class="sec" id="btnRefresh">Actualiser</button>';
+  return h;
+}
+
+// One confirmation panel for the direction actions (no browser pop-up needed).
+var ACTS = {
+  approve:   { title: 'Approuver cet ordre', text: 'Seulement après avoir vérifié l’argent. L’ordre pourra ensuite être payé.' },
+  cancel:    { title: 'Annuler cet ordre', text: 'L’ordre ne pourra plus être payé. Le transfert lié redevient disponible.', input: 'Raison (obligatoire)', field: 'reason', need: 1 },
+  cancelPay: { title: 'Annuler ce paiement', text: 'L’ordre redevient payable. Le paiement annulé reste écrit dans « Demandes Zelle ».', input: 'Raison (obligatoire)', field: 'reason', need: 1 },
+  setAside:  { title: 'Marquer « Hors station »', text: 'Ce transfert ne pourra pas être payé.', input: 'Note (facultatif) — ex. All in 1, client propane', field: 'note' },
+  unlock:    { title: 'Débloquer', text: 'Le compteur d’essais incorrects est remis à zéro.' },
+  restore:   { title: 'Remettre « Disponible »', text: 'Ce transfert pourra de nouveau être payé.' },
+  settle:    { title: 'Règlement', text: '', input: 'Montant en USD', field: 'usd', need: 1 },
+  sendButton: { title: 'Envoyer le bouton dans le groupe', text: 'Le robot va écrire ce message dans le groupe, avec le bouton « 💸 Transferts RRD » : « Pour créer ou payer un transfert, passez toujours par ce bouton. Ne payez jamais sur une simple capture d’écran : payez seulement si l’app affiche ✅. »' }
+};
+function openAct(kind, x, text, preset) {
+  var a = ACTS[kind]; ACT = { kind: kind, x: x, a: a };
+  $('actTitle').textContent = a.title; $('actText').textContent = text + ' ' + a.text;
+  show('actInputWrap', !!a.input); $('actLabel').textContent = a.input || ''; $('actInput').value = preset || ''; $('actErr').textContent = '';
+  show('act', true); if ($('act').scrollIntoView) $('act').scrollIntoView({ block: 'center' });
+}
+$('actNo').onclick = function () { ACT = null; show('act', false); };
+$('actOk').onclick = function () {
+  if (!ACT) return;
+  var p = {}, v = $('actInput').value.trim(), k = ACT.kind;
+  if (ACT.a.need && v.length < (k === 'settle' ? 1 : 5)) return $('actErr').textContent = k === 'settle' ? 'Écrivez le montant.' : 'Écrivez la raison.';
+  if (k === 'settle') { p.agent = ACT.x.code; p.usd = (ACT.x.sign < 0 ? '-' : '') + v.replace(/^-/, ''); p.note = ACT.x.sign < 0 ? 'HQ a payé l’agent' : 'Règlement reçu de l’agent'; }
+  else if (k === 'sendButton') p.agent = ACT.x.code;
+  else { if (ACT.x.track) p.track = ACT.x.track; else p.id = ACT.x.id; if (ACT.a.field) p[ACT.a.field] = v; }
+  api(k, p, function (r) { if (!r.ok) return $('actErr').textContent = r.error; ACT = null; show('act', false); H = r; render(); if (r.sent) msg('✅ Bouton envoyé dans le groupe « ' + esc(r.sent) + ' ».', 'ok'); }, this);
+};
+
+// ---------- events ----------
+document.addEventListener('click', function (e) {
+  var b = e.target.closest ? e.target.closest('button') : null; if (!b) return;
+  var d = function (k) { return b.getAttribute(k); };
+  if (d('data-tab')) return go(d('data-tab'));
+  // screen 1
+  if (b.id === 'dUH' || b.id === 'dHU') { keep(); C.dir = b.id === 'dHU' ? 'HU' : 'UH'; C.holder = C.dir === 'HU' ? 'AGENT' : 'HQ'; return render(); }
+  if (b.id === 'hHQ' || b.id === 'hAG') { keep(); C.holder = b.id === 'hHQ' ? 'HQ' : 'AGENT'; return render(); }
+  if (b.id === 'cGo') {
+    keep(); $('cErr').textContent = '';
+    return api('create', { dir: C.dir, sender: val('cSender'), usd: val('cUsd'), holder: C.holder, recv: val('cRecv'), contact: val('cContact') }, function (r) {
+      if (r.queued) { C.f = {}; C.holder = 'HQ'; C.dir = 'UH'; render(); return msg('⏳ Pas de connexion : l’ordre est gardé sur le téléphone et sera envoyé tout seul. Le numéro de confirmation apparaîtra dans « Ordres créés sans connexion ». <b>Ne le refaites pas.</b>', 'warn'); }
+      if (!r.ok) return $('cErr') ? $('cErr').textContent = r.error : msg(esc(r.error), 'no');
+      C.last = r.order; C.f = {}; C.holder = 'HQ'; C.dir = 'UH'; render(); loadMine();
+    }, b);
+  }
+  if (b.id === 'newOrder') { C.last = null; return render(); }
+  if (b.id === 'zSync') { msg(''); return envoyerFileZ(); }
+  if (b.hasAttribute('data-zdel')) { sauverFileZ(fileZ().filter(function (x) { return x.cid !== d('data-zdel'); })); return render(); }
+  // screen 2
+  if (b.id === 'mNum' || b.id === 'mName') { P.mode = b.id === 'mNum' ? 'num' : 'name'; P.res = null; P.done = null; P.pick = null; render(); if (P.mode === 'name' && ME.agent.nameList) loadNames(); return; }
+  if (b.id === 'pReload') return loadNames(b);
+  if (b.id === 'pUnpick') { P.pick = null; P.res = null; P.q = { usd: val('pUsd') }; render(); return loadNames(); }
+  if (b.hasAttribute('data-pick')) { P.pick = P.names[Number(d('data-pick'))]; P.res = null; P.q = { usd: val('pUsd') }; render(); if ($('pUsd')) $('pUsd').focus(); return; }
+  if (b.id === 'pGo') {
+    $('pErr').textContent = ''; P.done = null; P.photoFile = null; P.photoB64 = ''; stopCam();
+    var lst = P.mode === 'name' && ME.agent.nameList;
+    var q = P.mode === 'num' ? { num: val('pNum') } : lst ? { pick: P.pick ? P.pick.key : '', usd: val('pUsd') } : { name: val('pName'), usd: val('pUsd') };
+    if (P.mode === 'num' && q.num.replace(/\D/g, '').length !== 8) return $('pErr').textContent = 'Le numéro a 8 chiffres.';
+    if (lst && !q.pick) return $('pErr').textContent = 'Touchez d’abord le nom de l’expéditeur dans la liste.';
+    if (lst && !q.usd) return $('pErr').textContent = 'Écrivez le montant.';
+    if (P.mode === 'name' && !lst && (q.name.split(/\s+/).length < 2 || !q.usd)) return $('pErr').textContent = 'Écrivez le prénom, le nom et le montant.';
+    P.q = q;
+    return api('lookup', q, function (r) { if (!r.ok) return $('pErr') ? $('pErr').textContent = r.error : msg(esc(r.error), 'no'); P.res = r; render(); }, b);
+  }
+  if (b.id === 'pCamBtn') return startCam();
+  if (b.id === 'pPickBtn') return $('pIdPhoto').click();
+  if (b.id === 'pCamShot') return shootCam();
+  if (b.id === 'pCamCancel') { stopCam(); $('pPhotoInfo').textContent = P.photoFile || P.photoB64 ? '✓ Photo déjà choisie.' : 'Aucune photo.'; return; }
+  if (b.id === 'pGalBtn') { stopCam(); return $('pIdPhotoGal').click(); }
+  if (b.id === 'pPhotoDel') { P.photoFile = null; P.photoB64 = ''; $('pIdPhoto').value = ''; $('pIdPhotoGal').value = ''; $('pPhotoInfo').textContent = 'Aucune photo.'; return; }
+  if (b.id === 'pPay') return doPay(b);
+  if (b.id === 'pBack') { stopCam(); P.res = null; P.done = null; P.q = {}; P.pick = null; P.names = null; P.photoFile = null; P.photoB64 = ''; render(); if (P.mode === 'name' && ME.agent.nameList) loadNames(); return; }
+  // reports
+  if (b.id === 'fPdf') { R.msg = ''; return api('pdf', { agent: R.agent, from: R.from, to: R.to, status: R.status }, function (r) {
+      if (!r.ok) { R.msg = r.error; if ($('fMsg')) $('fMsg').textContent = R.msg; return; }
+      telechargerPdf(r).then(function (t) { R.msg = t; if ($('fMsg')) $('fMsg').textContent = t; });
+    }, b); }
+  // direction
+  if (b.id === 'btnRefresh') return loadHq(b);
+  if (d('data-k')) { var x = ROWS[d('data-id')]; if (!x) return; return openAct(d('data-k'), x, x.txt || ((x.track ? 'Suivi ' + x.track : x.name) + ' — ' + x.usd + ' USD.')); }
+  if (d('data-settle')) { var ag = H.agents.filter(function (a) { return a.code === d('data-settle'); })[0], bal = Number(ag.balanceUsd);
+    return openAct('settle', { code: ag.code, sign: bal > 0 ? 1 : -1 }, ag.name + ' : ' + (bal > 0 ? 'doit ' + bal.toFixed(2) + ' USD à HQ. Montant reçu de l’agent :' : 'HQ lui doit ' + (-bal).toFixed(2) + ' USD. Montant payé à l’agent :'), Math.abs(bal).toFixed(2)); }
+  if (b.hasAttribute('data-edit')) { var code = d('data-edit'), a0 = H.agents.filter(function (a) { return a.code === code; })[0];
+    EDIT = a0 ? { code: a0.code, name: a0.name, type: a0.type, rrd: a0.rrd, groupId: a0.groupId, canCreate: a0.canCreate, canPay: a0.canPay, canReport: a0.canReport, nameList: a0.nameList, pin: a0.pin, tgId: a0.tgId, createPct: a0.createPct, payPct: a0.payPct, limit: a0.limit, active: a0.active } : { isNew: true, type: 'US', tgId: '', groupId: '', createPct: 0, payPct: 0, limit: 0, active: true };
+    render(); if ($('agForm').scrollIntoView) $('agForm').scrollIntoView({ block: 'center' }); return; }
+  if (d('data-sendbtn')) { var ag2 = H.agents.filter(function (a) { return a.code === d('data-sendbtn'); })[0]; return openAct('sendButton', { code: ag2.code }, 'Groupe « ' + ag2.name + ' ».'); }
+  if (b.id === 'aTypeUS' || b.id === 'aTypeHT') { ['code', 'name'].forEach(function (k) { EDIT[k] = val(k === 'code' ? 'aCode' : 'aName'); }); EDIT.createPct = val('aCp'); EDIT.payPct = val('aPp'); EDIT.limit = val('aLim'); EDIT.canCreate = val('aCanC') === '1'; EDIT.canPay = val('aCanP') === '1'; EDIT.canReport = val('aCanR') === '1'; EDIT.nameList = val('aList') === '1'; EDIT.pin = val('aPin') === '1'; EDIT.type = b.id === 'aTypeHT' ? 'Station' : 'US'; return render(); }
+  if (b.id === 'aCancel') { EDIT = null; return render(); }
+  if (b.hasAttribute('data-cash')) { var cid = d('data-cash'), c0 = (H.cashiers || []).filter(function (x) { return x.id === cid; })[0];
+    CEDIT = c0 ? { id: c0.id, agent: c0.agent, name: c0.name, active: c0.active } : { id: '', agent: '', name: '', active: true };
+    render(); if ($('cashForm').scrollIntoView) $('cashForm').scrollIntoView({ block: 'center' }); return; }
+  if (b.id === 'cCancel') { CEDIT = null; return render(); }
+  if (b.id === 'cSave') {
+    return api('saveCashier', { id: CEDIT.id, agent: val('cAg'), name: val('cName'), pin: val('cPin'), active: val('cAct') === '1' }, function (r) { if (!r.ok) return $('cErr').textContent = r.error; CEDIT = null; H = r; render(); }, b);
+  }
+  if (b.id === 'aSave') {
+    var p = { code: EDIT.isNew ? val('aCode').toUpperCase() : EDIT.code, name: EDIT.isNew ? val('aName') : EDIT.name, type: EDIT.type, tgId: val('aTg'), groupId: val('aGrp'), createPct: val('aCp'), payPct: val('aPp'), limit: val('aLim'), active: val('aAct') === '1', canCreate: val('aCanC') === '1', canPay: val('aCanP') === '1', canReport: val('aCanR') === '1', nameList: val('aList') === '1', pin: val('aPin') === '1' };
+    return api('saveAgent', p, function (r) { if (!r.ok) return $('aErr').textContent = r.error; EDIT = null; H = r; R.data = null; render(); }, b);
+  }
+  if (b.id === 'btnRate') {
+    var s = val('rStation'), dt = val('rDate'), t = val('rRate'); $('rErr').textContent = '';
+    if (!confirm('Enregistrer le taux ' + t + ' pour ' + (s === '*' ? 'tous les agents en Haïti' : s) + ' à partir du ' + dt + ' ?')) return;
+    return api('addRate', { station: s, date: dt, rate: t }, function (r) { if (!r.ok) return $('rErr').textContent = r.error; H = r; render(); }, b);
+  }
+  if (b.id === 'btnMan') {
+    var n = val('mName2'), u = val('mUsd'); $('mErr').textContent = '';
+    if (!confirm('Confirmer comme reçu sur Bank of America : ' + u + ' USD de ' + n + ' ?')) return;
+    return api('manualConfirm', { name: n, usd: u, note: val('mNote') }, function (r) { if (!r.ok) return $('mErr').textContent = r.error; H = r; render(); }, b);
+  }
+});
+document.addEventListener('input', function (e) {   // search box of the list of names
+  if (e.target.id !== 'pFilter') return;
+  var f = e.target.value.trim().toLowerCase(), bs = $('pList').querySelectorAll('button');
+  for (var i = 0; i < bs.length; i++) bs[i].style.display = bs[i].getAttribute('data-n').indexOf(f) >= 0 ? 'block' : 'none';
+});
+document.addEventListener('change', function (e) {
+  var i = e.target;
+  if (i.id === 'pIdPhoto' || i.id === 'pIdPhotoGal') {          // camera or gallery: the last one chosen is the one sent
+    var f = i.files && i.files[0]; if (!f) return;
+    P.photoFile = f; P.photoB64 = ''; stopCam();
+    $('pPhotoInfo').innerHTML = '✓ Photo choisie (' + (i.id === 'pIdPhoto' ? 'appareil photo' : 'galerie') + ') : ' + esc(f.name || 'image') + ' <button type="button" class="mini sec" id="pPhotoDel">Retirer</button>';
+    return;
+  }
+  var k = { fAgent: 'agent', fFrom: 'from', fTo: 'to', fStatus: 'status' }[i.id];
+  if (!k) return;
+  R[k] = i.value; R.msg = ''; loadRep();
+});
+</script>
+</body>
+</html>

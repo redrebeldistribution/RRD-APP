@@ -59,7 +59,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.6.0';
+var VERSION_APP = '1.7.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -273,6 +273,7 @@ function accueil() {
       if (j.envoyes.length) h += '<p class="mut center">Le rapport de l\'équipe du matin est déjà fait. Ce rapport sera celui de l\'équipe du soir.</p>';
     } else h += '<div class="okb">✅ Les rapports d\'aujourd\'hui sont faits.</div>';
     h += '<button class="sec" style="width:100%;margin-top:10px" onclick="ecranManquants()">📅 Rapport manquant (jours passés)</button>';
+    h += '<button class="sec" style="width:100%;margin-top:10px" onclick="location.href=\'transfert.html\'">💸 Transferts (créer / payer)</button>';
     var recents = liste.slice().sort(function (a, b) { return a.cree_le < b.cree_le ? 1 : -1; }).slice(0, 10);
     if (recents.length) {
       h += '<h2>Derniers rapports de ce téléphone</h2>';
@@ -728,9 +729,10 @@ function exporterCsv() {
 
 function entete() {
   var tabs = [['rapports', 'Rapports'], ['analyse', '📊 Analyse'], ['resume', 'Résumé du jour'], ['prix', 'Prix']];
+  var zelle = '<button class="sec" onclick="location.href=\'transfert.html\'">💸 Transferts</button>';
   if (D.utilisateur.role === 'management') tabs.push(['appareils', 'Téléphones']);
   return '<h1>Tableau de bord</h1><div class="sub">' + esc(D.utilisateur.nom) + ' · ' + (D.utilisateur.role === 'management' ? 'Direction' : 'Comptabilité') + ' · montants en ' + DEV + ' · <a href="#" onclick="changerCode();return false">Changer de code</a></div>' +
-    '<div class="tabs">' + tabs.map(function (t) { return '<button class="' + (T.onglet === t[0] ? '' : 'sec') + '" onclick="tableau(\'' + t[0] + '\')">' + t[1] + '</button>'; }).join('') + '</div>';
+    '<div class="tabs">' + tabs.map(function (t) { return '<button class="' + (T.onglet === t[0] ? '' : 'sec') + '" onclick="tableau(\'' + t[0] + '\')">' + t[1] + '</button>'; }).join('') + zelle + '</div>';
 }
 function charge() { view(entete() + '<p class="mut center">Chargement…</p>'); }
 function errTab(e) { view(entete() + '<div class="err">' + esc(e.reseau ? 'Pas de connexion. Réessayez.' : e.erreur) + '</div>', '<button class="sec" onclick="tableau(T.onglet)">Réessayer</button>'); }
