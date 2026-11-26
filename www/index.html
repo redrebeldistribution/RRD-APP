@@ -34,7 +34,12 @@
   td.n { text-align:right; white-space:nowrap; }
   .hidden { display:none; } .mut { color:var(--mut); font-size:13px; } .center { text-align:center; }
   .bigbtn { width:100%; padding:18px; font-size:18px; margin:8px 0; }
-  img.prev { max-width:100%; border-radius:10px; margin-top:8px; }
+  img.prev, img.photo { max-width:100%; border-radius:10px; margin-top:8px; }
+  th { padding:7px 4px; border-bottom:1px solid var(--line); text-align:left; } th.n { text-align:right; }
+  button.danger { background:#7f1d1d; color:#fff; }
+  .tabs { display:flex; gap:6px; overflow-x:auto; margin:8px 0 4px; } .tabs button { flex:none; padding:8px 12px; font-size:14px; }
+  .badge { display:inline-block; padding:2px 8px; border-radius:20px; font-size:12px; background:var(--sec); }
+  .b-ok { background:#dcfce7; color:var(--ok); } .b-bad { background:#fee2e2; color:var(--bad); } .b-warn { background:#fef3c7; color:var(--warn); }
 </style>
 </head>
 <body>
@@ -45,7 +50,7 @@
 <script src="config.js"></script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.0.1';
+var VERSION_APP = '1.1.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -159,7 +164,9 @@ function enregistrer() {
   var b = $('bEnr'); b.disabled = true; b.textContent = 'Enregistrement…';
   var id = CFG.get('appareil', '') || ('A' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)); CFG.set('appareil', id);
   api('enregistrer', { code: code, appareil_id: id, modele: navigator.userAgent.slice(0, 80) }).then(function (d) {
-    CFG.set('jeton', d.jeton); CFG.set('station', d.station);
+    CFG.set('jeton', d.jeton);
+    if (d.role) { CFG.set('role', d.role); CFG.set('nom', d.nom); return demarrerDirection(); }
+    CFG.set('role', ''); CFG.set('station', d.station);
     accueil();
     synchroniser();
   }).catch(function (e) { ecranEnregistrer(e.reseau ? 'Pas de connexion internet. Réessayez quand le téléphone a du signal.' : e.erreur); });
@@ -330,7 +337,7 @@ function voir(ref) { tous().then(function (l) { var r = l.filter(function (x) { 
 
 /* ======================= Synchronisation ======================= */
 function synchroniser(manuel) {
-  if (S.sync || !CFG.get('jeton', '')) return;
+  if (S.sync || !CFG.get('jeton', '') || CFG.get('role', '')) return;
   S.sync = true; majNet('envoi…');
   var arret = false;
   api('init').then(function (d) {
@@ -366,13 +373,198 @@ function synchroniser(manuel) {
   });
 }
 
+
+/* ======================= DIRECTION : tableau de bord (repris de l'app Telegram) ======================= */
+var D = null, T = { onglet: 'rapports', du: '', au: '', station: '', date: '' }, R = null, CORR = null, ANNUL = null;
+function call(action, payload) { return api('dir', { sous_action: action, payload: payload || {} }); }
+function fmt2(n) { return fmt(n); }
+function alerte(t) { var d = document.createElement('div'); d.className = 'err'; d.textContent = t; $('app').insertBefore(d, $('app').firstChild); window.scrollTo(0, 0); }
+function demarrerDirection(msg) {
+  view('<p class="center mut" style="margin-top:40px">Connexion au bureau…</p>');
+  api('init').then(function (d) {
+    majNet('● en ligne');
+    if (!d.utilisateur) { CFG.set('role', ''); return accueil(); }
+    D = d; tableau(T.onglet || 'rapports');
+  }).catch(function (e) {
+    majNet('○ hors ligne');
+    if (e.code === 'NON_ENREGISTRE' || e.code === 'DESACTIVE') { CFG.set('jeton', ''); CFG.set('role', ''); return ecranEnregistrer(e.erreur); }
+    view('<h1>Tableau de bord</h1><div class="err">' + esc(e.reseau ? 'Pas de connexion. Le tableau de bord a besoin d\'internet.' : e.erreur) + '</div>', '<button onclick="demarrerDirection()">Réessayer</button>');
+  });
+}
+function entete() {
+  var tabs = [['rapports', 'Rapports'], ['resume', 'Résumé du jour'], ['prix', 'Prix']];
+  if (D.utilisateur.role === 'management') tabs.push(['appareils', 'Téléphones']);
+  return '<h1>Tableau de bord</h1><div class="sub">' + esc(D.utilisateur.nom) + ' · ' + (D.utilisateur.role === 'management' ? 'Direction' : 'Comptabilité') + ' · montants en ' + DEV + '</div>' +
+    '<div class="tabs">' + tabs.map(function (t) { return '<button class="' + (T.onglet === t[0] ? '' : 'sec') + '" onclick="tableau(\'' + t[0] + '\')">' + t[1] + '</button>'; }).join('') + '</div>';
+}
+function charge() { view(entete() + '<p class="mut center">Chargement…</p>'); }
+function errTab(e) { view(entete() + '<div class="err">' + esc(e.reseau ? 'Pas de connexion. Réessayez.' : e.erreur) + '</div>', '<button class="sec" onclick="tableau(T.onglet)">Réessayer</button>'); }
+function tableau(o) { T.onglet = o; charge(); ({ rapports: ongletRapports, resume: ongletResume, prix: ongletPrix, appareils: ongletAppareils })[o](); }
+function badgeEcart(e) {
+  if (e === null || e === undefined) return '<span class="badge b-warn">prix manquant</span>';
+  if (Math.abs(e) < 1) return '<span class="badge b-ok">écart 0</span>';
+  return '<span class="badge ' + (e < 0 ? 'b-bad' : 'b-warn') + '">écart ' + fmt(e) + '</span>';
+}
+function nomStation(code) { return (D.stations.filter(function (s) { return s.code === code; })[0] || {}).nom || code; }
+function optStations(sel, tous, extra) {
+  return (tous ? '<option value="">Toutes les stations</option>' : '') + D.stations.map(function (s) { return '<option value="' + esc(s.code) + '"' + (s.code === sel ? ' selected' : '') + '>' + esc(s.nom) + '</option>'; }).join('') + (extra || '');
+}
+function ongletRapports() {
+  T.du = T.du || D.aujourdhui; T.au = T.au || D.aujourdhui;
+  call('rapports', { du: T.du, au: T.au, station: T.station }).then(function (l) {
+    var h = entete() + '<div class="row"><div><label>Du</label><input type="date" id="du" value="' + T.du + '"></div><div><label>Au</label><input type="date" id="au" value="' + T.au + '"></div></div>' +
+      '<label>Station</label><select id="stF">' + optStations(T.station, true) + '</select>' +
+      '<div style="margin-top:10px"><button onclick="T.du=$(\'du\').value;T.au=$(\'au\').value;T.station=$(\'stF\').value;tableau(\'rapports\')">Afficher</button></div>';
+    if (!l.length) h += '<div class="note">Aucun rapport pour cette période.</div>';
+    else {
+      var g = 0; l.forEach(function (r) { if (!r.annule) g += Number(r.gallons) || 0; });
+      h += '<div class="note">' + l.length + ' rapport(s) · ' + fmt(g) + ' gallons (hors annulés)</div>';
+    }
+    l.forEach(function (r) {
+      h += '<div class="card" onclick="ouvrir(\'' + esc(r.ref) + '\')" style="cursor:pointer' + (r.annule ? ';opacity:.55' : '') + '"><div class="row"><div><b>' + esc(nomStation(r.station)) + '</b>' + (r.periode ? ' <span class="badge">' + esc(r.periode === 'AM' ? 'matin' : 'soir') + '</span>' : '') +
+        '<div class="mut">' + dfr(r.date) + ' · ' + esc(r.employe) + (r.corrections ? ' · corrigé' : '') + '</div></div>' +
+        '<div style="text-align:right"><b>' + fmt(r.gallons) + ' gal</b><div>' + (r.annule ? '<span class="badge b-bad">annulé</span>' : badgeEcart(r.ecart)) + '</div></div></div></div>';
+    });
+    view(h);
+  }).catch(errTab);
+}
+function ouvrir(ref) { charge(); call('detail', { ref: ref }).then(function (r) { R = r; ecranDetail(); }).catch(errTab); }
+function ecranDetail(apercu, msg, annul) {
+  var r = R;
+  var h = entete() + '<button class="sec" onclick="tableau(\'rapports\')">← Retour</button><h2>' + esc(nomStation(r.station)) + ' · ' + dfr(r.date) + (r.periode ? ' · ' + esc(r.periode_libelle) : '') + '</h2>' +
+    '<div class="mut">Réf. ' + esc(r.ref) + ' · envoyé le ' + esc(r.soumis_le) + ' par ' + esc(r.employe) + '</div>';
+  if (msg) h += '<div class="okb">' + esc(msg) + '</div>';
+  if (r.annule) h += '<div class="err"><b>Rapport annulé</b> le ' + esc(r.annule_le) + ' par ' + esc(r.annule_par) + '\nMotif : ' + esc(r.motif_annulation) + '\nIl ne compte plus dans les totaux ; la station peut envoyer un nouveau rapport.</div>';
+  h += '<div class="card"><table><tr><td>Prix du jour</td><td class="n">' + (r.prix === null ? '<span class="badge b-warn">aucun prix</span>' : fmt(r.prix) + ' /gal (depuis ' + dfr(r.prix_date) + ')') + '</td></tr>' +
+    '<tr><td>Gallons vendus</td><td class="n"><b>' + fmt(r.gallons) + '</b></td></tr>' +
+    '<tr><td>Ventes attendues</td><td class="n">' + fmt(r.ventes_attendues) + '</td></tr>' +
+    '<tr><td>Caisse attendue</td><td class="n">' + fmt(r.caisse_attendue) + '</td></tr>' +
+    '<tr><td>Caisse comptée</td><td class="n">' + fmt(r.counted_cash) + '</td></tr>' +
+    '<tr><td><b>Écart</b></td><td class="n">' + badgeEcart(r.ecart) + '</td></tr></table></div><div class="card"><table>';
+  D.champs.forEach(function (f) { h += '<tr><td>' + esc(f.label) + '</td><td class="n">' + (f.texte ? esc(r[f.k]) : fmt(r[f.k])) + '</td></tr>'; });
+  h += '</table></div>';
+  if (r.photo_data) h += '<img class="photo" src="' + r.photo_data + '">';
+  else if (r.photo_url) h += '<p><a href="' + esc(r.photo_url) + '" target="_blank">Ouvrir la photo dans Drive</a></p>';
+  else if (r.photo_erreur) h += '<div class="err">' + esc(r.photo_erreur) + '</div>';
+  else h += '<p class="mut">Pas de photo.</p>';
+  if (r.annule) { }
+  else if (annul) {
+    h += '<h2>Annuler ce rapport</h2><div class="card"><b>' + esc(annul.station) + '</b> · ' + dfr(annul.date) + (annul.periode_libelle && annul.periode_libelle !== 'Journée' ? ' · ' + esc(annul.periode_libelle) : '') + '<div class="mut">Envoyé par ' + esc(annul.employe) + ' · réf. ' + esc(annul.ref) + '</div><div class="mut">Motif : ' + esc(annul.motif) + '</div></div>' +
+      '<div class="note">Le rapport ne sera pas effacé : il restera dans l\'historique, marqué « annulé », et ne comptera plus. La station pourra renvoyer son rapport.</div>' +
+      '<div class="row"><button class="sec" onclick="ecranDetail()">Retour</button><button class="danger" id="bAnn" onclick="annuler(true)">Confirmer l\'annulation</button></div>';
+  } else {
+    h += '<h2>Corriger</h2>';
+    if (apercu) {
+      var lab = (D.champs.filter(function (f) { return f.k === apercu.champ; })[0] || {}).label || apercu.champ;
+      h += '<div class="card"><b>' + esc(lab) + '</b> : ' + esc(apercu.ancienne === '' ? '(vide)' : apercu.ancienne) + ' → <b>' + esc(apercu.nouvelle) + '</b><div class="mut">Motif : ' + esc(apercu.motif) + '</div>' +
+        '<div class="mut">Écart : ' + fmt(apercu.ecart_avant) + ' → ' + fmt(apercu.ecart_apres) + '</div></div>' +
+        '<div class="row"><button class="sec" onclick="ecranDetail()">Annuler</button><button id="bConf" onclick="corriger(true)">Confirmer la correction</button></div>';
+    } else {
+      h += '<label>Champ</label><select id="cChamp">' + D.champs.map(function (f) { return '<option value="' + f.k + '">' + esc(f.label) + '</option>'; }).join('') + '</select>' +
+        '<label>Nouvelle valeur</label><input id="cVal" autocomplete="off"><label>Motif (obligatoire)</label><input id="cMotif" autocomplete="off">' +
+        '<div style="margin-top:10px"><button onclick="corriger(false)">Voir l\'aperçu</button></div>' +
+        '<h2>Rapport envoyé par erreur ?</h2><div class="mut">L\'annulation permet à la station de renvoyer son rapport. Le rapport reste dans l\'historique.</div>' +
+        '<label>Motif de l\'annulation (obligatoire)</label><input id="aMotif" autocomplete="off">' +
+        '<div style="margin-top:10px"><button class="danger" onclick="annuler(false)">Annuler ce rapport…</button></div>';
+    }
+  }
+  if (r.historique && r.historique.length) {
+    h += '<h2>Historique des corrections</h2>';
+    r.historique.forEach(function (c) { h += '<div class="card"><b>' + esc(c.champ) + '</b> : ' + esc(c.ancienne) + ' → ' + esc(c.nouvelle) + '<div class="mut">' + esc(c.horodatage) + ' · ' + esc(c.editeur) + ' (' + esc(c.role) + ') · ' + esc(c.motif) + '</div></div>'; });
+  }
+  view(h);
+}
+function corriger(confirmer) {
+  if (!confirmer) CORR = { ref: R.ref, champ: $('cChamp').value, nouvelle_valeur: $('cVal').value, motif: $('cMotif').value };
+  else $('bConf').disabled = true;
+  var p = {}; Object.keys(CORR).forEach(function (k) { p[k] = CORR[k]; }); p.confirmer = !!confirmer;
+  call('corriger', p).then(function (r) {
+    if (!confirmer) return ecranDetail(r.apercu);
+    R = r.rapport; CORR = null; ecranDetail(null, 'Correction enregistrée. Le rapport d\'origine reste inchangé ; la correction est dans l\'historique.');
+  }).catch(function (e) { ecranDetail(); alerte(e.erreur || 'Pas de connexion.'); });
+}
+function annuler(confirmer) {
+  if (!confirmer) ANNUL = { ref: R.ref, motif: $('aMotif').value };
+  else $('bAnn').disabled = true;
+  call('annuler', { ref: ANNUL.ref, motif: ANNUL.motif, confirmer: !!confirmer }).then(function (r) {
+    if (!confirmer) return ecranDetail(null, null, r.apercu);
+    R = r.rapport; ANNUL = null; ecranDetail(null, 'Rapport annulé. La station peut maintenant envoyer un nouveau rapport.');
+  }).catch(function (e) { ecranDetail(); alerte(e.erreur || 'Pas de connexion.'); });
+}
+function ongletResume() {
+  T.date = T.date || D.aujourdhui;
+  call('resume', { date: T.date }).then(function (r) {
+    var h = entete() + '<label>Date</label><div class="row"><input type="date" id="dR" value="' + T.date + '"><button class="sec" style="flex:none" onclick="T.date=$(\'dR\').value;tableau(\'resume\')">Afficher</button></div>' +
+      '<div class="card"><table><tr><th>Station</th><th class="n">Gal</th><th class="n">Ventes</th><th class="n">Écart</th></tr>';
+    r.lignes.forEach(function (l) {
+      h += l.manquant ? '<tr><td>' + esc(l.nom) + '</td><td colspan="3" class="n"><span class="badge b-bad">manquant</span></td></tr>'
+        : '<tr><td>' + esc(l.nom) + (l.partiel ? '<div><span class="badge b-warn">' + esc(l.partiel) + '</span></div>' : '') + '</td><td class="n">' + fmt(l.gallons) + '</td><td class="n">' + fmt(l.ventes_attendues) + '</td><td class="n">' + badgeEcart(l.ecart) + '</td></tr>';
+    });
+    h += '<tr><th>Total</th><th class="n">' + fmt(r.totaux.gallons) + '</th><th class="n">' + fmt(r.totaux.ventes) + '</th><th class="n">' + fmt(r.totaux.ecart) + '</th></tr></table>' +
+      '<div class="mut">Rapports manquants : ' + r.totaux.manquants + (r.totaux.partiels ? ' · incomplets (une seule équipe) : ' + r.totaux.partiels : '') + '</div></div>';
+    view(h);
+  }).catch(errTab);
+}
+function ongletPrix(data) {
+  var rendre = function (p) {
+    var h = entete() + '<h2>Prix en vigueur</h2><div class="card"><table>';
+    p.actuels.forEach(function (a) { h += '<tr><td>' + esc(a.nom) + '</td><td class="n">' + (a.prix === null ? '<span class="badge b-warn">aucun</span>' : '<b>' + fmt(a.prix) + '</b> /gal<div class="mut">depuis ' + dfr(a.depuis) + '</div>') + '</td></tr>'; });
+    h += '</table></div>';
+    if (p.peutModifier) {
+      h += '<h2>Nouveau prix</h2><label>Station</label><select id="pSt">' + optStations('', false) + '</select>' +
+        '<div class="row"><div><label>Prix par gallon <span class="unit">(' + DEV + ')</span></label><input id="pPrix" inputmode="decimal"></div>' +
+        '<div><label>Date d\'effet</label><input type="date" id="pDate" value="' + D.aujourdhui + '"></div></div>' +
+        '<label>Note (facultatif)</label><input id="pNote"><div style="margin-top:10px"><button id="bPrix" onclick="ajouterPrix()">Enregistrer le prix</button></div>';
+    }
+    h += '<h2>Historique</h2><div class="card"><table><tr><th>Station</th><th class="n">Prix</th><th class="n">Effet</th></tr>';
+    p.historique.forEach(function (x) { h += '<tr><td>' + esc(x.station) + '<div class="mut">' + esc(x.saisi_par) + ' · ' + esc(x.saisi_le) + (x.note ? ' · ' + esc(x.note) : '') + '</div></td><td class="n">' + fmt(x.prix) + '</td><td class="n">' + dfr(x.date_effet) + '</td></tr>'; });
+    view(h + '</table></div>');
+  };
+  if (data) return rendre(data);
+  call('prix').then(rendre).catch(errTab);
+}
+function ajouterPrix() {
+  var p = { station: $('pSt').value, prix: $('pPrix').value, date_effet: $('pDate').value, note: $('pNote').value };
+  var nom = $('pSt').options[$('pSt').selectedIndex].text;
+  if (!confirm('Prix de ' + nom + ' : ' + p.prix + ' ' + DEV + ' par gallon, à partir du ' + dfr(p.date_effet) + ' ?')) return;
+  $('bPrix').disabled = true;
+  call('ajouterPrix', p).then(ongletPrix).catch(function (e) { $('bPrix').disabled = false; alerte(e.erreur || 'Pas de connexion.'); });
+}
+function ongletAppareils(data) {
+  var rendre = function (a) {
+    var h = entete();
+    if (a.nouveau) h += '<div class="okb">Nouveau code : <b style="font-size:20px">' + esc(a.nouveau) + '</b><br>Donnez-le à la personne qui enregistre le téléphone. Il ne marche qu\'une fois.</div>';
+    h += '<h2>Nouveau code de téléphone</h2><label>Pour</label><select id="apSt">' + optStations('', false, '<option value="DIRECTION">Direction (tableau de bord)</option><option value="COMPTA">Comptabilité (tableau de bord)</option>') + '</select>' +
+      '<label>Nom (facultatif, ex. « Téléphone Esansyel » ou « Elisana »)</label><input id="apNom" autocomplete="off">' +
+      '<div style="margin-top:10px"><button id="bAp" onclick="nouveauCode()">Créer un code</button></div><h2>Téléphones</h2>';
+    if (!a.appareils.length) h += '<div class="note">Aucun téléphone.</div>';
+    a.appareils.slice().reverse().forEach(function (x) {
+      h += '<div class="card" style="' + (x.actif ? '' : 'opacity:.55') + '"><div class="row"><div><b>' + esc(x.station_nom) + '</b>' + (x.nom ? ' · ' + esc(x.nom) : '') +
+        '<div class="mut">Code ' + esc(x.code) + ' · ' + (x.utilise ? 'enregistré le ' + esc(x.enregistre_le) : 'pas encore utilisé') + (x.dernier_contact ? ' · vu le ' + esc(x.dernier_contact) : '') + '</div>' +
+        '<div>' + (x.actif ? '<span class="badge b-ok">actif</span>' : '<span class="badge b-bad">désactivé</span>') + '</div></div>' +
+        '<button class="' + (x.actif ? 'danger' : 'sec') + '" style="flex:none" onclick="basculer(\'' + esc(x.code) + '\',' + (!x.actif) + ')">' + (x.actif ? 'Désactiver' : 'Réactiver') + '</button></div></div>';
+    });
+    view(h);
+  };
+  if (data) return rendre(data);
+  call('appareils').then(rendre).catch(errTab);
+}
+function nouveauCode() {
+  $('bAp').disabled = true;
+  call('ajouterAppareil', { station: $('apSt').value, nom: $('apNom').value }).then(ongletAppareils).catch(function (e) { $('bAp').disabled = false; alerte(e.erreur || 'Pas de connexion.'); });
+}
+function basculer(code, actif) {
+  if (!actif && !confirm('Désactiver le téléphone ' + code + ' ? Il ne pourra plus envoyer de rapports.')) return;
+  call('activerAppareil', { code: code, actif: actif }).then(ongletAppareils).catch(function (e) { alerte(e.erreur || 'Pas de connexion.'); });
+}
+
 /* ======================= Démarrage ======================= */
 window.addEventListener('online', function () { synchroniser(); });
 document.addEventListener('visibilitychange', function () { if (!document.hidden) synchroniser(); });
 setInterval(function () { synchroniser(); }, 2 * 60 * 1000);
 S.init = CFG.get('init', null);
 majNet('○ hors ligne');
-if (!CFG.get('jeton', '')) ecranEnregistrer(); else { accueil(); synchroniser(); }
+if (!CFG.get('jeton', '')) ecranEnregistrer(); else if (CFG.get('role', '')) demarrerDirection(); else { accueil(); synchroniser(); }
 </script>
 </body>
 </html>
