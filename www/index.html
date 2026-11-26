@@ -674,7 +674,9 @@ function ongletAppareils(data) {
       h += '<div class="card" style="' + (x.actif ? '' : 'opacity:.55') + '"><div class="row"><div><b>' + esc(x.station_nom) + '</b>' + (x.nom ? ' · ' + esc(x.nom) : '') +
         '<div class="mut">Code ' + esc(x.code) + ' · ' + (x.utilise ? 'enregistré le ' + esc(x.enregistre_le) : 'pas encore utilisé') + (x.dernier_contact ? ' · vu le ' + esc(x.dernier_contact) : '') + '</div>' +
         '<div>' + (x.actif ? '<span class="badge b-ok">actif</span>' : '<span class="badge b-bad">désactivé</span>') + '</div></div>' +
-        '<button class="' + (x.actif ? 'danger' : 'sec') + '" style="flex:none" onclick="basculer(\'' + esc(x.code) + '\',' + (!x.actif) + ')">' + (x.actif ? 'Désactiver' : 'Réactiver') + '</button></div></div>';
+        '<div style="display:flex;flex-direction:column;gap:6px;flex:none">' +
+        '<button class="' + (x.actif ? 'danger' : 'sec') + '" onclick="basculer(\'' + esc(x.code) + '\',' + (!x.actif) + ')">' + (x.actif ? 'Désactiver' : 'Réactiver') + '</button>' +
+        (x.utilise ? '<button class="sec" onclick="liberer(\'' + esc(x.code) + '\')">Libérer le code</button>' : '') + '</div></div></div>';
     });
     view(h);
   };
@@ -684,6 +686,10 @@ function ongletAppareils(data) {
 function nouveauCode() {
   $('bAp').disabled = true;
   call('ajouterAppareil', { station: $('apSt').value, nom: $('apNom').value }).then(ongletAppareils).catch(function (e) { $('bAp').disabled = false; alerte(e.erreur || 'Pas de connexion.'); });
+}
+function liberer(code) {
+  if (!confirm('Libérer le code ' + code + ' ?\n\nLe téléphone qui l\'utilise sera déconnecté (ses rapports pas encore envoyés resteront bloqués dessus). Le code pourra ensuite être entré une fois sur n\'importe quel téléphone.')) return;
+  call('libererAppareil', { code: code }).then(function (d) { ongletAppareils(d); alerte('Code ' + code + ' libéré : il peut être entré sur un téléphone.'); }).catch(function (e) { alerte(e.erreur || 'Pas de connexion.'); });
 }
 function basculer(code, actif) {
   if (!actif && !confirm('Désactiver le téléphone ' + code + ' ? Il ne pourra plus envoyer de rapports.')) return;

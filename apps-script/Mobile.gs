@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.4';
+var MOBILE_VERSION = 'm1.5';
 var ROLES_APPAREIL = { DIRECTION: 'management', COMPTA: 'accounting' };   // station = DIRECTION ou COMPTA → téléphone de la direction / comptabilité
 /* Contrôles avant d'accepter un rapport (chiffres « visiblement faux »). Réglables ici. */
 var CTRL = {
@@ -327,6 +327,7 @@ function direction_(app, sous, p) {
     case 'appareils': exiger_(ctx, ['management']); return listeAppareils_();
     case 'ajouterAppareil': exiger_(ctx, ['management']); return ajouterAppareil_(ctx, p);
     case 'activerAppareil': exiger_(ctx, ['management']); return activerAppareil_(ctx, p);
+    case 'libererAppareil': exiger_(ctx, ['management']); return libererAppareil_(ctx, p);
     default: throw new UserError('Action inconnue.');
   }
 }
@@ -357,6 +358,18 @@ function ajouterAppareil_(ctx, p) {
     journal_(ctx, 'appareil-code', code + ' → ' + station);
   } finally { lock.releaseLock(); }
   var l = listeAppareils_(); l.nouveau = code; return l;
+}
+
+/** Libère un code : le téléphone qui l'utilisait est déconnecté, et le code peut être enregistré une fois sur n'importe quel téléphone. */
+function libererAppareil_(ctx, p) {
+  var a = lire_(APPAREILS).filter(function (x) { return String(x.code_activation) === String(p.code); })[0];
+  if (!a) throw new UserError('Code introuvable.');
+  if (String(a.code_activation) === ctx.id.replace(/^APP-/, '')) throw new UserError('Vous ne pouvez pas libérer le code de votre propre téléphone.');
+  majCellule_(APPAREILS, a._ligne, 'jeton', '');
+  majCellule_(APPAREILS, a._ligne, 'appareil_id', '');
+  majCellule_(APPAREILS, a._ligne, 'note', String(a.note || '') + ' | libéré le ' + maintenant_() + ' par ' + ctx.nom);
+  journal_(ctx, 'appareil-libere', String(a.code_activation));
+  return listeAppareils_();
 }
 
 function activerAppareil_(ctx, p) {
