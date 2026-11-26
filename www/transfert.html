@@ -55,8 +55,8 @@
   <div class="muted" style="text-align:center;margin:10px 0 20px">RRD — transferts, version 3.9</div>
 </main>
 
-<script src="config.js"></script>
-<script src="build.js"></script>
+<script>/* toujours la dernière version des réglages (pas de vieux fichier en mémoire du navigateur) */
+document.write('<script src="config.js?' + Date.now() + '"><\/script><script src="build.js?' + Date.now() + '"><\/script>');</script>
 <script>
 var INIT = '', ME = null, TAB = '';
 var C = { dir: 'UH', holder: 'HQ', last: null, mine: null, f: {} };          // screen 1

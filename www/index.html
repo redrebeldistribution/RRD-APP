@@ -55,8 +55,8 @@
 <div class="wrap" id="app"><p class="center mut" style="margin-top:40px">Chargement…</p></div>
 <div class="bar hidden" id="bar"><div class="in" id="barIn"></div></div>
 
-<script src="config.js"></script>
-<script src="build.js"></script>
+<script>/* toujours la dernière version des réglages (pas de vieux fichier en mémoire du navigateur) */
+document.write('<script src="config.js?' + Date.now() + '"><\/script><script src="build.js?' + Date.now() + '"><\/script>');</script>
 <script>
 /* Mise à jour automatique : on confirme tout de suite que cette version démarre bien (sinon retour automatique à la précédente). */
 try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugins.CapacitorUpdater.notifyAppReady(); } catch (e) { }
