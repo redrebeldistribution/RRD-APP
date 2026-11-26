@@ -52,8 +52,9 @@ jobs:
           cp android/app/build/outputs/apk/release/app-release.apk "out/RRD-Rapport-build-$N.apk"
           (cd www && zip -qr "../out/web-$N.zip" .)
           NATIVE_MIN=$(tr -dc '0-9' < native_min.txt)
-          printf '{"web":%s,"url":"%s/web-%s.zip","native_min":%s,"apk_url":"%s/RRD-Rapport-build-%s.apk"}\n' \
-            "$N" "$BASE" "$N" "$NATIVE_MIN" "$BASE" "$N" > out/web.json
+          SUM=$(sha256sum "out/web-$N.zip" | cut -d' ' -f1)   # obligatoire : l'application refuse une mise à jour sans empreinte
+          printf '{"web":%s,"url":"%s/web-%s.zip","checksum":"%s","native_min":%s,"apk_url":"%s/RRD-Rapport-build-%s.apk"}\n' \
+            "$N" "$BASE" "$N" "$SUM" "$NATIVE_MIN" "$BASE" "$N" > out/web.json
           cat out/web.json
 
       - uses: actions/upload-artifact@v4

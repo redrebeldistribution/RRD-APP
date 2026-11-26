@@ -68,7 +68,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.11.0';
+var VERSION_APP = '1.11.1';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -299,7 +299,7 @@ function accueil() {
         h += '<div class="card" onclick="voir(\'' + esc(r.ref) + '\')"><div class="row"><div><b>' + esc(r.ref) + '</b><div class="mut">' + dfr(r.date) + ' · ' + esc(libPer(r.periode)) + '</div></div><div style="text-align:right">' + etat + '</div></div></div>';
       });
     }
-    h += '<p class="mut center" style="margin-top:24px">Version ' + VERSION_APP + ' (build ' + (window.RRD_BUILD || 0) + (S.majPrete ? ', mise à jour prête : elle s\'installe à la prochaine ouverture' : '') + ') · ' + esc(st.code || '') + ' · <a href="#" onclick="changerCode();return false">Changer de code</a></p>';
+    h += '<p class="mut center" style="margin-top:24px">Version ' + VERSION_APP + ' (build ' + (window.RRD_BUILD || 0) + (S.majPrete ? ', mise à jour ' + S.majPrete + ' prête : quittez l\'application puis revenez' : S.majErreur ? ', mise à jour impossible : ' + esc(S.majErreur) : '') + ') · ' + esc(st.code || '') + ' · <a href="#" onclick="changerCode();return false">Changer de code</a></p>';
     view(h, '<button class="sec" onclick="synchroniser(true)">🔄 Envoyer / actualiser</button>', 'accueil');
   });
 }
@@ -1172,10 +1172,10 @@ function verifierMaj() {
     if (!(Number(m.web) > Number(window.RRD_BUILD || 0))) return;                          // déjà à jour
     var ver = String(m.web);
     return CU.list().then(function (l) {
-      var deja = ((l && l.bundles) || []).filter(function (b) { return b.version === ver && b.status === 'success'; })[0];
-      return deja || CU.download({ url: m.url, version: ver });
-    }).then(function (b) { return CU.next({ id: b.id }); }).then(function () { S.majPrete = ver; });
-  }).catch(function () { }).then(function () { S.majEnCours = false; });
+      var deja = ((l && l.bundles) || []).filter(function (b) { return b.version === ver && (b.status === 'success' || b.status === 'pending'); })[0];
+      return deja || CU.download({ url: m.url, version: ver, checksum: String(m.checksum || '') });   // sans empreinte (checksum), le téléchargement est refusé
+    }).then(function (b) { return CU.next({ id: b.id }); }).then(function () { S.majPrete = ver; S.majErreur = ''; if (S.ecran === 'accueil') accueil(); });
+  }).catch(function (e) { S.majErreur = String((e && (e.message || e.errorMessage)) || e || '').slice(0, 90); }).then(function () { S.majEnCours = false; });
 }
 document.addEventListener('resume', function () { verifierMaj(); bandeauMaj(); phEnvoyer(); });
 setInterval(function () { phEnvoyer(); if (S.ecran === 'photos') ecranPhotos(); }, 60000);   // file des photos + heure en cours à jour
