@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.13';
+var MOBILE_VERSION = 'm1.14';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var MAX_APPAREILS_ROLE = 5;   // un code DIR ou CPT peut servir sur 5 appareils en même temps (demande du propriétaire, 26/11/2026)
 var ROLES_APPAREIL = { DIRECTION: 'management', COMPTA: 'accounting' };   // station = DIRECTION ou COMPTA → téléphone de la direction / comptabilité
@@ -75,6 +75,7 @@ function apiMobile_(action, b) {
       case 'photo': return ok_(photoHoraire_(app, payload));
       case 'photos': return ok_(photosStation_(app));
       case 'bordereau': return ok_(bordereau_(app, payload));
+      case 'messages': return ok_(messagesStation_(app));
       case 'dir': return ok_(direction_(app, String(b.sous_action || ''), payload));
       default: throw new UserError('Action inconnue.');
     }
@@ -402,6 +403,9 @@ function direction_(app, sous, p) {
     case 'photosListe': exiger_(ctx, ['management', 'accounting']); return photosListe_(p);
     case 'photoVoir': exiger_(ctx, ['management', 'accounting']); return photoVoir_(p);
     case 'bordereaux': exiger_(ctx, ['management', 'accounting']); return bordereauxListe_(p);
+    case 'messages': exiger_(ctx, ['management', 'accounting']); return messagesListe_();
+    case 'messageAjouter': exiger_(ctx, ['management']); return messageAjouter_(ctx, p);
+    case 'messageSupprimer': exiger_(ctx, ['management']); return messageSupprimer_(ctx, p);
     default: throw new UserError('Action inconnue.');
   }
 }
@@ -730,4 +734,66 @@ function resumeApp_(date) {
       (r.date_depot !== date ? ' — dépôt du ' + r.date_depot.split('-').reverse().join('/') : '');
   }).join('\n');
   return t;
+}
+
+/* ============================ Messages et conseils aux stations (m1.14, 26/11/2026) ============================
+ * La direction écrit un conseil du jour ou un message, pour toutes les stations ou une seule, avec une date et une heure.
+ * Le téléphone de la station le prend à sa prochaine ouverture de l'application, puis l'affiche en notification à l'heure prévue
+ * (même sans signal). Une ligne par message dans l'onglet « Messages (app) » ; « supprimer » le désactive, la ligne reste.
+ */
+var MSG_ONGLET = 'Messages (app)';
+var MSG_ENTETES = ['id', 'cree_le', 'par', 'cible', 'date', 'heure', 'type', 'texte', 'actif'];
+function msgFeuille_(creer) {
+  var sh = ss_().getSheetByName(MSG_ONGLET);
+  if (!sh && creer) { sh = ss_().insertSheet(MSG_ONGLET); sh.appendRow(MSG_ENTETES); sh.setFrozenRows(1); }
+  return sh;
+}
+function msgLire_() {
+  var sh = msgFeuille_(false);
+  if (!sh || sh.getLastRow() < 2) return [];
+  var n = sh.getLastRow(), from = Math.max(2, n - 1999);
+  return sh.getRange(from, 1, n - from + 1, MSG_ENTETES.length).getValues().map(function (r, i) {
+    return { ligne: from + i, id: Number(r[0]) || 0, cree_le: phTexte_(r[1]), par: String(r[2]), cible: String(r[3]).trim(), date: phJour_(r[4]),
+      heure: String(r[5]).replace('h', ':'), type: String(r[6]), texte: String(r[7]).trim(), actif: /^(oui|true)$/i.test(String(r[8]).trim()) };
+  });
+}
+function msgJour_(n) { return Utilities.formatDate(new Date(Date.now() + n * 864e5), TZ, 'yyyy-MM-dd'); }
+/** Pour le téléphone d'une station : ses messages actifs, d'avant-hier à dans 14 jours. */
+function messagesStation_(app) {
+  if (app.role || !app.station) throw new UserError('Réservé au téléphone de la station.', 'FORBIDDEN');
+  var code = String(app.station.code), du = msgJour_(-2), au = msgJour_(14);
+  return { date: msgJour_(0), messages: msgLire_().filter(function (m) { return m.actif && (m.cible === 'TOUS' || m.cible === code) && m.date >= du && m.date <= au; })
+    .map(function (m) { return { id: m.id, date: m.date, heure: m.heure, type: m.type, texte: m.texte }; }) };
+}
+function messagesListe_() {
+  var noms = { TOUS: 'Toutes les stations' }; stations_().forEach(function (s) { noms[String(s.code)] = String(s.nom); });
+  var du = msgJour_(-30);
+  return { aujourdhui: msgJour_(0), stations: stations_().filter(function (s) { return estVrai_(s.actif); }).map(function (s) { return { code: String(s.code), nom: String(s.nom) }; }),
+    messages: msgLire_().filter(function (m) { return m.actif && m.date >= du; }).sort(function (a, b) { return (a.date + a.heure) < (b.date + b.heure) ? 1 : -1; })
+      .map(function (m) { return { id: m.id, date: m.date, heure: m.heure, type: m.type, texte: m.texte, cible: m.cible, cible_nom: noms[m.cible] || m.cible, par: m.par }; }) };
+}
+function messageAjouter_(ctx, p) {
+  var texte = String(p.texte || '').trim();
+  if (!texte) throw new UserError('Écrivez le texte du message.');
+  if (texte.length > 500) throw new UserError('Message trop long (500 caractères au plus).');
+  var auj = msgJour_(0), date = /^\d{4}-\d{2}-\d{2}$/.test(String(p.date || '')) ? String(p.date) : auj;
+  if (date < auj) throw new UserError('La date est déjà passée.');
+  var heure = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(p.heure || '')) ? String(p.heure) : '06:30';
+  var cible = String(p.cible || 'TOUS').trim();
+  if (cible !== 'TOUS' && !stations_().some(function (s) { return String(s.code) === cible && estVrai_(s.actif); })) throw new UserError('Station inconnue.');
+  var type = p.type === 'conseil' ? 'conseil' : 'message';
+  var lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    var id = msgLire_().reduce(function (mx, m) { return Math.max(mx, m.id); }, 0) + 1;
+    msgFeuille_(true).appendRow([id, maintenant_(), ctx.nom, cible, date, heure.replace(':', 'h'), type, (/^[=+\-@]/.test(texte) ? ' ' : '') + texte, 'oui']);   // jamais une formule
+    journal_(ctx, 'message+', id + ' ' + cible + ' ' + date + ' ' + heure);
+  } finally { lock.releaseLock(); }
+  return messagesListe_();
+}
+function messageSupprimer_(ctx, p) {
+  var m = msgLire_().filter(function (x) { return x.id === Number(p.id); })[0];
+  if (!m) throw new UserError('Message introuvable.');
+  msgFeuille_(false).getRange(m.ligne, 9).setValue('non');
+  journal_(ctx, 'message-', String(m.id));
+  return messagesListe_();
 }
