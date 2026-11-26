@@ -127,7 +127,7 @@ function enregistrerAppareil_(b) {
  */
 function appListe_(v) { return String(v || '').split(';').map(function (x) { return x.trim(); }).filter(String); }
 function enregistrerPartage_(ligne, b, role, code) {
-  var appareils = appListe_(ligne.appareil_id), modeles = String(ligne.modele || '').split(';').map(function (x) { return x.trim(); });
+  var appareils = appListe_(ligne.appareil_id), modeles = String(ligne.modele || '').split(' || ');   // un modèle par appareil, même ordre
   var envoye = String(b.appareil_id || '').slice(0, 80).split('|').filter(String);
   var deja = String(ligne.jeton || '').trim(), i = -1;
   appareils.forEach(function (a, k) { if (i < 0 && envoye.some(function (x) { return a.split('|').indexOf(x) >= 0; })) i = k; });
@@ -137,12 +137,12 @@ function enregistrerPartage_(ligne, b, role, code) {
       i = appareils.length; appareils.push(envoye.join('|'));
     } else appareils[i] = appareils[i].split('|').concat(envoye).filter(function (x, k, l) { return l.indexOf(x) === k; }).join('|');
     while (modeles.length < appareils.length) modeles.push('');
-    modeles[i] = String(b.modele || '').replace(/;/g, ',').slice(0, 60);
+    modeles[i] = String(b.modele || '').replace(/\|\|/g, '|').slice(0, 80);
   }
   var jeton = deja || jetonAleatoire_();
   if (!deja) majCellule_(APPAREILS, ligne._ligne, 'jeton', jeton);
   majCellule_(APPAREILS, ligne._ligne, 'appareil_id', appareils.join(' ; '));
-  majCellule_(APPAREILS, ligne._ligne, 'modele', modeles.slice(0, appareils.length).join(' ; '));
+  majCellule_(APPAREILS, ligne._ligne, 'modele', modeles.slice(0, appareils.length).join(' || '));
   majCellule_(APPAREILS, ligne._ligne, 'enregistre_le', maintenant_());
   journal_({ id: 'APP', nom: 'Appareil ' + code }, 'appareil+', role + ' (' + appareils.length + '/' + MAX_APPAREILS_ROLE + ')');
   return { jeton: jeton, role: role, nom: String(ligne.nom || ligne.note || code) };
