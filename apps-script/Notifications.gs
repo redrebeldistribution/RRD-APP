@@ -33,8 +33,9 @@ function installer() {
 
 /** Vérifie l'accès à Firebase sans rien envoyer à personne (essai « à blanc » avec une adresse qui n'existe pas). */
 function verifier() {
-  var r = fcm_({ validate_only: true, message: { token: 'adresse-inexistante', notification: { title: 'Essai', body: 'Essai' } } });
-  var ok = r.code === 400 && /INVALID_ARGUMENT/.test(r.texte);   // Firebase a bien lu la demande et refuse seulement l'adresse
+  var c = corps_('adresse-inexistante', { id: 0, type: 'message', texte: 'Essai' }); c.validate_only = true;
+  var r = fcm_(c);
+  var ok = r.code === 400 && /not a valid FCM registration token/.test(r.texte);   // Firebase a bien lu toute la demande et ne refuse que l'adresse
   var t = (ok ? 'Accès à Firebase : OK' : 'Accès à Firebase : REFUSÉ') + ' (réponse ' + r.code + ', mode ' + r.mode + ') ' + r.texte.slice(0, 300);
   Logger.log(t);
   return t;
@@ -45,6 +46,14 @@ function entetes_(sh, aAjouter) {
   aAjouter.forEach(function (c) { if (h.indexOf(c) < 0) { sh.getRange(1, h.length + 1).setValue(c); h.push(c); } });
   var m = {}; h.forEach(function (c, i) { if (c && m[c] === undefined) m[c] = i; });
   return m;
+}
+
+/** La notification telle qu'elle est envoyée à Firebase (la même pour la vérification et pour les vrais envois). */
+function corps_(adresse, m) {
+  return { message: { token: adresse,
+    notification: { title: m.type === 'conseil' ? '💡 Conseil du jour' : '✉️ Message de la direction', body: m.texte },
+    data: { msg_id: String(m.id), type: String(m.type) },
+    android: { priority: 'HIGH', ttl: '86400s', notification: { channel_id: CANAL, tag: 'msg-' + m.id, default_sound: true, notification_priority: 'PRIORITY_HIGH' } } } };
 }
 
 function fcm_(corps) {
@@ -108,10 +117,7 @@ function traiter_() {
       if (!m.tropTard && m.texte) {
         var cibles = tel.filter(function (t) { return (m.cible === 'TOUS' || m.cible.toUpperCase() === t.station) && t.vu && (!m.cree || t.vu < m.cree); });   // t.vu vide : le téléphone n'a encore jamais pris ses messages, il le fait à l'ouverture
         for (var j = 0; j < cibles.length; j++) {
-          var t = cibles[j], r = fcm_({ message: { token: t.push,
-            notification: { title: m.type === 'conseil' ? '💡 Conseil du jour' : '✉️ Message de la direction', body: m.texte },
-            data: { msg_id: String(m.id), type: m.type },
-            android: { priority: 'HIGH', ttl: '86400s', notification: { channel_id: CANAL, tag: 'msg-' + m.id, default_sound: true, notification_priority: 'PRIORITY_HIGH' } } } });
+          var t = cibles[j], r = fcm_(corps_(t.push, m));
           if (r.code === 200) { envoyes++; if (recus.indexOf(t.station) < 0) recus.push(t.station); }
           else if (r.code === 401 || r.code === 403) { stop = 'Firebase refuse l\'accès (' + r.code + ') : ' + r.texte.slice(0, 300); break; }   // rien n'est marqué : nouvel essai au prochain passage
           else {
