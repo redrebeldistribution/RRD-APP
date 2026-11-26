@@ -52,7 +52,7 @@
     <button id="actOk">Confirmer</button><button class="sec" id="actNo">Annuler</button><div id="actErr" class="err"></div>
   </div>
   <div id="view"></div>
-  <div class="muted" style="text-align:center;margin:10px 0 20px">RRD — transferts, version 3.9</div>
+  <div class="muted" style="text-align:center;margin:10px 0 20px">RRD — transferts, version 3.10</div>
 </main>
 
 <script>/* toujours la dernière version des réglages (pas de vieux fichier en mémoire du navigateur) */
@@ -195,7 +195,7 @@ function go(tab) {
   render();
   if (tab === 'create' && !C.mine) loadMine();
   if (tab === 'pay' && ME.agent.type === 'US' && !C.mine) loadMine();
-  if (tab === 'pay' && P.mode === 'name' && ME.agent.nameList && !P.names) loadNames();
+  if (tab === 'pay' && P.mode === 'list' && !P.names) loadNames();
   if (tab === 'hq' && !H) loadHq();
   if (tab === 'rep' && !R.data) loadRep();
 }
@@ -257,17 +257,29 @@ function vNames(q) {
       : '<div class="muted">Aucun transfert à payer dans les ' + esc(ME.agent.listDays) + ' derniers jours.</div>') + '</div>' +
     '<div class="muted">Transferts des ' + esc(ME.agent.listDays) + ' derniers jours. Nom absent : demandez le numéro de confirmation ou contactez la direction.</div><button type="button" class="sec" id="pReload">Actualiser la liste</button>' + amt.replace('<label>', '<label>2. ');
 }
-function loadNames(btn) { api('names', {}, function (r) { if (!r.ok) return msg(esc(r.error), 'no'); P.names = r.names; if (TAB === 'pay' && P.mode === 'name' && !P.pick && !P.res) { P.q = { usd: val('pUsd') }; render(); } }, btn); }
+function loadNames(btn) { api('names', {}, function (r) { if (!r.ok) return msg(esc(r.error), 'no'); P.names = r.names; if (TAB === 'pay' && P.mode === 'list' && !P.pick && !P.res) { P.q = { usd: val('pUsd') }; render(); } }, btn); }
+/* Les façons de payer que la direction a autorisées pour cet agent : numéro de confirmation, nom + montant, liste. */
+function payModes() {
+  var a = ME.agent, m = [];
+  if (a.payNum !== false) m.push('num');
+  if (a.payName === undefined ? !a.nameList : a.payName) m.push('name');
+  if (a.payList === undefined ? a.nameList : a.payList) m.push('list');
+  return m;
+}
+function chk(id) { return !!($(id) && $(id).checked); }
 function vPay() {
   var us = ME.agent.type === 'US', q = P.q, h = '';
+  var modes = payModes(); if (modes.indexOf(P.mode) < 0) P.mode = modes[0] || '';
+  var lib = { num: ['mNum', 'Numéro de confirmation'], name: ['mName', 'Nom et montant'], list: ['mList', 'Liste des transferts'] };
   var todo = us && C.mine ? C.mine.todo : [];
   h += '<div class="card"><h3>Payer un transfert</h3><div class="muted">' + (us ? 'Aux USA : vous envoyez le transfert au bénéficiaire, en USD.' : (ME.rateUH ? 'Taux du jour : <b>' + esc(ME.rateUH) + ' gourdes pour 1 USD</b>' : '<b>Aucun taux pour cette station : contactez la direction.</b>')) + '</div>' +
     (us ? '<div class="muted" style="margin-top:6px">Ordres Haïti → USA à payer : ' + (todo.length ? todo.map(function (o) { return '<b>' + esc(o.track) + '</b> (' + esc(o.netUsd) + ' USD, ' + esc(o.recv) + ')'; }).join(', ') : 'aucun') + '</div>' : '') +
-    '<label>Le client a</label><div class="seg"><button id="mNum" class="' + (P.mode === 'num' ? 'on' : '') + '">Un numéro de confirmation</button><button id="mName" class="' + (P.mode === 'name' ? 'on' : '') + '">Nom et montant</button></div>' +
+    (!modes.length ? '<div class="err">Aucune façon de payer n’est autorisée pour cette station. Demandez à la direction.</div></div>' :
+    (modes.length > 1 ? '<label>Payer avec</label><div class="seg">' + modes.map(function (k) { return '<button id="' + lib[k][0] + '" class="' + (P.mode === k ? 'on' : '') + '" style="font-size:14px">' + lib[k][1] + '</button>'; }).join('') + '</div>' : '') +
     (P.mode === 'num' ? '<label>Numéro de confirmation</label><input id="pNum" inputmode="numeric" autocomplete="off" placeholder="ex. 4821-7305" value="' + esc(q.num) + '">'
-      : ME.agent.nameList ? vNames(q)
+      : P.mode === 'list' ? vNames(q)
       : '<label>Nom de l’expéditeur (prénom et nom)</label><input id="pName" autocomplete="off" value="' + esc(q.name) + '"><label>Montant (USD)</label><input id="pUsd" inputmode="decimal" value="' + esc(q.usd) + '">') +
-    '<button id="pGo">Vérifier</button><div id="pErr" class="err"></div></div>';
+    '<button id="pGo">Vérifier</button><div id="pErr" class="err"></div></div>');
   var back = '<button class="sec" id="pBack">Retour</button>';
   if (P.done) {
     var d = P.done;
@@ -448,7 +460,7 @@ function vHq() {
         (o.state.indexOf('À approuver') === 0 ? btn('approve', o, 'Approuver', '') : '') + btn('cancel', o, 'Annuler', 'danger') + '</td></tr>'; }).join('') : '<tr><td class="muted">Aucun</td></tr>') + '</table></div>';
   h += '<div class="card"><h3>Agents et stations</h3><div class="muted">Parts en % des frais de chaque ordre ; HQ garde le reste. Solde : ce que l’agent doit à HQ, ou ce que HQ lui doit.</div><table><tr><th>Agent</th><th>Création</th><th>Paiement</th><th>Limite</th><th>Solde USD</th></tr>' +
     H.agents.map(function (a) { var b = Number(a.balanceUsd);
-      return '<tr><td>' + esc(a.name) + '<br><span class="muted">' + esc(a.code) + ' · ' + (a.type === 'US' ? 'USA' : a.rrd ? 'Station RRD' : 'Haïti (groupe)') + (a.active ? '' : ' · inactif') + (a.type !== 'US' && !a.hasGroup ? ' · groupe manquant' : '') + (!a.canCreate ? ' · payer seulement' : !a.canPay ? ' · créer seulement' : '') + (a.canReport ? '' : ' · sans rapport') + (a.nameList ? ' · liste de noms' : '') + (a.pin ? ' · code caissier' : '') + '</span><br><button class="mini sec" data-edit="' + esc(a.code) + '">Modifier</button>' +
+      return '<tr><td>' + esc(a.name) + '<br><span class="muted">' + esc(a.code) + ' · ' + (a.type === 'US' ? 'USA' : a.rrd ? 'Station RRD' : 'Haïti (groupe)') + (a.active ? '' : ' · inactif') + (a.type !== 'US' && !a.hasGroup ? ' · groupe manquant' : '') + (!a.canCreate ? ' · payer seulement' : !a.canPay ? ' · créer seulement' : '') + (a.canReport ? '' : ' · sans rapport') + (a.canPay ? ' · payer par : ' + ([a.payNum ? 'numéro' : '', a.payName ? 'nom et montant' : '', a.payList ? 'liste' : ''].filter(Boolean).join(', ') || 'rien') : '') + (a.pin ? ' · code caissier' : '') + '</span><br><button class="mini sec" data-edit="' + esc(a.code) + '">Modifier</button>' +
         (a.hasGroup ? '<button class="mini sec" data-sendbtn="' + esc(a.code) + '">Envoyer le bouton au groupe</button>' : '') + '</td><td>' + esc(a.createPct) + ' %</td><td>' + esc(a.payPct) + ' %</td><td>' + esc(a.limit) + '</td><td><b>' + Math.abs(b).toFixed(2) + '</b><br><span class="muted">' + (b > 0 ? 'doit à HQ' : b < 0 ? 'HQ lui doit' : 'à zéro') + '</span>' +
         (b ? '<br><button class="mini sec" data-settle="' + esc(a.code) + '">' + (b > 0 ? 'Règlement reçu' : 'HQ a payé') + '</button>' : '') + '</td></tr>'; }).join('') + '</table>' +
     '<button class="sec" data-edit="">Ajouter un agent</button></div>';
@@ -464,7 +476,9 @@ function vHq() {
       '<label>Peut créer des ordres</label><select id="aCanC"><option value="1"' + (e.canCreate !== false ? ' selected' : '') + '>Oui</option><option value="0"' + (e.canCreate === false ? ' selected' : '') + '>Non</option></select>' +
       '<label>Peut payer des ordres</label><select id="aCanP"><option value="1"' + (e.canPay !== false ? ' selected' : '') + '>Oui</option><option value="0"' + (e.canPay === false ? ' selected' : '') + '>Non</option></select>' +
       '<label>Peut voir le rapport</label><select id="aCanR"><option value="1"' + (e.canReport !== false ? ' selected' : '') + '>Oui</option><option value="0"' + (e.canReport === false ? ' selected' : '') + '>Non</option></select>' +
-      (st ? '<label>Pour payer par nom, l’agent</label><select id="aList"><option value="0"' + (e.nameList ? '' : ' selected') + '>Écrit le nom complet et le montant</option><option value="1"' + (e.nameList ? ' selected' : '') + '>Choisit le nom dans une liste, puis écrit le montant</option></select><div class="muted">Avec la liste : l’agent voit le nom de tous les expéditeurs des 7 derniers jours, sans les montants. 2 montants incorrects bloquent le nom et vous êtes prévenu.</div>' : '') +
+      '<label>Façons de payer autorisées</label>' + [['aPayNum', 'payNum', 'Avec le numéro de confirmation'], ['aPayName', 'payName', 'En écrivant le nom complet et le montant']].concat(st ? [['aPayList', 'payList', 'En choisissant dans la liste des transferts pas encore payés, puis en écrivant le montant']] : []).map(function (x) {
+        return '<label style="display:flex;gap:8px;align-items:center;color:var(--ink);font-size:15px;margin:6px 0"><input type="checkbox" id="' + x[0] + '" style="width:auto"' + (e[x[1]] ? ' checked' : '') + '>' + x[2] + '</label>'; }).join('') +
+      (st ? '<div class="muted">Liste : l’agent voit le nom des expéditeurs des 7 derniers jours, sans les montants. 2 montants incorrects bloquent le nom et vous êtes prévenu.</div>' : '') +
       (st ? '<label>Code personnel du caissier pour payer</label><select id="aPin"><option value="0"' + (e.pin ? '' : ' selected') + '>Non</option><option value="1"' + (e.pin ? ' selected' : '') + '>Oui — chaque caissier choisit son nom et écrit son code</option></select><div class="muted">Pour une station dont tous les employés utilisent le même téléphone. Enregistrez d’abord les caissiers dans la carte « Caissiers ».</div>' : '') +
       '<div class="muted">Pour « payer seulement » : mettez « Peut créer » sur Non. L’écran disparaît pour cet agent et le serveur refuse aussi l’action.</div>' +
       '<label>Actif</label><select id="aAct"><option value="1"' + (e.active ? ' selected' : '') + '>Oui</option><option value="0"' + (e.active ? '' : ' selected') + '>Non</option></select>' +
@@ -549,18 +563,18 @@ document.addEventListener('click', function (e) {
   if (b.id === 'zSync') { msg(''); return envoyerFileZ(); }
   if (b.hasAttribute('data-zdel')) { sauverFileZ(fileZ().filter(function (x) { return x.cid !== d('data-zdel'); })); return render(); }
   // screen 2
-  if (b.id === 'mNum' || b.id === 'mName') { P.mode = b.id === 'mNum' ? 'num' : 'name'; P.res = null; P.done = null; P.pick = null; render(); if (P.mode === 'name' && ME.agent.nameList) loadNames(); return; }
+  if (b.id === 'mNum' || b.id === 'mName' || b.id === 'mList') { P.mode = b.id === 'mNum' ? 'num' : b.id === 'mList' ? 'list' : 'name'; P.res = null; P.done = null; P.pick = null; P.q = {}; render(); if (P.mode === 'list') loadNames(); return; }
   if (b.id === 'pReload') return loadNames(b);
   if (b.id === 'pUnpick') { P.pick = null; P.res = null; P.q = { usd: val('pUsd') }; render(); return loadNames(); }
   if (b.hasAttribute('data-pick')) { P.pick = P.names[Number(d('data-pick'))]; P.res = null; P.q = { usd: val('pUsd') }; render(); if ($('pUsd')) $('pUsd').focus(); return; }
   if (b.id === 'pGo') {
     $('pErr').textContent = ''; P.done = null; P.photoFile = null; P.photoB64 = ''; stopCam();
-    var lst = P.mode === 'name' && ME.agent.nameList;
+    var lst = P.mode === 'list';
     var q = P.mode === 'num' ? { num: val('pNum') } : lst ? { pick: P.pick ? P.pick.key : '', usd: val('pUsd') } : { name: val('pName'), usd: val('pUsd') };
     if (P.mode === 'num' && q.num.replace(/\D/g, '').length !== 8) return $('pErr').textContent = 'Le numéro a 8 chiffres.';
     if (lst && !q.pick) return $('pErr').textContent = 'Touchez d’abord le nom de l’expéditeur dans la liste.';
     if (lst && !q.usd) return $('pErr').textContent = 'Écrivez le montant.';
-    if (P.mode === 'name' && !lst && (q.name.split(/\s+/).length < 2 || !q.usd)) return $('pErr').textContent = 'Écrivez le prénom, le nom et le montant.';
+    if (P.mode === 'name' && (q.name.split(/\s+/).length < 2 || !q.usd)) return $('pErr').textContent = 'Écrivez le prénom, le nom et le montant.';
     P.q = q;
     return api('lookup', q, function (r) { if (!r.ok) return $('pErr') ? $('pErr').textContent = r.error : msg(esc(r.error), 'no'); P.res = r; render(); }, b);
   }
@@ -571,7 +585,7 @@ document.addEventListener('click', function (e) {
   if (b.id === 'pGalBtn') { stopCam(); return $('pIdPhotoGal').click(); }
   if (b.id === 'pPhotoDel') { P.photoFile = null; P.photoB64 = ''; $('pIdPhoto').value = ''; $('pIdPhotoGal').value = ''; $('pPhotoInfo').textContent = 'Aucune photo.'; return; }
   if (b.id === 'pPay') return doPay(b);
-  if (b.id === 'pBack') { stopCam(); P.res = null; P.done = null; P.q = {}; P.pick = null; P.names = null; P.photoFile = null; P.photoB64 = ''; render(); if (P.mode === 'name' && ME.agent.nameList) loadNames(); return; }
+  if (b.id === 'pBack') { stopCam(); P.res = null; P.done = null; P.q = {}; P.pick = null; P.names = null; P.photoFile = null; P.photoB64 = ''; render(); if (P.mode === 'list') loadNames(); return; }
   // reports
   if (b.id === 'fPdf') { R.msg = ''; return api('pdf', { agent: R.agent, from: R.from, to: R.to, status: R.status }, function (r) {
       if (!r.ok) { R.msg = r.error; if ($('fMsg')) $('fMsg').textContent = R.msg; return; }
@@ -583,10 +597,10 @@ document.addEventListener('click', function (e) {
   if (d('data-settle')) { var ag = H.agents.filter(function (a) { return a.code === d('data-settle'); })[0], bal = Number(ag.balanceUsd);
     return openAct('settle', { code: ag.code, sign: bal > 0 ? 1 : -1 }, ag.name + ' : ' + (bal > 0 ? 'doit ' + bal.toFixed(2) + ' USD à HQ. Montant reçu de l’agent :' : 'HQ lui doit ' + (-bal).toFixed(2) + ' USD. Montant payé à l’agent :'), Math.abs(bal).toFixed(2)); }
   if (b.hasAttribute('data-edit')) { var code = d('data-edit'), a0 = H.agents.filter(function (a) { return a.code === code; })[0];
-    EDIT = a0 ? { code: a0.code, name: a0.name, type: a0.type, rrd: a0.rrd, groupId: a0.groupId, canCreate: a0.canCreate, canPay: a0.canPay, canReport: a0.canReport, nameList: a0.nameList, pin: a0.pin, tgId: a0.tgId, createPct: a0.createPct, payPct: a0.payPct, limit: a0.limit, active: a0.active } : { isNew: true, type: 'US', tgId: '', groupId: '', createPct: 0, payPct: 0, limit: 0, active: true };
+    EDIT = a0 ? { code: a0.code, name: a0.name, type: a0.type, rrd: a0.rrd, groupId: a0.groupId, canCreate: a0.canCreate, canPay: a0.canPay, canReport: a0.canReport, payNum: a0.payNum, payName: a0.payName, payList: a0.payList, pin: a0.pin, tgId: a0.tgId, createPct: a0.createPct, payPct: a0.payPct, limit: a0.limit, active: a0.active } : { isNew: true, type: 'US', payNum: true, payName: true, payList: false, tgId: '', groupId: '', createPct: 0, payPct: 0, limit: 0, active: true };
     render(); if ($('agForm').scrollIntoView) $('agForm').scrollIntoView({ block: 'center' }); return; }
   if (d('data-sendbtn')) { var ag2 = H.agents.filter(function (a) { return a.code === d('data-sendbtn'); })[0]; return openAct('sendButton', { code: ag2.code }, 'Groupe « ' + ag2.name + ' ».'); }
-  if (b.id === 'aTypeUS' || b.id === 'aTypeHT') { ['code', 'name'].forEach(function (k) { EDIT[k] = val(k === 'code' ? 'aCode' : 'aName'); }); EDIT.createPct = val('aCp'); EDIT.payPct = val('aPp'); EDIT.limit = val('aLim'); EDIT.canCreate = val('aCanC') === '1'; EDIT.canPay = val('aCanP') === '1'; EDIT.canReport = val('aCanR') === '1'; EDIT.nameList = val('aList') === '1'; EDIT.pin = val('aPin') === '1'; EDIT.type = b.id === 'aTypeHT' ? 'Station' : 'US'; return render(); }
+  if (b.id === 'aTypeUS' || b.id === 'aTypeHT') { ['code', 'name'].forEach(function (k) { EDIT[k] = val(k === 'code' ? 'aCode' : 'aName'); }); EDIT.createPct = val('aCp'); EDIT.payPct = val('aPp'); EDIT.limit = val('aLim'); EDIT.canCreate = val('aCanC') === '1'; EDIT.canPay = val('aCanP') === '1'; EDIT.canReport = val('aCanR') === '1'; EDIT.payNum = chk('aPayNum'); EDIT.payName = chk('aPayName'); EDIT.payList = chk('aPayList'); EDIT.pin = val('aPin') === '1'; EDIT.type = b.id === 'aTypeHT' ? 'Station' : 'US'; return render(); }
   if (b.id === 'aCancel') { EDIT = null; return render(); }
   if (b.hasAttribute('data-cash')) { var cid = d('data-cash'), c0 = (H.cashiers || []).filter(function (x) { return x.id === cid; })[0];
     CEDIT = c0 ? { id: c0.id, agent: c0.agent, name: c0.name, active: c0.active } : { id: '', agent: '', name: '', active: true };
@@ -596,7 +610,7 @@ document.addEventListener('click', function (e) {
     return api('saveCashier', { id: CEDIT.id, agent: val('cAg'), name: val('cName'), pin: val('cPin'), active: val('cAct') === '1' }, function (r) { if (!r.ok) return $('cErr').textContent = r.error; CEDIT = null; H = r; render(); }, b);
   }
   if (b.id === 'aSave') {
-    var p = { code: EDIT.isNew ? val('aCode').toUpperCase() : EDIT.code, name: EDIT.isNew ? val('aName') : EDIT.name, type: EDIT.type, tgId: val('aTg'), groupId: val('aGrp'), createPct: val('aCp'), payPct: val('aPp'), limit: val('aLim'), active: val('aAct') === '1', canCreate: val('aCanC') === '1', canPay: val('aCanP') === '1', canReport: val('aCanR') === '1', nameList: val('aList') === '1', pin: val('aPin') === '1' };
+    var p = { code: EDIT.isNew ? val('aCode').toUpperCase() : EDIT.code, name: EDIT.isNew ? val('aName') : EDIT.name, type: EDIT.type, tgId: val('aTg'), groupId: val('aGrp'), createPct: val('aCp'), payPct: val('aPp'), limit: val('aLim'), active: val('aAct') === '1', canCreate: val('aCanC') === '1', canPay: val('aCanP') === '1', canReport: val('aCanR') === '1', payNum: chk('aPayNum'), payName: chk('aPayName'), payList: chk('aPayList'), pin: val('aPin') === '1' };
     return api('saveAgent', p, function (r) { if (!r.ok) return $('aErr').textContent = r.error; EDIT = null; H = r; R.data = null; render(); }, b);
   }
   if (b.id === 'btnRate') {
