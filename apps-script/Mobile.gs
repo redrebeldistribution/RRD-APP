@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.16';
+var MOBILE_VERSION = 'm1.17';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var MAX_APPAREILS_ROLE = 5;   // un code DIR ou CPT peut servir sur 5 appareils en même temps (demande du propriétaire, 26/11/2026)
 var ROLES_APPAREIL = { DIRECTION: 'management', COMPTA: 'accounting' };   // station = DIRECTION ou COMPTA → téléphone de la direction / comptabilité
@@ -77,6 +77,7 @@ function apiMobile_(action, b) {
       case 'bordereau': return ok_(bordereau_(app, payload));
       case 'messages': return ok_(messagesStation_(app));
       case 'pushToken': return ok_(pushToken_(app, payload));
+      case 'reponse': return ok_(reponseStation_(app, payload));
       case 'dir': return ok_(direction_(app, String(b.sous_action || ''), payload));
       default: throw new UserError('Action inconnue.');
     }
@@ -766,8 +767,9 @@ function msgJour_(n) { return Utilities.formatDate(new Date(Date.now() + n * 864
 function messagesStation_(app) {
   if (app.role || !app.station) throw new UserError('Réservé au téléphone de la station.', 'FORBIDDEN');
   var code = String(app.station.code), du = msgJour_(-2), au = msgJour_(14);
+  var miennes = {}; repLire_().forEach(function (r) { if (r.station === code) miennes[r.msg_id] = r.texte; });   // la dernière réponse de cette station à chaque message
   var l = msgLire_().filter(function (m) { return m.actif && (m.cible === 'TOUS' || m.cible === code) && m.date >= du && m.date <= au; })
-    .map(function (m) { return { id: m.id, date: m.date, heure: m.heure, type: m.type, texte: m.texte, pousse: m.pousse_a.indexOf(code) >= 0 }; });
+    .map(function (m) { return { id: m.id, date: m.date, heure: m.heure, type: m.type, texte: m.texte, pousse: m.pousse_a.indexOf(code) >= 0, reponse: miennes[m.id] || '' }; });
   try { majColonne_(APPAREILS, app.ligne._ligne, 'msg_vu_le', maintenant_()); } catch (e) { }   // ce téléphone a maintenant ces messages : inutile de les lui pousser
   return { date: msgJour_(0), messages: l };
 }
@@ -804,15 +806,55 @@ function pushReveiller_() {
 }
 function messagesListe_() {
   var noms = { TOUS: 'Toutes les stations' }; stations_().forEach(function (s) { noms[String(s.code)] = String(s.nom); });
-  var du = msgJour_(-30);
+  var du = msgJour_(-30), parMsg = {};
+  repLire_().forEach(function (r) { (parMsg[r.msg_id] = parMsg[r.msg_id] || []).push({ station: r.station, nom: noms[r.station] || r.station, ecrit_le: r.ecrit_le, texte: r.texte }); });
   return { aujourdhui: msgJour_(0), stations: stations_().filter(function (s) { return estVrai_(s.actif); }).map(function (s) { return { code: String(s.code), nom: String(s.nom) }; }),
     messages: msgLire_().filter(function (m) { return m.actif && m.date >= du; }).sort(function (a, b) { return (a.date + a.heure) < (b.date + b.heure) ? 1 : -1; })
-      .map(function (m) { return { id: m.id, date: m.date, heure: m.heure, type: m.type, texte: m.texte, cible: m.cible, cible_nom: noms[m.cible] || m.cible, par: m.par }; }) };
+      .map(function (m) { return { id: m.id, date: m.date, heure: m.heure, type: m.type, texte: m.texte, cible: m.cible, cible_nom: noms[m.cible] || m.cible, par: m.par, reponses: parMsg[m.id] || [] }; }) };
+}
+
+/* ============================ Réponses des stations aux messages (m1.17, 26/11/2026) ============================
+ * La station répond par une phrase au conseil du jour ou à un message (c'est le point « ✅ » du RRD Challenge, et la réponse
+ * à la question du samedi). Une ligne par réponse dans l'onglet « Réponses (app) » ; rien n'est jamais modifié ni supprimé.
+ * « ecrit_le » = l'heure du téléphone (heure d'Haïti) au moment où la réponse a été écrite, même si elle part plus tard faute de signal. */
+var REP_ONGLET = 'Réponses (app)';
+var REP_ENTETES = ['id', 'recu_le', 'station', 'msg_id', 'date_msg', 'ecrit_le', 'texte', 'appareil', 'cid', 'note'];
+function repFeuille_(creer) {
+  var sh = ss_().getSheetByName(REP_ONGLET);
+  if (!sh && creer) { sh = ss_().insertSheet(REP_ONGLET); sh.appendRow(REP_ENTETES); sh.setFrozenRows(1); }
+  return sh;
+}
+function repLire_() {
+  var sh = repFeuille_(false);
+  if (!sh || sh.getLastRow() < 2) return [];
+  var n = sh.getLastRow(), from = Math.max(2, n - 2999);
+  return sh.getRange(from, 1, n - from + 1, REP_ENTETES.length).getValues().map(function (r) {
+    return { id: Number(r[0]) || 0, recu_le: phTexte_(r[1]), station: String(r[2]).trim(), msg_id: Number(r[3]) || 0, date_msg: phJour_(r[4]), ecrit_le: phTexte_(r[5]),
+      texte: String(r[6]).trim(), cid: String(r[8]) };
+  });
+}
+function reponseStation_(app, p) {
+  if (app.role || !app.station) throw new UserError('Réservé au téléphone de la station.', 'FORBIDDEN');
+  var code = String(app.station.code), texte = String(p.texte || '').trim().slice(0, 500), cid = String(p.cid || '').slice(0, 40);
+  if (texte.length < 3) throw new UserError('Écrivez votre réponse.');
+  var m = msgLire_().filter(function (x) { return x.id === Number(p.msg_id); })[0];
+  if (!m || !m.actif || (m.cible !== 'TOUS' && m.cible !== code)) throw new UserError('Ce message n\'existe plus.');
+  var recu = new Date(), ecrit = new Date(Number(p.ecrit_ms) || 0), note = '';
+  if (!(ecrit.getTime() > 0) || ecrit.getTime() > recu.getTime() + 10 * 60000) { note = 'heure du téléphone refusée : heure de réception utilisée'; ecrit = recu; }
+  var lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    var l = repLire_();
+    if (cid && l.some(function (r) { return r.cid === cid; })) return { recu: true };   // déjà reçue (nouvel essai du téléphone)
+    var id = l.reduce(function (mx, r) { return Math.max(mx, r.id); }, 0) + 1;
+    repFeuille_(true).appendRow([id, Utilities.formatDate(recu, TZ, 'yyyy-MM-dd HH:mm:ss'), code, m.id, m.date, Utilities.formatDate(ecrit, TZ, 'yyyy-MM-dd HH:mm:ss'),
+      (/^[=+\-@]/.test(texte) ? ' ' : '') + texte, app.id, cid, note]);   // jamais une formule
+  } finally { lock.releaseLock(); }
+  return { recu: true };
 }
 function messageAjouter_(ctx, p) {
   var texte = String(p.texte || '').trim();
   if (!texte) throw new UserError('Écrivez le texte du message.');
-  if (texte.length > 500) throw new UserError('Message trop long (500 caractères au plus).');
+  if (texte.length > 1500) throw new UserError('Message trop long (1 500 caractères au plus).');
   var auj = msgJour_(0), date = /^\d{4}-\d{2}-\d{2}$/.test(String(p.date || '')) ? String(p.date) : auj;
   var heure = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(p.heure || '')) ? String(p.heure) : '06:30';
   if (p.maintenant === true) { date = auj; heure = Utilities.formatDate(new Date(), TZ, 'HH:mm'); }   // « Envoyer maintenant » : l'heure du bureau, pas celle de l'appareil

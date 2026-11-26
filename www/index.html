@@ -68,7 +68,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.14.1';
+var VERSION_APP = '1.15.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -329,7 +329,7 @@ function changerCode(siAnnule) {
     var att = liste.filter(function (r) { return r.statut === 'attente'; }).length;
     if (att) return alert(att + ' rapport(s) pas encore envoyé(s). Attendez qu\'ils partent (bouton Envoyer / actualiser) avant de changer de code.');
     if (!confirm('Changer le code de ce téléphone ? Il faudra un nouveau code d\'activation et internet.')) { if (typeof siAnnule === 'function') siAnnule(); return; }
-    ['jeton', 'role', 'nom', 'station', 'init', 'init_le', 'noms'].forEach(CFG.del);
+    ['jeton', 'role', 'nom', 'station', 'init', 'init_le', 'noms', 'messages', 'reponses', 'msgVus'].forEach(CFG.del);
     S.init = null; D = null; ecranEnregistrer();
   });
 }
@@ -856,7 +856,14 @@ function msgCharger(force) {
     var l = d.messages || [], vus = CFG.get('msgVus', []), ch = false;
     l.forEach(function (m) { if (m.pousse && vus.indexOf(m.id) < 0) { vus.push(m.id); ch = true; } });   // déjà reçu en notification poussée
     if (ch) CFG.set('msgVus', vus.slice(-200));
-    CFG.set('messages', l); ntBientot(); if (S.ecran === 'accueil') accueil(); }).catch(function () { });
+    var reps = CFG.get('reponses', {}) || {}, garde = {}, chR = false;
+    l.forEach(function (m) {   // une réponse déjà reçue au bureau (autre installation) est reprise ; les réponses des vieux messages sont oubliées
+      if (reps[m.id]) garde[m.id] = reps[m.id];
+      else if (m.reponse) { garde[m.id] = { texte: m.reponse, statut: 'envoye' }; chR = true; }
+    });
+    Object.keys(reps).forEach(function (k) { if (!garde[k] && reps[k].statut === 'attente') garde[k] = reps[k]; else if (!garde[k]) chR = true; });
+    if (chR) CFG.set('reponses', garde);
+    CFG.set('messages', l); ntBientot(); repEnvoyer(); if (S.ecran === 'accueil') accueil(); }).catch(function () { });
 }
 function msgHtml() {   // sur l'écran d'accueil : les conseils et messages d'aujourd'hui et d'hier dont l'heure est passée
   var now = Date.now(), jh = phJourHeure(now), hier = jourPlus(jh.date, -1), h = '';
@@ -864,10 +871,57 @@ function msgHtml() {   // sur l'écran d'accueil : les conseils et messages d'au
     var hm = String(m.heure || '06:30').split(':');
     return (m.date === jh.date || m.date === hier) && quandHaiti(m.date, Number(hm[0]) || 0, Number(hm[1]) || 0) <= now;
   }).sort(function (a, b) { return (a.date + a.heure) < (b.date + b.heure) ? 1 : -1; }).forEach(function (m) {
-    h += '<div class="note"><b>' + (m.type === 'conseil' ? '💡 Conseil du jour' : '✉️ Message de la direction') + '</b> · ' + dfr(m.date).slice(0, 5) + '<br>' + esc(m.texte) + '</div>';
+    var r = (CFG.get('reponses', {}) || {})[m.id];
+    h += '<div class="note"><b>' + (m.type === 'conseil' ? '💡 Conseil du jour' : '✉️ Message de la direction') + '</b> · ' + dfr(m.date).slice(0, 5) +
+      '<div style="white-space:pre-line;margin-top:4px">' + esc(m.texte) + '</div>' +
+      (r ? '<div style="margin-top:8px;white-space:pre-line"><b>✅ Votre réponse</b>' + (r.statut === 'attente' ? ' <span class="mut">(partira dès qu\'il y aura du signal)</span>' : '') + ' : ' + esc(r.texte) + '</div>'
+         : '<div style="margin-top:8px"><button class="sec" onclick="msgRepondre(' + Number(m.id) + ')">✍️ Répondre</button></div>') + '</div>';
   });
   if (LN && NT.ok === false) h += '<div class="wait">🔕 Les notifications sont bloquées sur ce téléphone : pas de rappels ni de messages. Autorisez-les dans Paramètres › Applications › RRD › Notifications.</div>';
   return h;
+}
+
+/* Réponse de la station à un conseil ou à un message : écrite sur le téléphone, gardée si pas de signal, envoyée dès que possible. */
+function msgRepondre(id) {
+  var m = (CFG.get('messages', []) || []).filter(function (x) { return Number(x.id) === Number(id); })[0];
+  if (!m) return accueil();
+  S.ecran = 'reponse';
+  view('<h2>' + (m.type === 'conseil' ? '💡 Conseil du jour' : '✉️ Message de la direction') + '</h2>' +
+    '<div class="note" style="white-space:pre-line">' + esc(m.texte) + '</div>' +
+    '<label>Votre réponse</label><textarea id="rTexte" maxlength="500" placeholder="Écrivez en une phrase ce que vous allez faire."></textarea>' +
+    '<p class="mut">Une phrase avec vos mots. « ok » ou « vu » ne suffit pas.</p>' +
+    '<div style="margin-top:10px"><button onclick="msgRepValider(' + Number(m.id) + ')">Envoyer la réponse</button></div>' +
+    '<div style="margin-top:10px"><button class="sec" onclick="accueil()">Retour</button></div>');
+}
+function msgRepValider(id) {
+  var t = String($('rTexte').value || '').trim();
+  if (t.length < 10 || t.split(/\s+/).length < 3) return alerte('Écrivez une phrase complète (au moins trois mots).');
+  var reps = CFG.get('reponses', {}) || {};
+  reps[id] = { texte: t.slice(0, 500), ecrit_ms: Date.now(), cid: 'R' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8), statut: 'attente' };
+  CFG.set('reponses', reps);
+  accueil(); repEnvoyer();
+}
+var REP = { envoi: false };
+function repEnvoyer() {
+  if (REP.envoi || !CFG.get('jeton', '') || CFG.get('role', '')) return;
+  var reps = CFG.get('reponses', {}) || {}, ids = Object.keys(reps).filter(function (k) { return reps[k].statut === 'attente'; });
+  if (!ids.length) return;
+  REP.envoi = true;
+  var i = 0;
+  (function suivant() {
+    if (i >= ids.length) { REP.envoi = false; if (S.ecran === 'accueil') accueil(); return; }
+    var id = ids[i++], r = reps[id];
+    api('reponse', { payload: { msg_id: Number(id), texte: r.texte, ecrit_ms: r.ecrit_ms, cid: r.cid } }).then(function () {
+      var cur = CFG.get('reponses', {}) || {}; if (cur[id]) { cur[id].statut = 'envoye'; CFG.set('reponses', cur); }
+      suivant();
+    }, function (e) {
+      if (e && e.reseau === false && e.code !== 'SERVEUR') {   // refusée par le bureau (message supprimé, etc.) : on ne réessaie pas sans fin
+        var cur = CFG.get('reponses', {}) || {}; delete cur[id]; CFG.set('reponses', cur);
+        if (S.ecran === 'accueil') alerte(e.erreur || 'Réponse refusée.');
+        suivant();
+      } else { REP.envoi = false; }   // pas de signal : nouvel essai plus tard
+    });
+  })();
 }
 
 var D = null, T = { onglet: 'rapports', du: '', au: '', station: '', date: '' }, R = null, CORR = null, ANNUL = null;
@@ -1257,14 +1311,17 @@ function ongletMessages(data, msg) {
       '<label>Genre</label><select id="mType"><option value="conseil">💡 Conseil du jour</option><option value="message">✉️ Message</option></select>' +
       '<label>Quand</label><select id="mQuand" onchange="msgQuand()"><option value="maintenant">Envoyer maintenant</option><option value="plus_tard">Programmer pour plus tard</option></select>' +
       '<div class="row" id="mPlus" style="display:none"><div><label>Jour</label><input type="date" id="mDate" value="' + d.aujourdhui + '" min="' + d.aujourdhui + '"></div><div><label>Heure (heure d\'Haïti)</label><input type="time" id="mHeure" value="06:30"></div></div>' +
-      '<label>Texte (500 caractères au plus)</label><textarea id="mTexte" maxlength="500"></textarea>' +
+      '<label>Texte (1 500 caractères au plus)</label><textarea id="mTexte" maxlength="1500"></textarea>' +
       '<div style="margin-top:10px"><button id="bMsg" onclick="msgAjouter()">Envoyer maintenant</button></div>' +
       '<p class="mut">« Envoyer maintenant » : le message arrive tout de suite en notification sur le téléphone de la station, même si l\'application est fermée. Si le téléphone n\'a pas de signal, il arrive dès que le signal revient (dans les 24 heures) ou à la prochaine ouverture de l\'application.<br>« Programmer pour plus tard » : il arrive au jour et à l\'heure choisis, à l\'heure d\'Haïti. Une heure déjà passée aujourd\'hui = envoi tout de suite.</p>';
     h += '<h2>Messages programmés et récents</h2>';
     if (!d.messages.length) h += '<div class="note">Aucun message.</div>';
     d.messages.forEach(function (m) {
       h += '<div class="card"><div class="row"><div><b>' + (m.type === 'conseil' ? '💡 Conseil' : '✉️ Message') + '</b> · ' + dfr(m.date) + ' à ' + esc(m.heure) + '<div class="mut">' + esc(m.cible_nom) + ' · par ' + esc(m.par) + '</div><div style="margin-top:6px;white-space:pre-line">' + esc(m.texte) + '</div></div>' +
-        (gestion ? '<div style="flex:none"><button class="sec" onclick="msgSupprimer(' + Number(m.id) + ')">Supprimer</button></div>' : '') + '</div></div>';
+        (gestion ? '<div style="flex:none"><button class="sec" onclick="msgSupprimer(' + Number(m.id) + ')">Supprimer</button></div>' : '') + '</div>' +
+        ((m.reponses || []).length ? '<div class="note" style="margin-bottom:0"><b>Réponses (' + m.reponses.length + ')</b>' + m.reponses.map(function (r) {
+          return '<div style="margin-top:6px;white-space:pre-line">↩︎ <b>' + esc(r.nom) + '</b> · ' + esc(String(r.ecrit_le).slice(8, 10) + '/' + String(r.ecrit_le).slice(5, 7) + ' à ' + String(r.ecrit_le).slice(11, 16)) + '<br>' + esc(r.texte) + '</div>';
+        }).join('') + '</div>' : '<div class="mut" style="margin-top:6px">Pas encore de réponse.</div>') + '</div>';
     });
     view(h);
   };
@@ -1395,8 +1452,8 @@ function verifierMaj() {
     }).then(function (b) { return CU.next({ id: b.id }); }).then(function () { S.majPrete = ver; S.majErreur = ''; if (S.ecran === 'accueil') accueil(); });
   }).catch(function (e) { S.majErreur = String((e && (e.message || e.errorMessage)) || e || '').slice(0, 90); }).then(function () { S.majEnCours = false; });
 }
-document.addEventListener('resume', function () { verifierMaj(); bandeauMaj(); phEnvoyer(); msgCharger(); ntBientot(); });
-setInterval(function () { phEnvoyer(); if (S.ecran === 'photos') ecranPhotos(); msgCharger(); }, 60000);   // file des photos + heure en cours à jour
+document.addEventListener('resume', function () { verifierMaj(); bandeauMaj(); phEnvoyer(); msgCharger(); ntBientot(); repEnvoyer(); });
+setInterval(function () { phEnvoyer(); if (S.ecran === 'photos') ecranPhotos(); msgCharger(); repEnvoyer(); }, 60000);   // file des photos + heure en cours à jour
 setTimeout(verifierMaj, 4000); setInterval(verifierMaj, 3 * 3600 * 1000);
 
 restaurer().then(function () {
