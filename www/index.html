@@ -72,7 +72,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.21.1';
+var VERSION_APP = '1.21.2';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -231,10 +231,19 @@ function prendrePhoto(inputId, suite) {
   if (!C || S.photoRepli) return repli();
   if (S.photoEnCours && Date.now() - S.photoEnCours < 2500) return;   // deux touchers de suite : un seul appareil photo
   S.photoEnCours = Date.now();
-  C.getPhoto({ source: 'CAMERA', resultType: 'dataUrl', quality: 80, width: 1600, correctOrientation: true, saveToGallery: false }).then(function (ph) {
-    S.photoEnCours = 0; if (ph && ph.dataUrl) suite(ph.dataUrl);
+  /* Garde-fou : si, 4 secondes après le toucher, l'appareil photo ne s'est pas ouvert (l'application n'a été ni cachée ni mise en pause)
+   * et que le téléphone n'a rien répondu, on passe par l'ancien chemin au lieu de laisser un bouton sans effet. */
+  var regle = false, parti = false, vu = function () { parti = true; };
+  document.addEventListener('pause', vu); window.addEventListener('blur', vu); document.addEventListener('visibilitychange', vu);
+  var fin = function () { regle = true; S.photoEnCours = 0; document.removeEventListener('pause', vu); window.removeEventListener('blur', vu); document.removeEventListener('visibilitychange', vu); };
+  setTimeout(function () { if (regle || parti || document.hidden) return; fin(); S.photoRepli = true; toast('Nouvel essai…'); repli(); }, 4000);
+  var appel;
+  try { appel = C.getPhoto({ source: 'CAMERA', resultType: 'dataUrl', quality: 80, width: 1600, correctOrientation: true, saveToGallery: false }); }
+  catch (e) { fin(); S.photoRepli = true; return repli(); }
+  appel.then(function (ph) {
+    if (regle) return; fin(); if (ph && ph.dataUrl) suite(ph.dataUrl);
   }, function (e) {
-    S.photoEnCours = 0;
+    if (regle) return; fin();
     var m = String((e && (e.message || e.errorMessage)) || e || '');
     if (/cancel/i.test(m)) return;
     if (/denied|permission/i.test(m)) return alerte('L\'appareil photo est bloqué pour RRD. Ouvrez Paramètres du téléphone > Applications > RRD > Autorisations > Appareil photo, puis choisissez « Autoriser ».');
