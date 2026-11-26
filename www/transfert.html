@@ -58,10 +58,7 @@ var P = { mode: 'num', q: {}, res: null, done: null, names: null, pick: null }; 
 var R = { agent: '', from: '', to: '', status: '', data: null, msg: '' };     // reports
 var H = null, ROWS = {}, ACT = null, EDIT = null, CEDIT = null;                             // direction
 var $ = function (id) { return document.getElementById(id); };
-var MOTS = [[/\b(un|ce|le|du|Un|Ce|Le) Zelle\b/g, function (m, d) { return d + ' transfert'; }], [/\bdes Zelle\b/g, 'des transferts'], [/\bPlusieurs Zelle\b/g, 'Plusieurs transferts'],
-  [/\b(Aucun|aucun) Zelle\b/g, '$1 transfert'], [/\bpar Zelle\b/g, 'par virement'], [/\bZelle disponibles?\b/g, 'transferts disponibles'], [/\bZelle (introuvable|reçu|lié)/g, 'Transfert $1'], [/\bcompte Zelle\b/g, 'compte']];
-function sansMarque(s) { s = String(s); if (s.indexOf('Zelle') < 0 || s.indexOf('Demandes Zelle') >= 0 || s.indexOf('Zelle reçus') >= 0 && s.indexOf('«') >= 0) return s; MOTS.forEach(function (m) { s = s.replace(m[0], m[1]); }); return s; }
-function esc(s) { return sansMarque(String(s == null ? '' : s)).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
 function show(id, on) { $(id).classList.toggle('hide', !on); }
 function msg(html, cls) { var m = $('msg'); m.className = 'card ' + (cls || ''); m.innerHTML = html; show('msg', !!html); }
 function val(id) { return $(id) ? $(id).value.trim() : ''; }
@@ -71,7 +68,7 @@ function row(a, b) { return '<div class="row"><span>' + a + '</span><span>' + b 
 
 /* ---------- transport : le serveur des transferts (Apps Script), le téléphone est reconnu par son code d'activation ---------- */
 function lireCfg(k) { try { var v = localStorage.getItem('rrd.' + k); return v === null ? '' : JSON.parse(v); } catch (e) { return ''; } }
-function zUrl() { return (window.RRD_CONFIG && RRD_CONFIG.ZELLE_URL) || ''; }
+function zUrl() { return (window.RRD_CONFIG && RRD_CONFIG.TRANSFERTS_URL) || ''; }
 function envoi(action, payload) {
   if (!zUrl()) return Promise.reject({ ok: false, error: 'Adresse du serveur des transferts pas encore configurée. Prévenez la direction.', config: true });
   var ctl = new AbortController(), t = setTimeout(function () { ctl.abort(); }, 60000);
@@ -94,14 +91,14 @@ function api(action, payload, cb, btn) {
 
 /* ---------- ordres créés sans connexion ---------- */
 var NAT = (window.Capacitor && Capacitor.Plugins) || {};
-function fileZ() { try { return JSON.parse(localStorage.getItem('rrd.zelleFile') || '[]'); } catch (e) { return []; } }
+function fileZ() { try { return JSON.parse(localStorage.getItem('rrd.transfertsFile') || '[]'); } catch (e) { return []; } }
 function sauverFileZ(l) {
-  localStorage.setItem('rrd.zelleFile', JSON.stringify(l));
-  if (NAT.Preferences) NAT.Preferences.set({ key: 'rrd.zelleFile', value: JSON.stringify(l) }).catch(function () { });   // copie de sécurité
+  localStorage.setItem('rrd.transfertsFile', JSON.stringify(l));
+  if (NAT.Preferences) NAT.Preferences.set({ key: 'rrd.transfertsFile', value: JSON.stringify(l) }).catch(function () { });   // copie de sécurité
 }
 function restaurerFileZ() {
-  if (!NAT.Preferences || localStorage.getItem('rrd.zelleFile') !== null) return Promise.resolve();
-  return NAT.Preferences.get({ key: 'rrd.zelleFile' }).then(function (x) { if (x && x.value) localStorage.setItem('rrd.zelleFile', x.value); }).catch(function () { });
+  if (!NAT.Preferences || localStorage.getItem('rrd.transfertsFile') !== null) return Promise.resolve();
+  return NAT.Preferences.get({ key: 'rrd.transfertsFile' }).then(function (x) { if (x && x.value) localStorage.setItem('rrd.transfertsFile', x.value); }).catch(function () { });
 }
 function mettreEnAttente(p) {
   var l = fileZ();
@@ -140,7 +137,7 @@ function vFileZ() {
   return h + '<button class="sec" id="zSync">🔄 Envoyer maintenant</button></div>';
 }
 function telechargerPdf(r) {
-  var nom = r.name || 'rapport-zelle.pdf';
+  var nom = r.name || 'rapport-transferts.pdf';
   if (NAT.Filesystem && window.Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform()) {
     return NAT.Filesystem.writeFile({ path: nom, directory: 'DOCUMENTS', data: r.data })
       .then(function () { return 'PDF enregistré dans « Documents » : ' + nom + ' (' + r.n + ' ordres).'; }, function () { return 'Impossible d’enregistrer le PDF sur ce téléphone. Utilisez la version web.'; });
@@ -154,7 +151,7 @@ function demarrer() {
   if (!lireCfg('jeton')) { $('who').textContent = ''; return msg('Ce téléphone n’est pas encore enregistré. <a href="index.html">Retour à l’application</a>', 'warn'); }
   api('init', {}, function (r) {
     if (!r.ok) { $('who').textContent = ''; return msg(esc(r.error) + (r.reseau ? '<br>Le paiement d’un transfert demande internet : la banque doit confirmer. Vous pouvez quand même <b>créer</b> un ordre sans connexion quand la page a déjà été ouverte une fois.' : ''), r.reseau ? 'warn' : 'no'); }
-    ME = r; try { localStorage.setItem('rrd.zelleMe', JSON.stringify(r)); } catch (e) { }
+    ME = r; try { localStorage.setItem('rrd.transfertsMe', JSON.stringify(r)); } catch (e) { }
     $('who').textContent = (r.agent ? r.agent.name + (r.agent.type === 'US' ? ' — agent' : ' — station') : (r.lecture ? 'Comptabilité (lecture)' : 'Direction')) + ' — ' + r.user;
     if (r.agent && r.agent.type === 'Station') { C.dir = 'UH'; }
     go(r.agent ? agentTabs()[0][0] : 'hq');
@@ -163,7 +160,7 @@ function demarrer() {
 }
 /* Sans connexion : on garde l'écran « Créer » avec les réglages de la dernière connexion (le paiement, lui, demande toujours internet). */
 function demarrerHorsLigne() {
-  var me = null; try { me = JSON.parse(localStorage.getItem('rrd.zelleMe') || 'null'); } catch (e) { }
+  var me = null; try { me = JSON.parse(localStorage.getItem('rrd.transfertsMe') || 'null'); } catch (e) { }
   if (!me || !me.agent) return false;
   ME = me; $('who').textContent = me.agent.name + ' — hors ligne';
   go(agentTabs()[0][0]);
@@ -502,7 +499,7 @@ function vHq() {
 var ACTS = {
   approve:   { title: 'Approuver cet ordre', text: 'Seulement après avoir vérifié l’argent. L’ordre pourra ensuite être payé.' },
   cancel:    { title: 'Annuler cet ordre', text: 'L’ordre ne pourra plus être payé. Le transfert lié redevient disponible.', input: 'Raison (obligatoire)', field: 'reason', need: 1 },
-  cancelPay: { title: 'Annuler ce paiement', text: 'L’ordre redevient payable. Le paiement annulé reste écrit dans « Demandes Zelle ».', input: 'Raison (obligatoire)', field: 'reason', need: 1 },
+  cancelPay: { title: 'Annuler ce paiement', text: 'L’ordre redevient payable. Le paiement annulé reste écrit dans « Demandes transferts ».', input: 'Raison (obligatoire)', field: 'reason', need: 1 },
   setAside:  { title: 'Marquer « Hors station »', text: 'Ce transfert ne pourra pas être payé.', input: 'Note (facultatif) — ex. All in 1, client propane', field: 'note' },
   unlock:    { title: 'Débloquer', text: 'Le compteur d’essais incorrects est remis à zéro.' },
   restore:   { title: 'Remettre « Disponible »', text: 'Ce transfert pourra de nouveau être payé.' },
