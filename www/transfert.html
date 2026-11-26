@@ -41,7 +41,7 @@
 </head>
 <body>
 <header><b>RRD</b><span class="pill" id="net">…</span></header>
-<div class="sect" id="sect"><a href="index.html">📋 Rapports</a><a class="on" href="transfert.html">💸 Transferts</a></div>
+<div class="sect" id="sect"><a href="index.html">📋 Rapports</a><a class="on" href="transfert.html">💸 Transferts</a><a href="index.html?photos=1" id="sPhotos" style="display:none">📷 Photos</a></div>
 <div id="who">Chargement…</div>
 <nav id="nav"></nav>
 <main>
@@ -172,6 +172,7 @@ function demarrerHorsLigne() {
   go(agentTabs()[0][0]);
   return true;
 }
+if (lireCfg('jeton') && !lireCfg('role')) $('sPhotos').style.display = '';   // téléphone d'une station : onglet Photos
 if (lireCfg('role') === 'transferts') {   // agent de transfert sans station : un seul onglet
   $('sect').innerHTML = '<a class="on" href="transfert.html">💸 Transferts</a>';
   document.querySelector('main').insertAdjacentHTML('beforeend', '<div class="muted" style="text-align:center;margin:0 0 24px"><a href="index.html?code=1">Changer de code</a></div>');
