@@ -39,6 +39,8 @@
   .note { background:var(--sec); border-radius:10px; padding:10px 12px; margin:10px 0; font-size:14px; }
   table { width:100%; border-collapse:collapse; font-size:14px; } td { padding:7px 4px; border-bottom:1px solid var(--line); vertical-align:top; }
   td.n { text-align:right; white-space:nowrap; }
+  html.scan, body.scan { background:transparent !important; } body.scan { visibility:hidden; }   /* lecture d'un code : la caméra se voit derrière la page */
+  #scanBar { visibility:visible; position:fixed; left:0; right:0; bottom:0; padding:14px; background:rgba(0,0,0,.72); color:#fff; text-align:center; z-index:50; }
   .hidden { display:none; } .mut { color:var(--mut); font-size:13px; } .center { text-align:center; }
   .bigbtn { width:100%; padding:18px; font-size:18px; margin:8px 0; }
   img.prev, img.photo { max-width:100%; border-radius:10px; margin-top:8px; }
@@ -68,7 +70,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.16.1';
+var VERSION_APP = '1.17.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -189,7 +191,7 @@ function sauver(r) { return tx('readwrite', function (s) { s.put(r); }).then(fun
 
 /* ======================= Serveur ======================= */
 function api(action, extra) {
-  var url = CFG.get('api', window.RRD_CONFIG && RRD_CONFIG.API_URL || '');
+  var url = (window.RRD_CONFIG && RRD_CONFIG.API_URL) || CFG.get('api', '');   // l'adresse du bureau vient de l'application, elle n'est plus saisie
   if (!url) return Promise.reject({ erreur: 'Adresse du serveur manquante.', code: 'CONFIG', reseau: false });
   var body = Object.assign({ action: action, jeton: CFG.get('jeton', '') }, extra || {});
   var ctl = new AbortController(), t = setTimeout(function () { ctl.abort(); }, 60000);
@@ -224,15 +226,12 @@ function ecranEnregistrer(msg) {
     : '<h1>Enregistrer ce téléphone</h1><div class="sub">À faire une seule fois. La direction vous donne le code de la station.</div>') +
     (msg ? '<div class="err">' + esc(msg) + '</div>' : '') +
     '<label for="code">Code d\'activation</label><input id="code" autocapitalize="characters" autocomplete="off" placeholder="ex. ESA-4821">' +
-    '<details style="margin-top:18px"><summary class="mut">Paramètres avancés</summary><label for="url">Adresse du serveur</label>' +
-    '<input id="url" autocomplete="off" value="' + esc(CFG.get('api', window.RRD_CONFIG && RRD_CONFIG.API_URL || '')) + '"></details>' +
     '<p class="mut">Il faut internet pour cette étape seulement. Ensuite, les rapports peuvent se faire sans connexion.</p>';
   view(h, '<button id="bEnr" onclick="enregistrer()">Enregistrer</button>');
 }
 function enregistrer() {
-  var code = $('code').value.trim(), url = $('url').value.trim();
+  var code = $('code').value.trim();
   if (!code) return ecranEnregistrer('Entrez le code d\'activation.');
-  if (url) CFG.set('api', url);
   var b = $('bEnr'); b.disabled = true; b.textContent = 'Enregistrement…';
   var id = CFG.get('appareil', '') || ('A' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)); CFG.set('appareil', id);
   var ids = [id]; if (S.idFixe && S.idFixe !== id) ids.push(S.idFixe);
@@ -301,7 +300,7 @@ function accueil() {
         h += '<div class="card" onclick="voir(\'' + esc(r.ref) + '\')"><div class="row"><div><b>' + esc(r.ref) + '</b><div class="mut">' + dfr(r.date) + ' · ' + esc(libPer(r.periode)) + '</div></div><div style="text-align:right">' + etat + '</div></div></div>';
       });
     }
-    h += '<p class="mut center" style="margin-top:24px">Version ' + VERSION_APP + ' (build ' + (window.RRD_BUILD || 0) + (S.majPrete ? ', mise à jour ' + S.majPrete + ' prête : quittez l\'application puis revenez' : S.majErreur ? ', mise à jour impossible : ' + esc(S.majErreur) : '') + ') · ' + esc(st.code || '') + ' · <a href="#" onclick="changerCode();return false">Changer de code</a></p>';
+    h += '<p class="mut center" style="margin-top:24px">Version ' + VERSION_APP + ' (build ' + (window.RRD_BUILD || 0) + (S.majPrete ? ', mise à jour ' + S.majPrete + ' prête : quittez l\'application puis revenez' : S.majErreur ? ', mise à jour impossible : ' + esc(S.majErreur) : '') + ') · ' + esc(st.code || '') + ' · <a href="#" onclick="changerCode();return false">Changer de code</a>' + (WEB ? '' : ' · <a href="#" onclick="ecranTestTel();return false">Tester ce téléphone</a>') + '</p>';
     view(h, '<button class="sec" onclick="synchroniser(true)">🔄 Envoyer / actualiser</button>', 'accueil');
   });
 }
@@ -811,6 +810,80 @@ function pushDemarrer() {
     }).catch(function () { PUSH.pret = ''; });
 }
 function pushRepli() { if (!PUSH.refus) pushDemarrer(); }   // au retour dans l'application : redonner l'adresse si l'envoi avait échoué (pas de signal)
+/* ======================= Test du téléphone (build 43) =======================
+ * Ce que le téléphone sait faire en plus : position GPS, lecture d'un code-barres ou QR (carte de fidélité), photo en direct,
+ * empreinte / code du téléphone, Bluetooth (imprimante de reçus). Cet écran ne sert qu'à vérifier ; rien n'est envoyé au bureau. */
+var TT = { res: {}, scan: false };
+var TT_LISTE = [['gps', '📍 Position GPS'], ['code', '🔳 Lecture d\'un code (carte de fidélité)'], ['photo', '📷 Photo en direct'], ['bio', '🔒 Empreinte ou code du téléphone'], ['bt', '🖨 Bluetooth (imprimante de reçus)']];
+function ttErr(e) { return String((e && (e.message || e.errorMessage || e.erreur)) || e || 'erreur inconnue').slice(0, 160); }
+function ecranTestTel() {
+  var h = '<h1>Tester ce téléphone</h1><div class="sub">Appuyez sur chaque ligne. Rien n\'est envoyé au bureau.</div>';
+  TT_LISTE.forEach(function (x) {
+    var r = TT.res[x[0]];
+    h += '<div class="card"><div class="row"><div><b>' + x[1] + '</b><div class="mut" style="white-space:pre-line">' + (r ? (r.ok ? '<span style="color:var(--ok)">✓ ' : '<span style="color:var(--bad)">✗ ') + esc(r.txt) + '</span>' : 'pas encore testé') + '</div>' +
+      (r && r.img ? '<img class="prev" style="max-height:120px" src="' + r.img + '">' : '') + '</div>' +
+      '<div><button class="sec" onclick="ttLancer(\'' + x[0] + '\')">' + (r && r.cours ? '…' : 'Tester') + '</button></div></div></div>';
+  });
+  h += '<p class="mut center">Version ' + VERSION_APP + ' (build ' + (window.RRD_BUILD || 0) + ')</p>';
+  view(h, '<button class="sec" onclick="ttRetour()">Retour</button>', 'testtel');
+}
+function ttRetour() { if (TT.scan) ttScanFin(); if (CFG.get('role', '')) tableau('appareils'); else accueil(); }
+function ttFin(k, ok, txt, img) { TT.res[k] = { ok: ok, txt: txt, img: img || '' }; if (S.ecran === 'testtel') ecranTestTel(); }
+function ttLancer(k) {
+  var P = NAT, absent = function (n) { ttFin(k, false, 'Pas disponible sur cette version de l\'application (' + n + '). Installez la dernière version.'); };
+  TT.res[k] = { ok: true, txt: 'en cours…', cours: true }; ecranTestTel();
+  var faire;
+  if (k === 'gps') {
+    if (!P.Geolocation) return absent('GPS');
+    faire = P.Geolocation.checkPermissions().then(function (p) { return p.location === 'granted' || p.coarseLocation === 'granted' ? p : P.Geolocation.requestPermissions(); })
+      .then(function (p) { if (p.location !== 'granted' && p.coarseLocation !== 'granted') throw 'Permission de position refusée.'; return P.Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 25000, maximumAge: 0 }); })
+      .then(function (pos) { var c = pos.coords; ttFin(k, true, c.latitude.toFixed(5) + ', ' + c.longitude.toFixed(5) + ' (précision ' + Math.round(c.accuracy) + ' m)'); });
+  } else if (k === 'code') {
+    if (!P.BarcodeScanner) return absent('lecture de code');
+    faire = P.BarcodeScanner.isSupported().then(function (x) { if (!x.supported) throw 'Ce téléphone n\'a pas de caméra utilisable.'; return P.BarcodeScanner.checkPermissions(); })
+      .then(function (p) { return p.camera === 'granted' ? p : P.BarcodeScanner.requestPermissions(); })
+      .then(function (p) {
+        if (p.camera !== 'granted') throw 'Permission de la caméra refusée.';
+        return P.BarcodeScanner.removeAllListeners().catch(function () { }).then(function () {
+          return P.BarcodeScanner.addListener('barcodesScanned', function (ev) {
+            var b = ev && ev.barcodes && ev.barcodes[0]; if (!b || !TT.scan) return;
+            ttScanFin(); ttFin('code', true, 'Lu : ' + String(b.rawValue || b.displayValue || '').slice(0, 80) + '\n(type ' + String(b.format || '?') + ')');
+          });
+        });
+      }).then(function () {
+        TT.scan = true; document.body.classList.add('scan'); document.documentElement.classList.add('scan');
+        var bar = document.createElement('div'); bar.id = 'scanBar'; bar.innerHTML = 'Montrez le code à la caméra<br><button class="sec" style="margin-top:10px" onclick="ttScanFin();ttFin(\'code\',false,\'Lecture arrêtée.\')">Arrêter</button>';
+        $('app').appendChild(bar);
+        TT.scanTimer = setTimeout(function () { if (TT.scan) { ttScanFin(); ttFin('code', false, 'Aucun code lu en 45 secondes.'); } }, 45000);
+        return P.BarcodeScanner.startScan({});
+      });
+  } else if (k === 'photo') {
+    if (!P.Camera) return absent('photo en direct');
+    faire = P.Camera.getPhoto({ source: 'CAMERA', resultType: 'dataUrl', quality: 60, width: 1200, saveToGallery: false, correctOrientation: true })
+      .then(function (ph) { var d = String(ph.dataUrl || ''); ttFin(k, d.length > 1000, d.length > 1000 ? 'Photo prise (' + Math.round(d.length * 0.75 / 1024) + ' ko)' : 'Photo vide.', d); });
+  } else if (k === 'bio') {
+    if (!P.NativeBiometric) return absent('empreinte');
+    faire = P.NativeBiometric.isAvailable({ useFallback: true }).then(function (a) {
+      if (!a.isAvailable) throw 'Aucune empreinte ni code de verrouillage réglé sur ce téléphone.';
+      return P.NativeBiometric.verifyIdentity({ reason: 'Test RRD', title: 'RRD', subtitle: 'Vérification', description: 'Posez le doigt ou entrez le code du téléphone.', useFallback: true });
+    }).then(function () { ttFin(k, true, 'Personne reconnue.'); });
+  } else if (k === 'bt') {
+    if (!P.BluetoothSerial && !P.BluetoothLe) return absent('Bluetooth');
+    var lignes = [];
+    faire = (P.BluetoothLe ? P.BluetoothLe.initialize({ androidNeverForLocation: true }).then(function () { return P.BluetoothLe.isEnabled(); })
+      .then(function (e) { lignes.push('Bluetooth ' + (e.value ? 'allumé' : 'éteint')); if (e.value) return P.BluetoothLe.getBondedDevices().then(function (d) { var l = (d && d.devices) || []; lignes.push(l.length + ' appareil(s) déjà associé(s)' + (l.length ? ' : ' + l.slice(0, 5).map(function (x) { return x.name || x.deviceId; }).join(', ') : '')); }); })
+      : Promise.resolve()).then(function () {
+        if (!P.BluetoothSerial) return;
+        return P.BluetoothSerial.isEnabled().then(function (e) { lignes.push('Liaison série (imprimantes classiques) : ' + (e.enabled ? 'prête' : 'Bluetooth éteint')); });
+      }).then(function () { ttFin(k, lignes.length > 0, lignes.join('\n') || 'Aucune réponse du Bluetooth.'); });
+  }
+  if (faire) faire.catch(function (e) { if (k === 'code') ttScanFin(); ttFin(k, false, ttErr(e)); });
+}
+function ttScanFin() {
+  TT.scan = false; clearTimeout(TT.scanTimer); document.body.classList.remove('scan'); document.documentElement.classList.remove('scan');
+  var b = $('scanBar'); if (b && b.parentNode) b.parentNode.removeChild(b);
+  try { NAT.BarcodeScanner && NAT.BarcodeScanner.stopScan().catch(function () { }); } catch (e) { }
+}
 function ntBientot() { if (!LN) return; clearTimeout(NT.timer); NT.timer = setTimeout(ntPlanifier, 1500); }
 function ntPlanifier() {
   if (!LN || NT.ok === false || CFG.get('role', '') || !CFG.get('jeton', '')) return;
@@ -1431,7 +1504,8 @@ function ongletAppareils(data) {
     if (a.nouveau) h += '<div class="okb">Nouveau code : <b style="font-size:20px">' + esc(a.nouveau) + '</b><br>Donnez-le à la personne qui enregistre le téléphone. Un code de station ne marche que sur un seul téléphone ; un code Direction ou Comptabilité peut servir sur 5 appareils.</div>';
     h += '<h2>Nouveau code de téléphone</h2><label>Pour</label><select id="apSt">' + optStations('', false, '<option value="DIRECTION">Direction (tableau de bord)</option><option value="COMPTA">Comptabilité (tableau de bord)</option>' + (a.transferts || []).map(function (t) { return '<option value="' + esc(t.code) + '">' + esc(t.nom) + '</option>'; }).join('')) + '</select>' +
       '<label>Nom (facultatif, ex. « Téléphone Esansyel » ou « Elisana »)</label><input id="apNom" autocomplete="off">' +
-      '<div style="margin-top:10px"><button id="bAp" onclick="nouveauCode()">Créer un code</button></div><h2>Téléphones</h2>';
+      '<div style="margin-top:10px"><button id="bAp" onclick="nouveauCode()">Créer un code</button></div>' +
+      (WEB ? '' : '<div style="margin-top:10px"><button class="sec" onclick="ecranTestTel()">🧪 Tester ce téléphone (GPS, lecture de code, empreinte, Bluetooth)</button></div>') + '<h2>Téléphones</h2>';
     if (!a.appareils.length) h += '<div class="note">Aucun téléphone.</div>';
     a.appareils.slice().reverse().forEach(function (x) {
       h += '<div class="card" style="' + (x.actif ? '' : 'opacity:.55') + '"><div class="row"><div><b>' + esc(x.station_nom) + '</b>' + (x.nom ? ' · ' + esc(x.nom) : '') +
