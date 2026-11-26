@@ -14,7 +14,8 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.9';
+var MOBILE_VERSION = 'm1.10';
+var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var ROLES_APPAREIL = { DIRECTION: 'management', COMPTA: 'accounting' };   // station = DIRECTION ou COMPTA → téléphone de la direction / comptabilité
 /* Contrôles avant d'accepter un rapport (chiffres « visiblement faux »). Réglables ici. */
 var CTRL = {
@@ -100,7 +101,7 @@ function enregistrerAppareil_(b) {
     var ancien = String(ligne.appareil_id || '').split('|').filter(String), envoye = String(b.appareil_id || '').split('|').filter(String);
     var memeTel = envoye.some(function (x) { return ancien.indexOf(x) >= 0; });
     if (String(ligne.jeton || '').trim() && !memeTel) throw new UserError('Ce code a déjà été utilisé sur un autre téléphone. Demandez un nouveau code à la direction.', 'CODE_UTILISE');
-    var role = ROLES_APPAREIL[String(ligne.station).trim().toUpperCase()] || '';
+    var role = roleAppareil_(ligne.station);
     var st = role ? null : stations_().filter(function (s) { return String(s.code) === String(ligne.station).trim() && estVrai_(s.actif); })[0];
     if (!role && !st) throw new UserError('La station de ce code n\'existe pas ou est inactive.', 'CODE');
     if (!role && b.web) throw new UserError('La version web est réservée à la direction et à la comptabilité. Pour une station, installez l\'application Android.', 'CODE');
@@ -115,13 +116,31 @@ function enregistrerAppareil_(b) {
   } finally { lock.releaseLock(); }
 }
 
+/** DIRECTION / COMPTA = tableau de bord ; « TR:CODE » = agent de transfert sans station (transferts seulement). */
+function roleAppareil_(station) {
+  station = String(station).trim().toUpperCase();
+  return ROLES_APPAREIL[station] || (station.indexOf('TR:') === 0 ? 'transferts' : '');
+}
+
+/** Agents de transfert actifs qui ne sont pas des stations du rapport de fermeture : ils reçoivent un code « transferts seulement ». */
+function agentsTransfertsSeuls_() {
+  try {
+    var sh = SpreadsheetApp.openById(TRANSFERTS_SHEET_ID).getSheetByName('Agents transferts');
+    var st = stations_().map(function (s) { return String(s.code); }), alias = { ARC: 'A32', MAH: 'M83' };
+    return sh.getDataRange().getValues().slice(1).filter(function (r) {
+      var c = String(r[0]).trim().toUpperCase();
+      return c && /^(oui|yes|true|1)$/i.test(String(r[7]).trim()) && st.indexOf(alias[c] || c) < 0;
+    }).map(function (r) { return { code: 'TR:' + String(r[0]).trim().toUpperCase(), nom: String(r[1]).trim() + ' (transferts seulement)' }; });
+  } catch (e) { return []; }
+}
+
 function appareil_(jeton) {
   jeton = String(jeton || '').trim();
   if (!jeton) throw new UserError('Téléphone pas encore enregistré.', 'NON_ENREGISTRE');
   var a = lire_(APPAREILS).filter(function (x) { return String(x.jeton) === jeton; })[0];
   if (!a) throw new UserError('Ce téléphone n\'est plus enregistré. Demandez un nouveau code à la direction.', 'NON_ENREGISTRE');
   if (!estVrai_(a.actif)) throw new UserError('Ce téléphone a été désactivé par la direction.', 'DESACTIVE');
-  var role = ROLES_APPAREIL[String(a.station).trim().toUpperCase()] || '';
+  var role = roleAppareil_(a.station);
   if (role) {
     try { majCellule_(APPAREILS, a._ligne, 'dernier_contact', maintenant_()); } catch (e) { }
     return { ligne: a, station: null, role: role, id: 'APP-' + String(a.code_activation), nom: String(a.nom || a.note || a.code_activation), username: 'app', enGroupe: false, chatInstance: '' };
@@ -135,6 +154,7 @@ function appareil_(jeton) {
 /* ============================ Écran de départ ============================ */
 
 function initMobile_(app) {
+  if (app.role === 'transferts') return { version: MOBILE_VERSION, mode: 'transferts', utilisateur: { id: app.id, nom: app.nom, role: app.role } };
   if (app.role) return initDirection_(app);
   var st = app.station, date = dateRapport();
   var tous = rapportsEffectifs_().filter(function (r) { return String(r.station) === st.code && !estAnnule(r); });
@@ -161,6 +181,10 @@ function initMobile_(app) {
   };
   base.prerempli = prerempliPour(date, jour, base.periodes[0]);
   base.plafonds = plafonds_(tous);
+  // Rapports de cette station annulés par le bureau (8 derniers jours) : le téléphone l'affiche et propose de le refaire.
+  var limite = Utilities.formatDate(new Date(new Date(date + 'T12:00:00Z').getTime() - 8 * 24 * 3600 * 1000), 'UTC', 'yyyy-MM-dd');
+  base.annules = rapportsEffectifs_().filter(function (r) { return String(r.station) === st.code && estAnnule(r) && iso(r.date_rapport) >= limite; })
+    .map(function (r) { return { ref: String(r.ref), date: iso(r.date_rapport), periode: String(r.periode || ''), motif: String(r.motif_annulation || '') }; });
   // Les jours passés : ce qui est déjà envoyé (non modifiable par la station) et ce qui manque encore.
   base.jours = [];
   for (var i = 1; i <= JOURS_DIFFERE_MAX; i++) {
@@ -238,12 +262,6 @@ function envoyerMobile_(app, p) {
       chat_instance: 'app:' + String(app.ligne.code_activation), gas_received: v.gas_received, periode: attendue, employes_service: noms.join(', ')
     });
     journal_(app, 'rapport-app', ref + ' ' + (attendue || 'journée') + (dv.differe ? ' (différé)' : '') + ' (ligne ' + ligne + ')');
-    if (st.chat_id) {
-      try {
-        telegram_('sendMessage', { chat_id: String(st.chat_id), text: '✅ Rapport de fermeture reçu — ' + st.nom + (attendue ? ' (' + LIBELLE_PERIODE[attendue].toLowerCase() + ')' : '') +
-          ', ' + date.split('-').reverse().join('/') + ', par ' + noms[0] + '. Réf. ' + ref });
-      } catch (e) { }
-    }
     var r = rapportsEffectifs_().filter(function (x) { return String(x.ref) === ref; })[0];
     var reste = periodesPossibles(rapportsDuJour_(st.code, date));
     return { recu: recuEmploye_(r), reste: reste.length ? reste[0] : null };
@@ -332,7 +350,7 @@ function initDirection_(app) {
 
 /** Mêmes fonctions que le tableau de bord Telegram, avec l'identité du téléphone de la direction. */
 function direction_(app, sous, p) {
-  if (!app.role) throw new UserError('Accès réservé à la direction.', 'FORBIDDEN');
+  if (!app.role || app.role === 'transferts') throw new UserError('Accès réservé à la direction.', 'FORBIDDEN');
   var ctx = { id: app.id, nom: app.nom, username: 'app', role: app.role, chatType: 'private', chatInstance: '', enGroupe: false };
   switch (sous) {
     case 'rapports': return listeRapports_(ctx, p);
@@ -354,7 +372,9 @@ function direction_(app, sous, p) {
 function listeAppareils_() {
   var noms = {}; stations_().forEach(function (s) { noms[String(s.code)] = s.nom; });
   noms.DIRECTION = 'Direction'; noms.COMPTA = 'Comptabilité';
+  var tr = agentsTransfertsSeuls_(); tr.forEach(function (t) { noms[t.code] = t.nom; });
   return {
+    transferts: tr,
     stations: stations_().filter(function (s) { return estVrai_(s.actif); }).map(function (s) { return { code: s.code, nom: s.nom }; }),
     appareils: lire_(APPAREILS).map(function (a) {
       return { code: String(a.code_activation), station: String(a.station), station_nom: noms[String(a.station).trim()] || String(a.station),
@@ -366,12 +386,13 @@ function listeAppareils_() {
 
 function ajouterAppareil_(ctx, p) {
   var station = String(p.station || '').trim().toUpperCase();
-  var valides = stations_().filter(function (s) { return estVrai_(s.actif); }).map(function (s) { return String(s.code); }).concat(['DIRECTION', 'COMPTA']);
+  var valides = stations_().filter(function (s) { return estVrai_(s.actif); }).map(function (s) { return String(s.code); }).concat(['DIRECTION', 'COMPTA'])
+    .concat(agentsTransfertsSeuls_().map(function (t) { return t.code; }));
   if (valides.indexOf(station) < 0) throw new UserError('Station inconnue.');
   var lock = LockService.getScriptLock(); lock.waitLock(20000);
   try {
     var existants = lire_(APPAREILS).map(function (a) { return String(a.code_activation).trim().toUpperCase(); });
-    var prefixe = station === 'DIRECTION' ? 'DIR' : station === 'COMPTA' ? 'CPT' : station, code;
+    var prefixe = station === 'DIRECTION' ? 'DIR' : station === 'COMPTA' ? 'CPT' : station.replace(/^TR:/, ''), code;
     do { code = prefixe + '-' + (1000 + Math.floor(Math.random() * 9000)); } while (existants.indexOf(code) >= 0);
     ajouter_(APPAREILS, { code_activation: code, station: station, actif: 'oui', note: 'créé par ' + ctx.nom + ' le ' + maintenant_(), nom: String(p.nom || '').trim().slice(0, 60) });
     journal_(ctx, 'appareil-code', code + ' → ' + station);

@@ -63,7 +63,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.8.0';
+var VERSION_APP = '1.10.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -231,7 +231,7 @@ function enregistrer() {
   var ids = [id]; if (S.idFixe && S.idFixe !== id) ids.push(S.idFixe);
   api('enregistrer', { web: WEB, code: code, appareil_id: ids.join('|'), modele: navigator.userAgent.slice(0, 80) }).then(function (d) {
     CFG.set('jeton', d.jeton);
-    if (d.role) { CFG.set('role', d.role); CFG.set('nom', d.nom); return demarrerDirection(); }
+    if (d.role) { CFG.set('role', d.role); CFG.set('nom', d.nom); if (d.role === 'transferts') return location.replace('transfert.html'); return demarrerDirection(); }
     CFG.set('role', ''); CFG.set('station', d.station);
     accueil();
     synchroniser();
@@ -251,7 +251,7 @@ function infosDuJour(liste, date) {
   date = date || dateRapport(); var st = stationCode();
   var cache = infoServeur(date);
   var envoyes = cache ? cache.envoyes.slice() : [];
-  var locaux = liste.filter(function (r) { return r.date === date && r.station === st && r.statut !== 'rejete'; });
+  var locaux = liste.filter(function (r) { return r.date === date && r.station === st && r.statut !== 'rejete' && r.statut !== 'annule'; });
   locaux.forEach(function (r) { if (!envoyes.some(function (x) { return x.ref === r.ref; })) envoyes.push({ ref: r.ref, periode: r.periode, local: r }); });
   var pers = envoyes.map(function (r) { return String(r.periode || ''); });
   var periodes;
@@ -267,10 +267,15 @@ function accueil() {
     var st = CFG.get('station', {}), j = infosDuJour(liste);
     var attente = liste.filter(function (r) { return r.statut === 'attente'; });
     var rejetes = liste.filter(function (r) { return r.statut === 'rejete' && !r.vu; });
+    var annules = liste.filter(function (r) { return r.statut === 'annule' && !r.vu; });
     var h = '<h1>' + esc(st.nom || '') + '</h1><div class="sub">Journée du ' + dfr(j.date) + '</div>';
     if (attente.length) h += '<div class="wait">⏳ ' + attente.length + ' rapport(s) en attente d\'envoi. Ils partiront tout seuls dès qu\'il y aura du signal.</div>';
     liste.filter(function (r) { return r.statut === 'verif'; }).forEach(function (r) {
       h += '<div class="err">⚠️ Rapport du ' + dfr(r.date) + ' (' + esc(libPer(r.periode)) + ') pas encore accepté : le bureau demande de revérifier des chiffres.\n<button style="margin-top:8px" onclick="revoir(\'' + esc(r.ref) + '\')">Revoir le rapport</button></div>';
+    });
+    annules.forEach(function (r) {
+      h += '<div class="wait">↩️ Le rapport du ' + dfr(r.date) + ' (' + esc(libPer(r.periode)) + ') a été annulé par le bureau.' + (r.erreur ? '\nMotif : ' + esc(r.erreur) : '') + '\nIl faut le refaire.<br>' +
+        '<button style="margin-top:8px" onclick="refaire(\'' + esc(r.ref) + '\')">Refaire ce rapport</button> <button class="sec" style="margin-top:8px" onclick="vuRejet(\'' + esc(r.ref) + '\')">J\'ai compris</button></div>';
     });
     rejetes.forEach(function (r) { h += '<div class="err">❌ Rapport ' + esc(r.ref) + ' (' + dfr(r.date) + ') refusé par le serveur :\n' + esc(r.erreur || '') + '\n<button class="sec" style="margin-top:8px" onclick="vuRejet(\'' + esc(r.ref) + '\')">J\'ai compris</button></div>'; });
     if (j.periodes.length) {
@@ -282,7 +287,7 @@ function accueil() {
     if (recents.length) {
       h += '<h2>Derniers rapports de ce téléphone</h2>';
       recents.forEach(function (r) {
-        var etat = r.statut === 'envoye' ? '<span style="color:var(--ok)">✅ reçu</span>' : r.statut === 'attente' ? '<span style="color:var(--warn)">⏳ en attente</span>' : r.statut === 'verif' ? '<span style="color:var(--warn)">⚠️ à revérifier</span>' : '<span style="color:var(--bad)">❌ refusé</span>';
+        var etat = r.statut === 'envoye' ? '<span style="color:var(--ok)">✅ reçu</span>' : r.statut === 'attente' ? '<span style="color:var(--warn)">⏳ en attente</span>' : r.statut === 'verif' ? '<span style="color:var(--warn)">⚠️ à revérifier</span>' : r.statut === 'annule' ? '<span style="color:var(--warn)">↩️ annulé</span>' : '<span style="color:var(--bad)">❌ refusé</span>';
         h += '<div class="card" onclick="voir(\'' + esc(r.ref) + '\')"><div class="row"><div><b>' + esc(r.ref) + '</b><div class="mut">' + dfr(r.date) + ' · ' + esc(libPer(r.periode)) + '</div></div><div style="text-align:right">' + etat + '</div></div></div>';
       });
     }
@@ -310,11 +315,11 @@ function ecranManquants() {
     view(h, '<button class="sec" onclick="accueil()">Retour</button>', 'manquants');
   });
 }
-function changerCode() {
+function changerCode(siAnnule) {
   tous().then(function (liste) {
     var att = liste.filter(function (r) { return r.statut === 'attente'; }).length;
     if (att) return alert(att + ' rapport(s) pas encore envoyé(s). Attendez qu\'ils partent (bouton Envoyer / actualiser) avant de changer de code.');
-    if (!confirm('Changer le code de ce téléphone ? Il faudra un nouveau code d\'activation et internet.')) return;
+    if (!confirm('Changer le code de ce téléphone ? Il faudra un nouveau code d\'activation et internet.')) { if (typeof siAnnule === 'function') siAnnule(); return; }
     ['jeton', 'role', 'nom', 'station', 'init', 'init_le', 'noms'].forEach(CFG.del);
     S.init = null; D = null; ecranEnregistrer();
   });
@@ -330,9 +335,27 @@ function revoir(ref) {
     ecranFormulaire();
   });
 }
+function refaire(ref) {
+  tous().then(function (l) {
+    var r = l.filter(function (x) { return x.ref === ref; })[0]; if (!r) return accueil();
+    r.vu = true;
+    return sauver(r).then(function () { nouveau(r.date === dateRapport() ? null : r.date); });
+  });
+}
+/* Le bureau a annulé un rapport déjà envoyé : le téléphone le marque et propose de le refaire. */
+function marquerAnnules(d) {
+  var a = (d && d.annules) || []; if (!a.length) return Promise.resolve();
+  return tous().then(function (liste) {
+    return Promise.all(liste.filter(function (r) { return r.statut === 'envoye'; }).map(function (r) {
+      var x = a.filter(function (y) { return y.ref === r.ref || y.ref === r.ref_serveur; })[0];
+      if (!x) return;
+      r.statut = 'annule'; r.erreur = x.motif; r.vu = false; return sauver(r);
+    }));
+  }).catch(function () { });
+}
 function vuRejet(ref) { tous().then(function (l) { var r = l.filter(function (x) { return x.ref === ref; })[0]; if (r) { r.vu = true; return sauver(r); } }).then(accueil); }
 
-/* ======================= Formulaire (repris de l'app Telegram) ======================= */
+/* ======================= Formulaire ======================= */
 var V = {}, PHOTO = '', J = null;
 function champs() { return (S.init && S.init.champs) || CFG.get('champs', null) || CHAMPS_DEFAUT; }
 function nouveau(date) {
@@ -345,7 +368,7 @@ function nouveau(date) {
     var ordre = { '': 0, AM: 0, PM: 1 };
     // Dernier rapport du téléphone AVANT ce jour/cette équipe (pour un jour passé, on ne prend pas un rapport plus récent).
     var dernier = liste.filter(function (r) {
-      return r.station === stationCode() && r.statut !== 'rejete' && (r.date < J.date || (r.date === J.date && ordre[r.periode || ''] < ordre[V.periode || '']));
+      return r.station === stationCode() && r.statut !== 'rejete' && r.statut !== 'annule' && (r.date < J.date || (r.date === J.date && ordre[r.periode || ''] < ordre[V.periode || '']));
     }).sort(function (a, b) { return a.date !== b.date ? (a.date < b.date ? 1 : -1) : (a.cree_le < b.cree_le ? 1 : -1); })[0];
     var serveur = J.prerempli;
     if (dernier && (!serveur || !S.init || dernier.cree_le > (CFG.get('init_le', '') || ''))) { V.opening_meter = dernier.closing_meter; V.starting_cash = dernier.counted_cash; }
@@ -502,6 +525,7 @@ function ecranRecu(r, nouveau) {
   var etat = r.statut === 'envoye' ? '<div class="okb">✅ Rapport de fermeture reçu par le bureau' + (r.recu_le ? ' le ' + esc(r.recu_le) : '') + '.</div>'
     : r.statut === 'attente' ? '<div class="wait">⏳ Enregistré sur le téléphone. Il sera envoyé automatiquement dès qu\'il y aura du signal. Ne refaites pas le rapport.</div>'
     : r.statut === 'verif' ? '<div class="err">⚠️ Pas encore accepté. ' + esc(r.erreur || '') + '\n<button style="margin-top:8px" onclick="revoir(\'' + esc(r.ref) + '\')">Revoir le rapport</button></div>'
+    : r.statut === 'annule' ? '<div class="wait">↩️ Annulé par le bureau.' + (r.erreur ? '\nMotif : ' + esc(r.erreur) : '') + '\nIl ne compte plus : il faut le refaire.</div>'
     : '<div class="err">❌ Refusé par le serveur :\n' + esc(r.erreur || '') + '</div>';
   var h = '<h1>' + (nouveau ? 'Rapport enregistré' : 'Rapport') + '</h1><div class="sub">' + esc(st.nom) + ' · ' + dfr(r.date) + ' · ' + esc(libPer(r.periode)) + '</div>' + etat +
     '<div class="card center"><div class="mut">Référence</div><div class="big">' + esc(r.ref_serveur || r.ref) + '</div><div class="mut">Fait le ' + esc(r.cree_le) + '</div></div><div class="card"><table>' +
@@ -526,7 +550,7 @@ function synchroniser(manuel) {
     if (e.code === 'NON_ENREGISTRE' || e.code === 'DESACTIVE') { arret = true; CFG.set('jeton', ''); ecranEnregistrer(e.erreur); }
   }).then(function () {
     if (arret) return;
-    return tous().then(function (liste) {
+    return marquerAnnules(S.init).then(tous).then(function (liste) {
       var attente = liste.filter(function (r) { return r.statut === 'attente'; }).sort(function (a, b) { return a.cree_le < b.cree_le ? -1 : 1; });
       return attente.reduce(function (p, r) {
         return p.then(function () {
@@ -554,7 +578,7 @@ function synchroniser(manuel) {
 }
 
 
-/* ======================= DIRECTION : tableau de bord (repris de l'app Telegram) ======================= */
+/* ======================= DIRECTION : tableau de bord ======================= */
 var D = null, T = { onglet: 'rapports', du: '', au: '', station: '', date: '' }, R = null, CORR = null, ANNUL = null;
 function call(action, payload) { return api('dir', { sous_action: action, payload: payload || {} }); }
 function fmt2(n) { return fmt(n); }
@@ -907,7 +931,7 @@ function ongletAppareils(data) {
   var rendre = function (a) {
     var h = entete();
     if (a.nouveau) h += '<div class="okb">Nouveau code : <b style="font-size:20px">' + esc(a.nouveau) + '</b><br>Donnez-le à la personne qui enregistre le téléphone. Il ne marche qu\'une fois.</div>';
-    h += '<h2>Nouveau code de téléphone</h2><label>Pour</label><select id="apSt">' + optStations('', false, '<option value="DIRECTION">Direction (tableau de bord)</option><option value="COMPTA">Comptabilité (tableau de bord)</option>') + '</select>' +
+    h += '<h2>Nouveau code de téléphone</h2><label>Pour</label><select id="apSt">' + optStations('', false, '<option value="DIRECTION">Direction (tableau de bord)</option><option value="COMPTA">Comptabilité (tableau de bord)</option>' + (a.transferts || []).map(function (t) { return '<option value="' + esc(t.code) + '">' + esc(t.nom) + '</option>'; }).join('')) + '</select>' +
       '<label>Nom (facultatif, ex. « Téléphone Esansyel » ou « Elisana »)</label><input id="apNom" autocomplete="off">' +
       '<div style="margin-top:10px"><button id="bAp" onclick="nouveauCode()">Créer un code</button></div><h2>Téléphones</h2>';
     if (!a.appareils.length) h += '<div class="note">Aucun téléphone.</div>';
@@ -974,7 +998,12 @@ document.addEventListener('resume', function () { verifierMaj(); bandeauMaj(); }
 setTimeout(verifierMaj, 4000); setInterval(verifierMaj, 3 * 3600 * 1000);
 
 restaurer().then(function () {
-  if (!CFG.get('jeton', '')) ecranEnregistrer(); else if (CFG.get('role', '')) demarrerDirection(); else { accueil(); synchroniser(); }
+  if (!CFG.get('jeton', '')) ecranEnregistrer();
+  else if (CFG.get('role', '') === 'transferts') {   // agent de transfert sans station : pas de rapports, seulement les transferts
+    if (/[?&]code=1/.test(location.search)) { view('<p class="center mut" style="margin-top:40px">…</p>'); changerCode(function () { location.replace('transfert.html'); }); }
+    else location.replace('transfert.html');
+  }
+  else if (CFG.get('role', '')) demarrerDirection(); else { accueil(); synchroniser(); }
 });
 </script>
 </body>

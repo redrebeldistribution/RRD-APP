@@ -41,7 +41,7 @@
 </head>
 <body>
 <header><b>RRD</b><span class="pill" id="net">…</span></header>
-<div class="sect"><a href="index.html">📋 Rapports</a><a class="on" href="transfert.html">💸 Transferts</a></div>
+<div class="sect" id="sect"><a href="index.html">📋 Rapports</a><a class="on" href="transfert.html">💸 Transferts</a></div>
 <div id="who">Chargement…</div>
 <nav id="nav"></nav>
 <main>
@@ -52,7 +52,7 @@
     <button id="actOk">Confirmer</button><button class="sec" id="actNo">Annuler</button><div id="actErr" class="err"></div>
   </div>
   <div id="view"></div>
-  <div class="muted" style="text-align:center;margin:10px 0 20px">RRD — transferts, version 3.10</div>
+  <div class="muted" style="text-align:center;margin:10px 0 20px">RRD — transferts, version 3.12</div>
 </main>
 
 <script>/* toujours la dernière version des réglages (pas de vieux fichier en mémoire du navigateur) */
@@ -171,6 +171,10 @@ function demarrerHorsLigne() {
   ME = me; $('who').textContent = me.agent.name + ' — hors ligne';
   go(agentTabs()[0][0]);
   return true;
+}
+if (lireCfg('role') === 'transferts') {   // agent de transfert sans station : un seul onglet
+  $('sect').innerHTML = '<a class="on" href="transfert.html">💸 Transferts</a>';
+  document.querySelector('main').insertAdjacentHTML('beforeend', '<div class="muted" style="text-align:center;margin:0 0 24px"><a href="index.html?code=1">Changer de code</a></div>');
 }
 restaurerFileZ().then(function () {
   if (navigator.onLine === false && demarrerHorsLigne()) return;
@@ -454,23 +458,26 @@ function vHq() {
   if (!H) return '<div class="card muted">Chargement…</div>';
   ROWS = {};
   var t = H.today, h = '';
+  // Alertes (elles arrivent aussi par courriel)
+  h += '<div class="card' + (H.alerts && H.alerts.length ? ' warn' : '') + '"><h3>Alertes</h3>' +
+    (H.alerts && H.alerts.length ? H.alerts.map(function (x) { return '<div style="border-bottom:1px dashed var(--line);padding:6px 0;white-space:pre-wrap;font-size:14px"><span class="muted">' + esc(x.at) + '</span>\n' + esc(x.text) + '</div>'; }).join('') : '<div class="muted">Aucune alerte.</div>') +
+    (ME.lecture ? '' : '<label>Envoyer aussi les alertes par e-mail à (séparez par une virgule)</label><input id="alMails" autocomplete="off" inputmode="email" value="' + esc(H.alertEmails || '') + '"><button class="sec" id="alSave">Enregistrer les adresses</button><div id="alMsg" class="muted"></div>') + '</div>';
   h += '<div class="card"><h3>Aujourd’hui</h3>' + row('Ordres payés', t.n + ' — ' + esc(t.usd) + ' USD') + row('Commission HQ', esc(t.hqUsd) + ' USD') + row('Résultat de change', (t.fx >= 0 ? 'gain ' : 'PERTE ') + fmtG(Math.abs(t.fx)) + ' gdes') + '</div>';
   h += '<div class="card"><h3>Ordres ouverts</h3><table>' + (H.open.length ? H.open.map(function (o) {
       return '<tr><td>' + esc(o.track) + '<br><span class="muted">' + dirTxt(o.dir) + ' · ' + esc(o.agent) + ' · ' + esc(o.at) + '</span></td><td>' + esc(o.usd) + ' USD<br>' + stTag(o.state) + '</td><td>' +
         (o.state.indexOf('À approuver') === 0 ? btn('approve', o, 'Approuver', '') : '') + btn('cancel', o, 'Annuler', 'danger') + '</td></tr>'; }).join('') : '<tr><td class="muted">Aucun</td></tr>') + '</table></div>';
   h += '<div class="card"><h3>Agents et stations</h3><div class="muted">Parts en % des frais de chaque ordre ; HQ garde le reste. Solde : ce que l’agent doit à HQ, ou ce que HQ lui doit.</div><table><tr><th>Agent</th><th>Création</th><th>Paiement</th><th>Limite</th><th>Solde USD</th></tr>' +
     H.agents.map(function (a) { var b = Number(a.balanceUsd);
-      return '<tr><td>' + esc(a.name) + '<br><span class="muted">' + esc(a.code) + ' · ' + (a.type === 'US' ? 'USA' : a.rrd ? 'Station RRD' : 'Haïti (groupe)') + (a.active ? '' : ' · inactif') + (a.type !== 'US' && !a.hasGroup ? ' · groupe manquant' : '') + (!a.canCreate ? ' · payer seulement' : !a.canPay ? ' · créer seulement' : '') + (a.canReport ? '' : ' · sans rapport') + (a.canPay ? ' · payer par : ' + ([a.payNum ? 'numéro' : '', a.payName ? 'nom et montant' : '', a.payList ? 'liste' : ''].filter(Boolean).join(', ') || 'rien') : '') + (a.pin ? ' · code caissier' : '') + '</span><br><button class="mini sec" data-edit="' + esc(a.code) + '">Modifier</button>' +
-        (a.hasGroup ? '<button class="mini sec" data-sendbtn="' + esc(a.code) + '">Envoyer le bouton au groupe</button>' : '') + '</td><td>' + esc(a.createPct) + ' %</td><td>' + esc(a.payPct) + ' %</td><td>' + esc(a.limit) + '</td><td><b>' + Math.abs(b).toFixed(2) + '</b><br><span class="muted">' + (b > 0 ? 'doit à HQ' : b < 0 ? 'HQ lui doit' : 'à zéro') + '</span>' +
+      return '<tr><td>' + esc(a.name) + '<br><span class="muted">' + esc(a.code) + ' · ' + (a.type === 'US' ? 'USA' : a.rrd ? 'Station RRD' : 'Haïti') + (a.active ? '' : ' · inactif') + (!a.canCreate ? ' · payer seulement' : !a.canPay ? ' · créer seulement' : '') + (a.canReport ? '' : ' · sans rapport') + (a.canPay ? ' · payer par : ' + ([a.payNum ? 'numéro' : '', a.payName ? 'nom et montant' : '', a.payList ? 'liste' : ''].filter(Boolean).join(', ') || 'rien') : '') + (a.pin ? ' · code caissier' : '') + '</span><br><button class="mini sec" data-edit="' + esc(a.code) + '">Modifier</button>' +
+        '</td><td>' + esc(a.createPct) + ' %</td><td>' + esc(a.payPct) + ' %</td><td>' + esc(a.limit) + '</td><td><b>' + Math.abs(b).toFixed(2) + '</b><br><span class="muted">' + (b > 0 ? 'doit à HQ' : b < 0 ? 'HQ lui doit' : 'à zéro') + '</span>' +
         (b ? '<br><button class="mini sec" data-settle="' + esc(a.code) + '">' + (b > 0 ? 'Règlement reçu' : 'HQ a payé') + '</button>' : '') + '</td></tr>'; }).join('') + '</table>' +
     '<button class="sec" data-edit="">Ajouter un agent</button></div>';
   if (EDIT) {
     var e = EDIT, st = e.type === 'Station';
     h += '<div class="card warn" id="agForm"><h3>' + (e.isNew ? 'Nouvel agent' : 'Modifier ' + esc(e.name)) + '</h3>' +
-      (e.isNew ? '<label>Où est l’agent ?</label><div class="seg"><button id="aTypeUS" class="' + (st ? '' : 'on') + '">Aux USA</button><button id="aTypeHT" class="' + (st ? 'on' : '') + '">En Haïti (groupe Telegram)</button></div>' +
+      (e.isNew ? '<label>Où est l’agent ?</label><div class="seg"><button id="aTypeUS" class="' + (st ? '' : 'on') + '">Aux USA</button><button id="aTypeHT" class="' + (st ? 'on' : '') + '">En Haïti</button></div>' +
                  '<label>Code (2 à 8 lettres ou chiffres, ex. ' + (st ? 'KADO' : 'MIA') + ')</label><input id="aCode" autocomplete="off" value="' + esc(e.code || '') + '"><label>Nom</label><input id="aName" autocomplete="off" value="' + esc(e.name || '') + '">' : '') +
-      (st ? (e.rrd ? '' : '<label>ID du groupe Telegram (nombre négatif)</label><input id="aGrp" autocomplete="off" value="' + esc(e.groupId) + '"><div class="muted">Ajoutez d’abord @rrdadminbot au groupe. Pour trouver l’ID : ouvrez le groupe dans Telegram Web (web.telegram.org) ; c’est le nombre à la fin de l’adresse, par exemple -1001234567890. Les membres de ce groupe pourront créer et payer des transferts.</div>')
-          : '<label>ID Telegram de l’agent (chiffres)</label><input id="aTg" inputmode="numeric" value="' + esc(e.tgId) + '"><div class="muted">L’agent trouve son ID en écrivant à @userinfobot dans Telegram.</div>') +
+      (e.rrd ? '' : '<div class="muted" style="margin-top:8px">Pour ouvrir l’application, cet agent reçoit un code d’activation : onglet Rapports → Téléphones → « Nouveau code », en choisissant son nom.</div>') +
       '<label>Part création (% des frais)</label><input id="aCp" inputmode="decimal" value="' + esc(e.createPct) + '"><label>Part paiement (% des frais)</label><input id="aPp" inputmode="decimal" value="' + esc(e.payPct) + '">' +
       '<label>Limite de crédit (USD)</label><input id="aLim" inputmode="decimal" value="' + esc(e.limit) + '">' +
       '<label>Peut créer des ordres</label><select id="aCanC"><option value="1"' + (e.canCreate !== false ? ' selected' : '') + '>Oui</option><option value="0"' + (e.canCreate === false ? ' selected' : '') + '>Non</option></select>' +
@@ -524,7 +531,6 @@ var ACTS = {
   unlock:    { title: 'Débloquer', text: 'Le compteur d’essais incorrects est remis à zéro.' },
   restore:   { title: 'Remettre « Disponible »', text: 'Ce transfert pourra de nouveau être payé.' },
   settle:    { title: 'Règlement', text: '', input: 'Montant en USD', field: 'usd', need: 1 },
-  sendButton: { title: 'Envoyer le bouton dans le groupe', text: 'Le robot va écrire ce message dans le groupe, avec le bouton « 💸 Transferts RRD » : « Pour créer ou payer un transfert, passez toujours par ce bouton. Ne payez jamais sur une simple capture d’écran : payez seulement si l’app affiche ✅. »' }
 };
 function openAct(kind, x, text, preset) {
   var a = ACTS[kind]; ACT = { kind: kind, x: x, a: a };
@@ -538,9 +544,8 @@ $('actOk').onclick = function () {
   var p = {}, v = $('actInput').value.trim(), k = ACT.kind;
   if (ACT.a.need && v.length < (k === 'settle' ? 1 : 5)) return $('actErr').textContent = k === 'settle' ? 'Écrivez le montant.' : 'Écrivez la raison.';
   if (k === 'settle') { p.agent = ACT.x.code; p.usd = (ACT.x.sign < 0 ? '-' : '') + v.replace(/^-/, ''); p.note = ACT.x.sign < 0 ? 'HQ a payé l’agent' : 'Règlement reçu de l’agent'; }
-  else if (k === 'sendButton') p.agent = ACT.x.code;
   else { if (ACT.x.track) p.track = ACT.x.track; else p.id = ACT.x.id; if (ACT.a.field) p[ACT.a.field] = v; }
-  api(k, p, function (r) { if (!r.ok) return $('actErr').textContent = r.error; ACT = null; show('act', false); H = r; render(); if (r.sent) msg('✅ Bouton envoyé dans le groupe « ' + esc(r.sent) + ' ».', 'ok'); }, this);
+  api(k, p, function (r) { if (!r.ok) return $('actErr').textContent = r.error; ACT = null; show('act', false); H = r; render(); }, this);
 };
 
 // ---------- events ----------
@@ -560,6 +565,7 @@ document.addEventListener('click', function (e) {
     }, b);
   }
   if (b.id === 'newOrder') { C.last = null; return render(); }
+  if (b.id === 'alSave') return api('setAlertEmails', { emails: val('alMails') }, function (r) { if (!r.ok) return $('alMsg').textContent = r.error; H = r; render(); if ($('alMsg')) $('alMsg').textContent = 'Adresses enregistrées.'; }, b);
   if (b.id === 'zSync') { msg(''); return envoyerFileZ(); }
   if (b.hasAttribute('data-zdel')) { sauverFileZ(fileZ().filter(function (x) { return x.cid !== d('data-zdel'); })); return render(); }
   // screen 2
@@ -599,7 +605,6 @@ document.addEventListener('click', function (e) {
   if (b.hasAttribute('data-edit')) { var code = d('data-edit'), a0 = H.agents.filter(function (a) { return a.code === code; })[0];
     EDIT = a0 ? { code: a0.code, name: a0.name, type: a0.type, rrd: a0.rrd, groupId: a0.groupId, canCreate: a0.canCreate, canPay: a0.canPay, canReport: a0.canReport, payNum: a0.payNum, payName: a0.payName, payList: a0.payList, pin: a0.pin, tgId: a0.tgId, createPct: a0.createPct, payPct: a0.payPct, limit: a0.limit, active: a0.active } : { isNew: true, type: 'US', payNum: true, payName: true, payList: false, tgId: '', groupId: '', createPct: 0, payPct: 0, limit: 0, active: true };
     render(); if ($('agForm').scrollIntoView) $('agForm').scrollIntoView({ block: 'center' }); return; }
-  if (d('data-sendbtn')) { var ag2 = H.agents.filter(function (a) { return a.code === d('data-sendbtn'); })[0]; return openAct('sendButton', { code: ag2.code }, 'Groupe « ' + ag2.name + ' ».'); }
   if (b.id === 'aTypeUS' || b.id === 'aTypeHT') { ['code', 'name'].forEach(function (k) { EDIT[k] = val(k === 'code' ? 'aCode' : 'aName'); }); EDIT.createPct = val('aCp'); EDIT.payPct = val('aPp'); EDIT.limit = val('aLim'); EDIT.canCreate = val('aCanC') === '1'; EDIT.canPay = val('aCanP') === '1'; EDIT.canReport = val('aCanR') === '1'; EDIT.payNum = chk('aPayNum'); EDIT.payName = chk('aPayName'); EDIT.payList = chk('aPayList'); EDIT.pin = val('aPin') === '1'; EDIT.type = b.id === 'aTypeHT' ? 'Station' : 'US'; return render(); }
   if (b.id === 'aCancel') { EDIT = null; return render(); }
   if (b.hasAttribute('data-cash')) { var cid = d('data-cash'), c0 = (H.cashiers || []).filter(function (x) { return x.id === cid; })[0];
