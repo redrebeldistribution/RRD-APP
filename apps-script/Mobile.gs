@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.7';
+var MOBILE_VERSION = 'm1.8';
 var ROLES_APPAREIL = { DIRECTION: 'management', COMPTA: 'accounting' };   // station = DIRECTION ou COMPTA → téléphone de la direction / comptabilité
 /* Contrôles avant d'accepter un rapport (chiffres « visiblement faux »). Réglables ici. */
 var CTRL = {
@@ -251,6 +251,21 @@ function envoyerMobile_(app, p) {
 }
 
 
+/* ============================ Rapports de gestion ============================ */
+
+/** Tous les rapports (corrections appliquées, avec ventes attendues et écart) d'une période jusqu'à 1 an. Les calculs se font sur le téléphone. */
+function gestion_(p) {
+  var du = iso(p.du || dateRapport()), au = iso(p.au || du);
+  if (au < du) throw new UserError('Dates inversées.');
+  if ((new Date(au) - new Date(du)) / 86400000 > 366) throw new UserError('Période trop longue (1 an maximum).');
+  var prix = lire_(SHEETS.PRIX);
+  var rapports = rapportsEffectifs_().filter(function (r) { var d = iso(r.date_rapport); return d >= du && d <= au; }).map(function (r) {
+    var o = vueDirection_(r, prix); delete o.photo; return o;
+  });
+  return { du: du, au: au, aujourdhui: dateRapport(), rapports: rapports,
+    stations: stations_().map(function (s) { return { code: String(s.code), nom: String(s.nom), actif: estVrai_(s.actif) }; }) };
+}
+
 /* ============================ Contrôles ============================ */
 
 function mediane_(a) { a = a.filter(function (x) { return x > 0; }).sort(function (x, y) { return x - y; }); return a.length ? a[Math.floor(a.length / 2)] : 0; }
@@ -321,6 +336,7 @@ function direction_(app, sous, p) {
   var ctx = { id: app.id, nom: app.nom, username: 'app', role: app.role, chatType: 'private', chatInstance: '', enGroupe: false };
   switch (sous) {
     case 'rapports': return listeRapports_(ctx, p);
+    case 'gestion': exiger_(ctx, ['management', 'accounting']); return gestion_(p);
     case 'detail': return detailRapport_(ctx, p);
     case 'corriger': return corriger_(ctx, p);
     case 'annuler': return annuler_(ctx, p);

@@ -25,7 +25,7 @@
   button { font-size:16px; padding:13px 14px; border:0; border-radius:10px; background:var(--acc); color:var(--acc-txt); cursor:pointer; }
   button.sec { background:var(--sec); color:var(--txt); }
   button:disabled { opacity:.5; }
-  .row { display:flex; gap:8px; } .row > * { flex:1; }
+  .row { display:flex; gap:8px; } .row > * { flex:1; min-width:0; } input[type=date] { min-width:0; }
   .bar { position:fixed; left:0; right:0; bottom:0; padding:10px 14px calc(10px + env(safe-area-inset-bottom)); background:var(--bg); border-top:1px solid var(--line); }
   .bar .in { max-width:560px; margin:0 auto; display:flex; gap:8px; } .bar button { flex:1; }
   .card { border:1px solid var(--line); border-radius:12px; padding:12px; margin:8px 0; }
@@ -59,7 +59,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.5.1';
+var VERSION_APP = '1.6.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -566,15 +566,175 @@ function demarrerDirection(msg) {
     view('<h1>Tableau de bord</h1><div class="err">' + esc(e.reseau ? 'Pas de connexion. Le tableau de bord a besoin d\'internet.' : e.erreur) + '</div>', '<button onclick="demarrerDirection()">Réessayer</button>');
   });
 }
+/* ======================= DIRECTION : Analyse (rapports de gestion) ======================= */
+var G = { du: '', au: '', stations: [], per: 'tous', groupe: 'station', galMin: '', galMax: '', ecart: 'tous', ecartMin: '', controle: false, retard: false, annules: false, data: null, cle: '' };
+function isoJ(d) { return d.toISOString().slice(0, 10); }
+function jourPlus(s, n) { return isoJ(new Date(new Date(s + 'T12:00:00Z').getTime() + n * 864e5)); }
+function gPlage(n) {
+  var auj = D.aujourdhui, d = new Date(auj + 'T12:00:00Z');
+  if (n === 'mois') { G.du = auj.slice(0, 8) + '01'; G.au = auj; }
+  else if (n === 'moisPrec') { G.au = isoJ(new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 0, 12))); G.du = G.au.slice(0, 8) + '01'; }
+  else if (n === 'annee') { G.du = auj.slice(0, 4) + '-01-01'; G.au = auj; }
+  else { G.au = auj; G.du = jourPlus(auj, -n); }
+  lireFiltresG(true); ongletAnalyse();
+}
+function lireFiltresG(sansDates) {
+  if (!$('gDu')) return;
+  if (!sansDates) { G.du = $('gDu').value; G.au = $('gAu').value; }
+  G.stations = [].slice.call(document.querySelectorAll('.gSt:checked')).map(function (x) { return x.value; });
+  G.per = $('gPer').value; G.groupe = $('gGr').value; G.galMin = $('gGmin').value; G.galMax = $('gGmax').value;
+  G.ecart = $('gEc').value; G.ecartMin = $('gEcMin').value; G.controle = $('gCtl').checked; G.retard = $('gRet').checked; G.annules = $('gAnn').checked;
+}
+function ongletAnalyse(appliquer) {
+  if (appliquer) lireFiltresG();
+  if (!G.du) { G.au = D.aujourdhui; G.du = jourPlus(D.aujourdhui, -6); }
+  if (!G.stations.length) G.stations = D.stations.map(function (x) { return x.code; }).filter(function (c) { return c !== 'TST'; });
+  var cle = G.du + '|' + G.au;
+  if (G.data && G.cle === cle) return rendreAnalyse();
+  charge();
+  call('gestion', { du: G.du, au: G.au }).then(function (d) { G.data = d; G.cle = cle; rendreAnalyse(); })
+    .catch(function (e) { if (e.erreur && /inconnue/i.test(e.erreur)) e.erreur = 'Le serveur doit être mis à jour (Mobile.gs m1.8 ou plus) pour les rapports de gestion.'; errTab(e); });
+}
+function filtrer(rs) {
+  var nb2 = function (v) { return v === '' ? null : Number(v); }, gmin = nb2(G.galMin), gmax = nb2(G.galMax), emin = nb2(G.ecartMin);
+  return rs.filter(function (r) {
+    if (!G.annules && r.annule) return false;
+    if (G.stations.length && G.stations.indexOf(r.station) < 0) return false;
+    if (G.per === 'journee' && r.periode) return false;
+    if ((G.per === 'AM' || G.per === 'PM') && r.periode !== G.per) return false;
+    if (gmin !== null && r.gallons < gmin) return false;
+    if (gmax !== null && r.gallons > gmax) return false;
+    if (G.ecart === 'manquant' && !(r.ecart < 0)) return false;
+    if (G.ecart === 'excedent' && !(r.ecart > 0)) return false;
+    if (G.ecart === 'sansprix' && r.ecart !== null && r.ecart !== undefined) return false;
+    if (emin !== null && !(Math.abs(r.ecart || 0) >= emin)) return false;
+    if (G.controle && String(r.notes || '').indexOf('Contrôle') < 0) return false;
+    if (G.retard && !/en retard|différé/.test(String(r.notes || ''))) return false;
+    return true;
+  });
+}
+function semaineDe(d) { var x = new Date(d + 'T12:00:00Z'), j = (x.getUTCDay() + 6) % 7; return jourPlus(d, -j); }
+var MOIS = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
+function cleGroupe(r) {
+  if (G.groupe === 'jour') return [r.date, dfr(r.date)];
+  if (G.groupe === 'semaine') { var s = semaineDe(r.date); return [s, 'Sem. du ' + dfr(s)]; }
+  if (G.groupe === 'mois') return [r.date.slice(0, 7), MOIS[Number(r.date.slice(5, 7)) - 1] + ' ' + r.date.slice(0, 4)];
+  if (G.groupe === 'employe') { var n = String(r.employes_service || r.employe || '?').split(',')[0].trim() || '?'; return [n.toLowerCase(), n]; }
+  return [r.station, nomStation2(r.station)];
+}
+function nomStation2(c) { var s = (G.data.stations || []).filter(function (x) { return x.code === c; })[0]; return s ? s.nom : nomStation(c); }
+function sommes(rs) {
+  var t = { n: rs.length, gal: 0, ventes: 0, sansPrix: 0, autres: 0, depot: 0, gen: 0, prel: 0, dep: 0, ecart: 0, manq: 0, exc: 0, recu: 0 };
+  rs.forEach(function (r) {
+    var v = function (k) { return Number(r[k]) || 0; };
+    t.gal += v('gallons'); t.autres += v('other_cash_in'); t.depot += v('bank_deposit'); t.gen += v('generator_fuel'); t.prel += v('withdrawals'); t.dep += v('other_expenses'); t.recu += v('gas_received');
+    if (r.ecart === null || r.ecart === undefined) t.sansPrix++; else { t.ventes += v('ventes_attendues'); t.ecart += v('ecart'); if (r.ecart <= -1) t.manq += r.ecart; if (r.ecart >= 1) t.exc += r.ecart; }
+  });
+  t.depenses = t.gen + t.prel + t.dep; t.entrees = t.ventes + t.autres;
+  Object.keys(t).forEach(function (k) { t[k] = Math.round(t[k] * 100) / 100; });
+  return t;
+}
+function m(n) { return fmt(Math.round(n)); }
+function rendreAnalyse() {
+  var d = G.data, sts = (d.stations || []).filter(function (s) { return s.actif; });
+  var rs = filtrer(d.rapports), t = sommes(rs);
+  var h = entete();
+  // ---- Filtres
+  h += '<div class="card"><div class="row"><div><label>Du</label><input type="date" id="gDu" value="' + G.du + '"></div><div><label>Au</label><input type="date" id="gAu" value="' + G.au + '"></div></div>' +
+    '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">' + [[6, '7 jours'], [29, '30 jours'], ['mois', 'Ce mois'], ['moisPrec', 'Mois passé'], ['annee', 'Cette année']].map(function (x) {
+      return '<button class="sec" style="flex:1;padding:8px 6px;font-size:14px" onclick="gPlage(' + (typeof x[0] === 'number' ? x[0] : '\'' + x[0] + '\'') + ')">' + x[1] + '</button>'; }).join('') + '</div>' +
+    '<label>Stations</label><div style="display:flex;flex-wrap:wrap;gap:4px 14px">' + sts.map(function (s) {
+      return '<label style="display:flex;align-items:center;gap:6px;color:var(--txt);margin:2px 0"><input type="checkbox" class="gSt" style="width:auto" value="' + esc(s.code) + '"' + ((G.stations.length ? G.stations.indexOf(s.code) >= 0 : s.code !== 'TST') ? ' checked' : '') + '>' + esc(s.nom) + '</label>'; }).join('') + '</div>' +
+    '<div class="row"><div><label>Équipe</label><select id="gPer">' + [['tous', 'Toutes'], ['journee', 'Journée entière'], ['AM', 'Matin'], ['PM', 'Soir']].map(function (x) { return '<option value="' + x[0] + '"' + (G.per === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('') + '</select></div>' +
+    '<div><label>Regrouper par</label><select id="gGr">' + [['station', 'Station'], ['jour', 'Jour'], ['semaine', 'Semaine'], ['mois', 'Mois'], ['employe', 'Employé']].map(function (x) { return '<option value="' + x[0] + '"' + (G.groupe === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('') + '</select></div></div>' +
+    '<details' + (G.galMin || G.galMax || G.ecart !== 'tous' || G.ecartMin || G.controle || G.retard || G.annules ? ' open' : '') + ' style="margin-top:10px"><summary class="mut">Filtres avancés</summary>' +
+    '<div class="row"><div><label>Gallons min.</label><input id="gGmin" inputmode="decimal" value="' + esc(G.galMin) + '"></div><div><label>Gallons max.</label><input id="gGmax" inputmode="decimal" value="' + esc(G.galMax) + '"></div></div>' +
+    '<div class="row"><div><label>Écart</label><select id="gEc">' + [['tous', 'Tous'], ['manquant', 'Manquants (−)'], ['excedent', 'Excédents (+)'], ['sansprix', 'Sans prix']].map(function (x) { return '<option value="' + x[0] + '"' + (G.ecart === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('') + '</select></div>' +
+    '<div><label>Écart d\'au moins</label><input id="gEcMin" inputmode="decimal" placeholder="ex. 500" value="' + esc(G.ecartMin) + '"></div></div>' +
+    [['gCtl', 'controle', 'Seulement les rapports signalés ⚠️ (contrôle)'], ['gRet', 'retard', 'Seulement les rapports en retard'], ['gAnn', 'annules', 'Inclure les rapports annulés']].map(function (x) {
+      return '<label style="display:flex;align-items:center;gap:8px;color:var(--txt);margin-top:8px"><input type="checkbox" id="' + x[0] + '" style="width:auto"' + (G[x[1]] ? ' checked' : '') + '>' + x[2] + '</label>'; }).join('') + '</details>' +
+    '<div style="margin-top:12px"><button onclick="ongletAnalyse(true)">Appliquer</button></div></div>';
+  // ---- Chiffres clés
+  var joursSel = [], fin = G.au < d.aujourdhui ? G.au : d.aujourdhui;
+  for (var j = G.du; j <= fin; j = jourPlus(j, 1)) joursSel.push(j);
+  var stSel = sts.filter(function (s) { return !G.stations.length || G.stations.indexOf(s.code) >= 0; });
+  var faits = {}; d.rapports.forEach(function (r) { if (!r.annule) faits[r.station + '|' + r.date] = 1; });
+  var manquants = []; stSel.forEach(function (s) { joursSel.forEach(function (j) { if (!faits[s.code + '|' + j]) manquants.push({ station: s.code, date: j }); }); });
+  var ligne = function (a, b, fort) { return '<tr><td>' + a + '</td><td class="n">' + (fort ? '<b>' + b + '</b>' : b) + '</td></tr>'; };
+  h += '<h2>Résumé · ' + dfr(G.du) + ' → ' + dfr(G.au) + '</h2><div class="card"><table>' +
+    ligne('Rapports', t.n + (manquants.length ? ' · <span class="badge b-bad">' + manquants.length + ' manquant(s)</span>' : ''), true) +
+    ligne('Gallons vendus', fmt(t.gal), true) + ligne('Moyenne par jour', fmt(Math.round(t.gal / Math.max(1, joursSel.length) * 10) / 10) + ' gal') +
+    ligne('Prix moyen', t.ventes && t.gal ? fmt(Math.round(t.ventes / sommes(rs.filter(function (r) { return r.ecart !== null && r.ecart !== undefined; })).gal * 100) / 100) + ' /gal' : '—') +
+    ligne('Gaz reçu', fmt(t.recu) + ' gal') + '</table></div>' +
+    '<div class="card"><b>Argent entré</b><table>' + ligne('Ventes attendues (gallons × prix)', m(t.ventes)) + ligne('Autres entrées d\'argent', m(t.autres)) + ligne('Total entrées', m(t.entrees), true) + '</table></div>' +
+    '<div class="card"><b>Argent sorti de la caisse</b><table>' + ligne('Dépôts en banque', m(t.depot)) + ligne('Carburant génératrice', m(t.gen)) + ligne('Prélèvements', m(t.prel)) + ligne('Autres dépenses (Zelle, etc.)', m(t.dep)) +
+    ligne('Total dépenses (sans les dépôts)', m(t.depenses), true) + '</table></div>' +
+    '<div class="card"><b>Caisse</b><table>' + ligne('Écart net', badgeEcart(t.ecart)) + ligne('Total des manquants', '<span style="color:var(--bad)">' + m(t.manq) + '</span>') + ligne('Total des excédents', m(t.exc)) + '</table>' +
+    (t.sansPrix ? '<div class="mut">⚠️ ' + t.sansPrix + ' rapport(s) sans prix : pas compris dans les ventes ni l\'écart.</div>' : '') + '</div>';
+  // ---- Par groupe + graphique
+  var grp = {}, ordre = [];
+  rs.forEach(function (r) { var k = cleGroupe(r); if (!grp[k[0]]) { grp[k[0]] = { lib: k[1], rs: [] }; ordre.push(k[0]); } grp[k[0]].rs.push(r); });
+  ordre.sort(); if (G.groupe === 'station' || G.groupe === 'employe') ordre.sort(function (a, b) { return sommes(grp[b].rs).gal - sommes(grp[a].rs).gal; });
+  var titres = { station: 'Par station', jour: 'Par jour', semaine: 'Par semaine', mois: 'Par mois', employe: 'Par employé (1er nom du rapport)' };
+  if (ordre.length) {
+    var max = Math.max.apply(null, ordre.map(function (k) { return sommes(grp[k].rs).gal; })) || 1;
+    h += '<h2>' + titres[G.groupe] + '</h2><div class="card">' + ordre.map(function (k) {
+      var g = sommes(grp[k].rs);
+      return '<div style="margin:6px 0"><div style="display:flex;justify-content:space-between;font-size:14px"><span>' + esc(grp[k].lib) + '</span><b>' + fmt(g.gal) + ' gal</b></div>' +
+        '<div style="background:var(--sec);border-radius:6px;height:10px"><div style="background:var(--red,#b91c1c);height:10px;border-radius:6px;width:' + Math.max(2, Math.round(g.gal / max * 100)) + '%"></div></div></div>';
+    }).join('') + '</div>';
+    h += '<div class="card" style="overflow-x:auto"><table style="font-size:13px;min-width:560px"><tr><td><b>' + esc(titres[G.groupe].replace('Par ', '').replace(/ \(.*/, '')) + '</b></td><td class="n"><b>Rapp.</b></td><td class="n"><b>Gal</b></td><td class="n"><b>Ventes</b></td><td class="n"><b>Dépôts</b></td><td class="n"><b>Dépenses</b></td><td class="n"><b>Écart</b></td></tr>' +
+      ordre.map(function (k) { var g = sommes(grp[k].rs); return '<tr><td>' + esc(grp[k].lib) + '</td><td class="n">' + g.n + '</td><td class="n">' + fmt(g.gal) + '</td><td class="n">' + m(g.ventes) + '</td><td class="n">' + m(g.depot) + '</td><td class="n">' + m(g.depenses) + '</td><td class="n">' + badgeEcart(g.ecart) + '</td></tr>'; }).join('') +
+      '<tr><td><b>Total</b></td><td class="n"><b>' + t.n + '</b></td><td class="n"><b>' + fmt(t.gal) + '</b></td><td class="n"><b>' + m(t.ventes) + '</b></td><td class="n"><b>' + m(t.depot) + '</b></td><td class="n"><b>' + m(t.depenses) + '</b></td><td class="n">' + badgeEcart(t.ecart) + '</td></tr></table></div>';
+  } else h += '<div class="note">Aucun rapport ne correspond à ces filtres.</div>';
+  // ---- À surveiller
+  var gros = rs.filter(function (r) { return r.ecart !== null && r.ecart !== undefined && Math.abs(r.ecart) >= 1; }).sort(function (a, b) { return a.ecart - b.ecart; }).slice(0, 10);
+  var signales = rs.filter(function (r) { return String(r.notes || '').indexOf('Contrôle') >= 0; });
+  if (gros.length || signales.length || manquants.length) {
+    h += '<h2>À surveiller</h2>';
+    if (gros.length) h += '<div class="card"><b>Plus grands écarts</b>' + gros.map(function (r) { return '<div class="row" style="margin:6px 0;cursor:pointer" onclick="ouvrirG(\'' + esc(r.ref) + '\')"><div>' + esc(nomStation2(r.station)) + ' · ' + dfr(r.date) + (r.periode ? ' (' + (r.periode === 'AM' ? 'matin' : 'soir') + ')' : '') + '<div class="mut">' + esc(r.employes_service || r.employe || '') + '</div></div><div style="text-align:right;flex:none">' + badgeEcart(r.ecart) + '</div></div>'; }).join('') + '</div>';
+    if (signales.length) h += '<div class="card"><b>⚠️ Rapports signalés par les contrôles (' + signales.length + ')</b>' + signales.slice(0, 15).map(function (r) { var n = String(r.notes).match(/\[⚠️ Contrôle[^\]]*\]/); return '<div style="margin:6px 0;cursor:pointer" onclick="ouvrirG(\'' + esc(r.ref) + '\')">' + esc(nomStation2(r.station)) + ' · ' + dfr(r.date) + '<div class="mut">' + esc(n ? n[0] : '') + '</div></div>'; }).join('') + '</div>';
+    if (manquants.length) h += '<div class="card"><b>Rapports manquants (' + manquants.length + ')</b><div class="mut">' + manquants.slice(0, 40).map(function (x) { return esc(nomStation2(x.station)) + ' ' + dfr(x.date); }).join(' · ') + (manquants.length > 40 ? ' …' : '') + '</div></div>';
+  }
+  // ---- Dépenses détaillées
+  var deps = rs.filter(function (r) { return (Number(r.other_expenses) || 0) + (Number(r.generator_fuel) || 0) + (Number(r.withdrawals) || 0) > 0; });
+  if (deps.length) {
+    h += '<details class="card"><summary><b>Détail des dépenses (' + deps.length + ' rapports)</b></summary><table style="font-size:13px">' + deps.map(function (r) {
+      var parts = []; if (Number(r.generator_fuel)) parts.push('génératrice ' + m(r.generator_fuel)); if (Number(r.withdrawals)) parts.push('prélèvement ' + m(r.withdrawals)); if (Number(r.other_expenses)) parts.push('autres ' + m(r.other_expenses) + (r.other_expenses_detail ? ' : ' + r.other_expenses_detail : ''));
+      return '<tr><td>' + dfr(r.date) + '<div class="mut">' + esc(nomStation2(r.station)) + '</div></td><td>' + esc(parts.join(' · ')) + '</td></tr>'; }).join('') + '</table></details>';
+  }
+  h += '<div style="margin:14px 0"><button class="sec" onclick="exporterCsv()">⬇️ Exporter en fichier Excel (CSV)</button></div>';
+  view(h);
+}
+function ouvrirG(ref) { T.retour = 'analyse'; ouvrir(ref); }
+function exporterCsv() {
+  var rs = filtrer(G.data.rapports);
+  var cols = [['ref', 'Référence'], ['station', 'Station'], ['date', 'Date'], ['periode_libelle', 'Équipe'], ['employes_service', 'Employés'], ['opening_meter', 'Compteur ouverture'], ['closing_meter', 'Compteur fermeture'], ['gallons', 'Gallons'], ['prix', 'Prix/gal'],
+    ['ventes_attendues', 'Ventes attendues'], ['starting_cash', 'Solde initial'], ['other_cash_in', 'Autres entrées'], ['bank_deposit', 'Dépôt banque'], ['generator_fuel', 'Génératrice'], ['withdrawals', 'Prélèvements'], ['other_expenses', 'Autres dépenses'], ['other_expenses_detail', 'Détail dépenses'],
+    ['caisse_attendue', 'Caisse attendue'], ['counted_cash', 'Caisse comptée'], ['ecart', 'Écart'], ['gas_received', 'Gaz reçu (gal)'], ['notes', 'Notes'], ['annule', 'Annulé'], ['corrections', 'Corrections']];
+  var q = function (v) { v = v === null || v === undefined ? '' : String(v); return /[;"\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+  var csv = '﻿' + cols.map(function (c) { return c[1]; }).join(';') + '\n' + rs.map(function (r) {
+    return cols.map(function (c) { var v = c[0] === 'station' ? nomStation2(r.station) : c[0] === 'annule' ? (r.annule ? 'oui' : '') : r[c[0]]; return q(typeof v === 'number' ? String(v).replace('.', ',') : v); }).join(';');
+  }).join('\n');
+  var nom = 'RRD-rapports-' + G.du + '-au-' + G.au + '.csv';
+  if (!WEB && NAT.Filesystem) {
+    NAT.Filesystem.writeFile({ path: nom, directory: 'DOCUMENTS', data: csv, encoding: 'utf8' })
+      .then(function () { alerte('Fichier enregistré dans « Documents » : ' + nom); })
+      .catch(function () { alerte('Impossible d\'enregistrer le fichier sur ce téléphone. Utilisez la version web pour exporter.'); });
+    return;
+  }
+  var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' })); a.download = nom; document.body.appendChild(a); a.click(); a.remove();
+}
+
 function entete() {
-  var tabs = [['rapports', 'Rapports'], ['resume', 'Résumé du jour'], ['prix', 'Prix']];
+  var tabs = [['rapports', 'Rapports'], ['analyse', '📊 Analyse'], ['resume', 'Résumé du jour'], ['prix', 'Prix']];
   if (D.utilisateur.role === 'management') tabs.push(['appareils', 'Téléphones']);
   return '<h1>Tableau de bord</h1><div class="sub">' + esc(D.utilisateur.nom) + ' · ' + (D.utilisateur.role === 'management' ? 'Direction' : 'Comptabilité') + ' · montants en ' + DEV + ' · <a href="#" onclick="changerCode();return false">Changer de code</a></div>' +
     '<div class="tabs">' + tabs.map(function (t) { return '<button class="' + (T.onglet === t[0] ? '' : 'sec') + '" onclick="tableau(\'' + t[0] + '\')">' + t[1] + '</button>'; }).join('') + '</div>';
 }
 function charge() { view(entete() + '<p class="mut center">Chargement…</p>'); }
 function errTab(e) { view(entete() + '<div class="err">' + esc(e.reseau ? 'Pas de connexion. Réessayez.' : e.erreur) + '</div>', '<button class="sec" onclick="tableau(T.onglet)">Réessayer</button>'); }
-function tableau(o) { T.onglet = o; charge(); ({ rapports: ongletRapports, resume: ongletResume, prix: ongletPrix, appareils: ongletAppareils })[o](); }
+function tableau(o) { T.retour = ''; T.onglet = o; charge(); ({ rapports: ongletRapports, analyse: function () { ongletAnalyse(); }, resume: ongletResume, prix: ongletPrix, appareils: ongletAppareils })[o](); }
 function badgeEcart(e) {
   if (e === null || e === undefined) return '<span class="badge b-warn">prix manquant</span>';
   if (Math.abs(e) < 1) return '<span class="badge b-ok">écart 0</span>';
@@ -639,7 +799,7 @@ function totauxPeriode(l) {
 function ouvrir(ref) { charge(); call('detail', { ref: ref }).then(function (r) { R = r; ecranDetail(); }).catch(errTab); }
 function ecranDetail(apercu, msg, annul) {
   var r = R;
-  var h = entete() + '<button class="sec" onclick="tableau(\'rapports\')">← Retour</button><h2>' + esc(nomStation(r.station)) + ' · ' + dfr(r.date) + (r.periode ? ' · ' + esc(r.periode_libelle) : '') + '</h2>' +
+  var h = entete() + '<button class="sec" onclick="tableau(T.retour || \'rapports\')">← Retour</button><h2>' + esc(nomStation(r.station)) + ' · ' + dfr(r.date) + (r.periode ? ' · ' + esc(r.periode_libelle) : '') + '</h2>' +
     '<div class="mut">Réf. ' + esc(r.ref) + ' · envoyé le ' + esc(r.soumis_le) + ' par ' + esc(r.employe) + '</div>';
   if (msg) h += '<div class="okb">' + esc(msg) + '</div>';
   if (r.annule) h += '<div class="err"><b>Rapport annulé</b> le ' + esc(r.annule_le) + ' par ' + esc(r.annule_par) + '\nMotif : ' + esc(r.motif_annulation) + '\nIl ne compte plus dans les totaux ; la station peut envoyer un nouveau rapport.</div>';
