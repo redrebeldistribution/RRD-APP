@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.19';
+var MOBILE_VERSION = 'm1.20';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var STATION_FORMATION = 'TST', MAX_APPAREILS_FORMATION = 50;   // les codes de la station de test servent à la formation : plusieurs téléphones avec le même code (propriétaire, 26/11/2026)
 var MAX_APPAREILS_ROLE = 5;   // un code DIR ou CPT peut servir sur 5 appareils en même temps (demande du propriétaire, 26/11/2026)
@@ -100,6 +100,8 @@ function jetonAleatoire_() {
 function enregistrerAppareil_(b) {
   var code = String(b.code || '').trim().toUpperCase();
   if (!code) throw new UserError('Entrez le code d\'activation donné par la direction.');
+  // Sans identifiant d'appareil, on ne peut ni réserver un code de station pour un téléphone, ni compter les appareils d'un code partagé.
+  if (!String(b.appareil_id || '').split('|').filter(function (x) { return x.trim(); }).length) throw new UserError('Activation impossible : identifiant du téléphone manquant. Fermez l\'application, rouvrez-la et réessayez.', 'CODE');
   var lock = LockService.getScriptLock(); lock.waitLock(20000);
   try {
     var ligne = lire_(APPAREILS).filter(function (a) { return String(a.code_activation).trim().toUpperCase() === code; })[0];

@@ -68,7 +68,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.16.0';
+var VERSION_APP = '1.16.1';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -242,6 +242,7 @@ function enregistrer() {
     CFG.set('role', ''); CFG.set('station', d.station);
     accueil();
     synchroniser();
+    phEnvoyer(); ntDemarrer();   // rappels, messages et notifications dès l'activation (sans attendre de rouvrir l'application)
   }).catch(function (e) { ecranEnregistrer(e.reseau ? 'Pas de connexion internet. Réessayez quand le téléphone a du signal.' : e.erreur); });
 }
 
@@ -781,7 +782,7 @@ function ntDemarrer() {
 /* Notifications poussées (Firebase) : un message de la direction écrit pendant que l'application est fermée arrive quand même sur le
  * téléphone. Le téléphone donne son adresse de notification au bureau ; le bureau ne pousse que les messages que ce téléphone n'a pas
  * encore pris (les autres sont déjà programmés sur le téléphone, et sonnent même sans signal). */
-var PN = NAT.PushNotifications || null, PUSH = { pret: false };
+var PN = NAT.PushNotifications || null, PUSH = { pret: '', ecoute: false };   // pret = le code (jeton) pour lequel l'adresse a été donnée
 function pushVu(n) {   // un message arrivé par notification poussée ne doit pas être montré une deuxième fois
   var id = Number(n && n.data && n.data.msg_id);
   if (!id) return;
@@ -789,21 +790,27 @@ function pushVu(n) {   // un message arrivé par notification poussée ne doit p
   if (vus.indexOf(id) < 0) { vus.push(id); CFG.set('msgVus', vus.slice(-200)); }
 }
 function pushDemarrer() {
-  if (!PN || PUSH.pret || CFG.get('role', '') || !CFG.get('jeton', '')) return;
-  PUSH.pret = true;
-  PN.addListener('registration', function (t) {
-    var v = String((t && t.value) || '');
-    if (v) api('pushToken', { payload: { token: v } }).catch(function () { });
-  });
-  PN.addListener('pushNotificationReceived', function (n) { pushVu(n); msgCharger(true); });
-  PN.addListener('pushNotificationActionPerformed', function (a) { pushVu(a && a.notification); msgCharger(true); });
+  var jeton = CFG.get('jeton', '');
+  if (!PN || CFG.get('role', '') || !jeton || PUSH.pret === jeton) return;
+  PUSH.pret = jeton;   // après « Changer de code », l'adresse est redonnée au bureau pour le nouveau code
+  if (!PUSH.ecoute) {
+    PUSH.ecoute = true;
+    PN.addListener('registration', function (t) {
+      var v = String((t && t.value) || '');
+      if (v && CFG.get('jeton', '') && !CFG.get('role', '')) api('pushToken', { payload: { token: v } }).catch(function () { PUSH.pret = ''; });
+    });
+    PN.addListener('pushNotificationReceived', function (n) { pushVu(n); msgCharger(true); });
+    PN.addListener('pushNotificationActionPerformed', function (a) { pushVu(a && a.notification); msgCharger(true); });
+  }
   PN.checkPermissions().then(function (p) { return p.receive === 'granted' ? p : PN.requestPermissions(); })
     .then(function (p) {
-      if (p.receive !== 'granted') { PUSH.pret = false; return; }
+      if (p.receive !== 'granted') { PUSH.pret = ''; PUSH.refus = true; return; }
+      PUSH.refus = false;
       PN.createChannel({ id: 'rrd-messages', name: 'Messages de la direction', description: 'Conseils du jour et messages de la direction', importance: 4, visibility: 1 }).catch(function () { });
       return PN.register();
-    }).catch(function () { PUSH.pret = false; });
+    }).catch(function () { PUSH.pret = ''; });
 }
+function pushRepli() { if (!PUSH.refus) pushDemarrer(); }   // au retour dans l'application : redonner l'adresse si l'envoi avait échoué (pas de signal)
 function ntBientot() { if (!LN) return; clearTimeout(NT.timer); NT.timer = setTimeout(ntPlanifier, 1500); }
 function ntPlanifier() {
   if (!LN || NT.ok === false || CFG.get('role', '') || !CFG.get('jeton', '')) return;
@@ -1485,7 +1492,7 @@ function verifierMaj() {
     }).then(function (b) { return CU.next({ id: b.id }); }).then(function () { S.majPrete = ver; S.majErreur = ''; if (S.ecran === 'accueil') accueil(); });
   }).catch(function (e) { S.majErreur = String((e && (e.message || e.errorMessage)) || e || '').slice(0, 90); }).then(function () { S.majEnCours = false; });
 }
-document.addEventListener('resume', function () { verifierMaj(); bandeauMaj(); phEnvoyer(); msgCharger(); ntBientot(); repEnvoyer(); });
+document.addEventListener('resume', function () { verifierMaj(); bandeauMaj(); phEnvoyer(); msgCharger(); ntBientot(); repEnvoyer(); pushRepli(); });
 setInterval(function () { phEnvoyer(); if (S.ecran === 'photos') ecranPhotos(); msgCharger(); repEnvoyer(); }, 60000);   // file des photos + heure en cours à jour
 setTimeout(verifierMaj, 4000); setInterval(verifierMaj, 3 * 3600 * 1000);
 
