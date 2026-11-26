@@ -71,7 +71,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.20.0';
+var VERSION_APP = '1.20.1';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -594,7 +594,8 @@ function synchroniser(manuel) {
 /* ======================= Photos horaires (station) =======================
  * Chaque heure, de 7 h à 17 h : 3 photos (compteur, station, citerne), prises avec l'appareil photo du téléphone.
  * La photo est gardée sur le téléphone puis envoyée dès qu'il y a du signal. L'heure est celle du téléphone au moment de la photo. */
-var PH_TYPES = [['COMPTEUR', '📟', 'Compteur', 'de près, chiffres lisibles'], ['STATION', '⛽', 'Station', 'entrée et zone de remplissage'], ['CITERNE', '🛢️', 'Citerne', 'la citerne et autour']];
+var IC_CITERNE = '<svg viewBox="0 0 48 32" width="1.9em" height="1.27em" style="vertical-align:-0.25em" aria-hidden="true"><rect x="20" y="2.5" width="8" height="6" rx="1.5" fill="#94a3b8"/><rect x="3" y="7" width="42" height="17" rx="8.5" fill="#f8fafc" stroke="#94a3b8" stroke-width="2"/><path d="M12 11.2h24" stroke="#cbd5e1" stroke-width="2" stroke-linecap="round"/><path d="M24 12.3c2.3 2 3.3 3.7 3.3 5.3a3.3 3.3 0 0 1-6.6 0c0-1.6 1-3.3 3.3-5.3z" fill="#c21c34"/><path d="M11 24.5v4.5M37 24.5v4.5M7.5 29.5h7M33.5 29.5h7" stroke="#94a3b8" stroke-width="2.4" stroke-linecap="round"/></svg>';   // citerne de propane (à la place du baril)
+var PH_TYPES = [['COMPTEUR', '📟', 'Compteur', 'de près, chiffres lisibles'], ['STATION', '⛽', 'Station', 'entrée et zone de remplissage'], ['CITERNE', IC_CITERNE, 'Citerne', 'la citerne et autour']];
 var PH_HEURES = [7, 8, 9, 10, 11, 12, 13, 14, 15, 16];   // heures comptées (rappels, heures manquantes)
 var PH_VUES = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19];   // heures montrées : de 5 h à 20 h, une photo prise y est marquée même si l'heure n'est pas comptée
 var PH_NOMS = { COMPTEUR: 'compteur', STATION: 'station', CITERNE: 'citerne', JAUGE_OUV: 'manomètre ouverture', JAUGE_FER: 'manomètre fermeture', BORDEREAU: 'bordereau' };
@@ -1492,7 +1493,7 @@ function exporterCsv() {
 }
 
 function entete() {
-  var tabs = [['rapports', 'Rapports'], ['analyse', '📊 Analyse'], ['resume', 'Résumé du jour'], ['photos', '📷 Photos'], ['bordereaux', '🧾 Bordereaux'], ['stock', '🛢 Stock'], ['camion', '🚚 Camion'], ['messages', '✉️ Messages'], ['prix', 'Prix']];
+  var tabs = [['rapports', 'Rapports'], ['analyse', '📊 Analyse'], ['resume', 'Résumé du jour'], ['photos', '📷 Photos'], ['bordereaux', '🧾 Bordereaux'], ['stock', IC_CITERNE + ' Stock'], ['camion', '🚚 Camion'], ['messages', '✉️ Messages'], ['prix', 'Prix']];
   if (D.utilisateur.role === 'management') tabs.push(['appareils', 'Téléphones']);
   return '<h1>Tableau de bord</h1><div class="sub">' + esc(D.utilisateur.nom) + ' · ' + (D.utilisateur.role === 'management' ? 'Direction' : 'Comptabilité') + ' · montants en ' + DEV + ' · <a href="#" onclick="changerCode();return false">Changer de code</a></div>' +
     '<div class="tabs">' + tabs.map(function (t) { return '<button class="' + (T.onglet === t[0] ? '' : 'sec') + '" onclick="tableau(\'' + t[0] + '\')">' + t[1] + '</button>'; }).join('') + '</div>';
