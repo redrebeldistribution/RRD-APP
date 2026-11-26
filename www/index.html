@@ -68,7 +68,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.11.1';
+var VERSION_APP = '1.11.2';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -1113,14 +1113,14 @@ function ajouterPrix() {
 function ongletAppareils(data) {
   var rendre = function (a) {
     var h = entete();
-    if (a.nouveau) h += '<div class="okb">Nouveau code : <b style="font-size:20px">' + esc(a.nouveau) + '</b><br>Donnez-le à la personne qui enregistre le téléphone. Il ne marche qu\'une fois.</div>';
+    if (a.nouveau) h += '<div class="okb">Nouveau code : <b style="font-size:20px">' + esc(a.nouveau) + '</b><br>Donnez-le à la personne qui enregistre le téléphone. Un code de station ne marche que sur un seul téléphone ; un code Direction ou Comptabilité peut servir sur 5 appareils.</div>';
     h += '<h2>Nouveau code de téléphone</h2><label>Pour</label><select id="apSt">' + optStations('', false, '<option value="DIRECTION">Direction (tableau de bord)</option><option value="COMPTA">Comptabilité (tableau de bord)</option>' + (a.transferts || []).map(function (t) { return '<option value="' + esc(t.code) + '">' + esc(t.nom) + '</option>'; }).join('')) + '</select>' +
       '<label>Nom (facultatif, ex. « Téléphone Esansyel » ou « Elisana »)</label><input id="apNom" autocomplete="off">' +
       '<div style="margin-top:10px"><button id="bAp" onclick="nouveauCode()">Créer un code</button></div><h2>Téléphones</h2>';
     if (!a.appareils.length) h += '<div class="note">Aucun téléphone.</div>';
     a.appareils.slice().reverse().forEach(function (x) {
       h += '<div class="card" style="' + (x.actif ? '' : 'opacity:.55') + '"><div class="row"><div><b>' + esc(x.station_nom) + '</b>' + (x.nom ? ' · ' + esc(x.nom) : '') +
-        '<div class="mut">Code ' + esc(x.code) + ' · ' + (x.utilise ? 'enregistré le ' + esc(x.enregistre_le) : 'pas encore utilisé') + (x.dernier_contact ? ' · vu le ' + esc(x.dernier_contact) : '') + '</div>' +
+        '<div class="mut">Code ' + esc(x.code) + ' · ' + (x.utilise ? 'enregistré le ' + esc(x.enregistre_le) : 'pas encore utilisé') + (x.partage && x.utilise ? ' · ' + x.nb + ' appareil(s) sur ' + x.max : '') + (x.dernier_contact ? ' · vu le ' + esc(x.dernier_contact) : '') + '</div>' +
         '<div>' + (x.actif ? '<span class="badge b-ok">actif</span>' : '<span class="badge b-bad">désactivé</span>') + '</div></div>' +
         '<div style="display:flex;flex-direction:column;gap:6px;flex:none">' +
         '<button class="' + (x.actif ? 'danger' : 'sec') + '" onclick="basculer(\'' + esc(x.code) + '\',' + (!x.actif) + ')">' + (x.actif ? 'Désactiver' : 'Réactiver') + '</button>' +

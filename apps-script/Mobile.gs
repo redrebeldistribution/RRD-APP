@@ -14,8 +14,9 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.11';
+var MOBILE_VERSION = 'm1.12';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
+var MAX_APPAREILS_ROLE = 5;   // un code DIR ou CPT peut servir sur 5 appareils en même temps (demande du propriétaire, 26/11/2026)
 var ROLES_APPAREIL = { DIRECTION: 'management', COMPTA: 'accounting' };   // station = DIRECTION ou COMPTA → téléphone de la direction / comptabilité
 /* Contrôles avant d'accepter un rapport (chiffres « visiblement faux »). Réglables ici. */
 var CTRL = {
@@ -100,10 +101,11 @@ function enregistrerAppareil_(b) {
     if (!ligne || !estVrai_(ligne.actif)) throw new UserError('Code d\'activation inconnu ou désactivé.', 'CODE');
     // Un code déjà utilisé ne peut resservir que sur le MÊME téléphone (ex. après « Changer de code » pour tester).
     // Les identifiants sont séparés par « | » (identifiant de l'app + identifiant fixe du téléphone) : un seul en commun suffit.
+    var role = roleAppareil_(ligne.station);
+    if (role === 'management' || role === 'accounting') return enregistrerPartage_(ligne, b, role, code);
     var ancien = String(ligne.appareil_id || '').split('|').filter(String), envoye = String(b.appareil_id || '').split('|').filter(String);
     var memeTel = envoye.some(function (x) { return ancien.indexOf(x) >= 0; });
     if (String(ligne.jeton || '').trim() && !memeTel) throw new UserError('Ce code a déjà été utilisé sur un autre téléphone. Demandez un nouveau code à la direction.', 'CODE_UTILISE');
-    var role = roleAppareil_(ligne.station);
     var st = role ? null : stations_().filter(function (s) { return String(s.code) === String(ligne.station).trim() && estVrai_(s.actif); })[0];
     if (!role && !st) throw new UserError('La station de ce code n\'existe pas ou est inactive.', 'CODE');
     if (!role && b.web) throw new UserError('La version web est réservée à la direction et à la comptabilité. Pour une station, installez l\'application Android.', 'CODE');
@@ -116,6 +118,34 @@ function enregistrerAppareil_(b) {
     if (role) return { jeton: jeton, role: role, nom: String(ligne.nom || ligne.note || code) };
     return { jeton: jeton, station: { code: st.code, nom: st.nom } };
   } finally { lock.releaseLock(); }
+}
+
+/**
+ * Codes DIR et CPT : le même code sert sur plusieurs appareils (MAX_APPAREILS_ROLE), sans déconnecter les autres.
+ * Tous les appareils du code partagent le même jeton ; « appareil_id » garde la liste des appareils, séparés par « ; »
+ * (chaque appareil = ses identifiants séparés par « | »). « Libérer le code » déconnecte tous les appareils d'un coup.
+ */
+function appListe_(v) { return String(v || '').split(';').map(function (x) { return x.trim(); }).filter(String); }
+function enregistrerPartage_(ligne, b, role, code) {
+  var appareils = appListe_(ligne.appareil_id), modeles = String(ligne.modele || '').split(';').map(function (x) { return x.trim(); });
+  var envoye = String(b.appareil_id || '').slice(0, 80).split('|').filter(String);
+  var deja = String(ligne.jeton || '').trim(), i = -1;
+  appareils.forEach(function (a, k) { if (i < 0 && envoye.some(function (x) { return a.split('|').indexOf(x) >= 0; })) i = k; });
+  if (envoye.length) {
+    if (i < 0) {
+      if (deja && appareils.length >= MAX_APPAREILS_ROLE) throw new UserError('Ce code est déjà utilisé sur ' + MAX_APPAREILS_ROLE + ' appareils. Demandez à la direction de le libérer ou de créer un autre code.', 'CODE_UTILISE');
+      i = appareils.length; appareils.push(envoye.join('|'));
+    } else appareils[i] = appareils[i].split('|').concat(envoye).filter(function (x, k, l) { return l.indexOf(x) === k; }).join('|');
+    while (modeles.length < appareils.length) modeles.push('');
+    modeles[i] = String(b.modele || '').replace(/;/g, ',').slice(0, 60);
+  }
+  var jeton = deja || jetonAleatoire_();
+  if (!deja) majCellule_(APPAREILS, ligne._ligne, 'jeton', jeton);
+  majCellule_(APPAREILS, ligne._ligne, 'appareil_id', appareils.join(' ; '));
+  majCellule_(APPAREILS, ligne._ligne, 'modele', modeles.slice(0, appareils.length).join(' ; '));
+  majCellule_(APPAREILS, ligne._ligne, 'enregistre_le', maintenant_());
+  journal_({ id: 'APP', nom: 'Appareil ' + code }, 'appareil+', role + ' (' + appareils.length + '/' + MAX_APPAREILS_ROLE + ')');
+  return { jeton: jeton, role: role, nom: String(ligne.nom || ligne.note || code) };
 }
 
 /** DIRECTION / COMPTA = tableau de bord ; « TR:CODE » = agent de transfert sans station (transferts seulement). */
@@ -384,6 +414,7 @@ function listeAppareils_() {
     appareils: lire_(APPAREILS).map(function (a) {
       return { code: String(a.code_activation), station: String(a.station), station_nom: noms[String(a.station).trim()] || String(a.station),
         actif: estVrai_(a.actif), utilise: !!String(a.jeton || '').trim(), enregistre_le: String(a.enregistre_le || ''),
+        partage: !!ROLES_APPAREIL[String(a.station).trim().toUpperCase()], nb: appListe_(a.appareil_id).length, max: MAX_APPAREILS_ROLE,
         dernier_contact: String(a.dernier_contact || ''), nom: String(a.nom || '') };
     })
   };
