@@ -1,6 +1,6 @@
 {
   "appId": "com.redrebel.rrdapp",
-  "appName": "RRD Rapport",
+  "appName": "RRD",
   "webDir": "www",
   "android": {
     "allowMixedContent": false

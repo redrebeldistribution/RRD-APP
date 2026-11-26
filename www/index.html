@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#b91c1c">
-<title>RRD Rapport</title>
+<title>RRD</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icon-180.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -15,6 +15,9 @@
   body { margin:0; font:16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--txt); }
   .top { background:var(--acc); color:#fff; padding:calc(10px + env(safe-area-inset-top)) 14px 10px; display:flex; align-items:center; gap:10px; }
   .top b { font-size:17px; flex:1; } .top .pill { font-size:12px; background:rgba(255,255,255,.2); padding:3px 9px; border-radius:20px; }
+  .sect { display:flex; background:#991b1b; }
+  .sect a { flex:1; text-align:center; padding:11px 4px; color:#fecaca; text-decoration:none; font-weight:600; font-size:15px; border-bottom:3px solid transparent; }
+  .sect a.on { color:#fff; border-bottom-color:#fff; }
   .wrap { max-width:560px; margin:0 auto; padding:14px 14px 100px; }
   h1 { font-size:20px; margin:4px 0 2px; } h2 { font-size:17px; margin:18px 0 8px; }
   .sub { color:var(--mut); font-size:14px; margin-bottom:12px; }
@@ -47,7 +50,8 @@
 </style>
 </head>
 <body>
-<div class="top"><b>📋 Rapport de fermeture</b><span class="pill" id="net">…</span></div>
+<div class="top"><b>RRD</b><span class="pill" id="net">…</span></div>
+<div class="sect hidden" id="sect"><a class="on" href="index.html">📋 Rapports</a><a href="transfert.html">💸 Transferts</a></div>
 <div class="wrap" id="app"><p class="center mut" style="margin-top:40px">Chargement…</p></div>
 <div class="bar hidden" id="bar"><div class="in" id="barIn"></div></div>
 
@@ -59,7 +63,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.7.1';
+var VERSION_APP = '1.8.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -201,6 +205,7 @@ function stationCode() { return (CFG.get('station', {}) || {}).code; }
 function view(html, barHtml, ecran) {
   S.ecran = ecran || '';
   $('app').innerHTML = html;
+  $('sect').classList.toggle('hidden', !CFG.get('jeton', ''));
   bandeauMaj();
   if (barHtml) { $('barIn').innerHTML = barHtml; $('bar').classList.remove('hidden'); } else $('bar').classList.add('hidden');
   window.scrollTo(0, 0);
@@ -273,7 +278,6 @@ function accueil() {
       if (j.envoyes.length) h += '<p class="mut center">Le rapport de l\'équipe du matin est déjà fait. Ce rapport sera celui de l\'équipe du soir.</p>';
     } else h += '<div class="okb">✅ Les rapports d\'aujourd\'hui sont faits.</div>';
     h += '<button class="sec" style="width:100%;margin-top:10px" onclick="ecranManquants()">📅 Rapport manquant (jours passés)</button>';
-    h += '<button class="sec" style="width:100%;margin-top:10px" onclick="location.href=\'transfert.html\'">💸 Transferts (créer / payer)</button>';
     var recents = liste.slice().sort(function (a, b) { return a.cree_le < b.cree_le ? 1 : -1; }).slice(0, 10);
     if (recents.length) {
       h += '<h2>Derniers rapports de ce téléphone</h2>';
@@ -729,10 +733,9 @@ function exporterCsv() {
 
 function entete() {
   var tabs = [['rapports', 'Rapports'], ['analyse', '📊 Analyse'], ['resume', 'Résumé du jour'], ['prix', 'Prix']];
-  var transferts = '<button class="sec" onclick="location.href=\'transfert.html\'">💸 Transferts</button>';
   if (D.utilisateur.role === 'management') tabs.push(['appareils', 'Téléphones']);
   return '<h1>Tableau de bord</h1><div class="sub">' + esc(D.utilisateur.nom) + ' · ' + (D.utilisateur.role === 'management' ? 'Direction' : 'Comptabilité') + ' · montants en ' + DEV + ' · <a href="#" onclick="changerCode();return false">Changer de code</a></div>' +
-    '<div class="tabs">' + tabs.map(function (t) { return '<button class="' + (T.onglet === t[0] ? '' : 'sec') + '" onclick="tableau(\'' + t[0] + '\')">' + t[1] + '</button>'; }).join('') + transferts + '</div>';
+    '<div class="tabs">' + tabs.map(function (t) { return '<button class="' + (T.onglet === t[0] ? '' : 'sec') + '" onclick="tableau(\'' + t[0] + '\')">' + t[1] + '</button>'; }).join('') + '</div>';
 }
 function charge() { view(entete() + '<p class="mut center">Chargement…</p>'); }
 function errTab(e) { view(entete() + '<div class="err">' + esc(e.reseau ? 'Pas de connexion. Réessayez.' : e.erreur) + '</div>', '<button class="sec" onclick="tableau(T.onglet)">Réessayer</button>'); }
