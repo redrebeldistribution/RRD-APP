@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.6';
+var MOBILE_VERSION = 'm1.7';
 var ROLES_APPAREIL = { DIRECTION: 'management', COMPTA: 'accounting' };   // station = DIRECTION ou COMPTA → téléphone de la direction / comptabilité
 /* Contrôles avant d'accepter un rapport (chiffres « visiblement faux »). Réglables ici. */
 var CTRL = {
@@ -103,6 +103,7 @@ function enregistrerAppareil_(b) {
     var role = ROLES_APPAREIL[String(ligne.station).trim().toUpperCase()] || '';
     var st = role ? null : stations_().filter(function (s) { return String(s.code) === String(ligne.station).trim() && estVrai_(s.actif); })[0];
     if (!role && !st) throw new UserError('La station de ce code n\'existe pas ou est inactive.', 'CODE');
+    if (!role && b.web) throw new UserError('La version web est réservée à la direction et à la comptabilité. Pour une station, installez l\'application Android.', 'CODE');
     var jeton = jetonAleatoire_();
     majCellule_(APPAREILS, ligne._ligne, 'jeton', jeton);
     majCellule_(APPAREILS, ligne._ligne, 'appareil_id', String(b.appareil_id || '').slice(0, 160));

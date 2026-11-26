@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#b91c1c">
 <title>RRD Rapport</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="RRD">
 <style>
   :root { --bg:#ffffff; --txt:#1a1a1a; --mut:#6b7280; --acc:#b91c1c; --acc-txt:#fff; --sec:#f2f4f7; --ok:#15803d; --bad:#b91c1c; --warn:#b45309; --line:#e5e7eb; }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -117,6 +121,8 @@ var CFG = {
 };
 /* Copie de sécurité dans le stockage natif du téléphone : la mise à jour de l'APK peut vider le stockage web. */
 var NAT = (window.Capacitor && Capacitor.Plugins) || {};
+/* Version web (iPhone, ordinateur) : seulement pour la direction et la comptabilité, qui sont toujours en ligne. */
+var WEB = !(window.Capacitor && Capacitor.isNativePlatform && Capacitor.isNativePlatform());
 var CLES_SURES = ['jeton', 'role', 'nom', 'station', 'api', 'appareil', 'init', 'init_le', 'champs', 'noms'];
 function copieNative() {
   if (!NAT.Preferences) return;
@@ -202,7 +208,8 @@ function view(html, barHtml, ecran) {
 
 /* ======================= Enregistrement du téléphone ======================= */
 function ecranEnregistrer(msg) {
-  var h = '<h1>Enregistrer ce téléphone</h1><div class="sub">À faire une seule fois. La direction vous donne le code de la station.</div>' +
+  var h = (WEB ? '<h1>Tableau de bord RRD</h1><div class="sub">Version web, pour la direction et la comptabilité. Entrez votre code (DIR-… ou CPT-…). Les stations utilisent l\'application Android.</div>'
+    : '<h1>Enregistrer ce téléphone</h1><div class="sub">À faire une seule fois. La direction vous donne le code de la station.</div>') +
     (msg ? '<div class="err">' + esc(msg) + '</div>' : '') +
     '<label for="code">Code d\'activation</label><input id="code" autocapitalize="characters" autocomplete="off" placeholder="ex. ESA-4821">' +
     '<details style="margin-top:18px"><summary class="mut">Paramètres avancés</summary><label for="url">Adresse du serveur</label>' +
@@ -217,7 +224,7 @@ function enregistrer() {
   var b = $('bEnr'); b.disabled = true; b.textContent = 'Enregistrement…';
   var id = CFG.get('appareil', '') || ('A' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)); CFG.set('appareil', id);
   var ids = [id]; if (S.idFixe && S.idFixe !== id) ids.push(S.idFixe);
-  api('enregistrer', { code: code, appareil_id: ids.join('|'), modele: navigator.userAgent.slice(0, 80) }).then(function (d) {
+  api('enregistrer', { web: WEB, code: code, appareil_id: ids.join('|'), modele: navigator.userAgent.slice(0, 80) }).then(function (d) {
     CFG.set('jeton', d.jeton);
     if (d.role) { CFG.set('role', d.role); CFG.set('nom', d.nom); return demarrerDirection(); }
     CFG.set('role', ''); CFG.set('station', d.station);
