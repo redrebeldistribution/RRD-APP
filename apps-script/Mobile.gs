@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.30';
+var MOBILE_VERSION = 'm1.31';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var STATION_FORMATION = 'TST', MAX_APPAREILS_FORMATION = 50;   // les codes de la station de test servent à la formation : plusieurs téléphones avec le même code (propriétaire, 26/11/2026)
 var MAX_APPAREILS_ROLE = 5;   // un code DIR ou CPT peut servir sur 5 appareils en même temps (demande du propriétaire, 26/11/2026)
@@ -1796,17 +1796,18 @@ function trnLire_() {
       gallons: r[5] === '' || r[5] === null ? '' : Number(r[5]), note: String(r[6] || ''), origine: String(r[7] || ''), cree_par: String(r[8] || ''), cree_le: phTexte_(r[9]), annule: estVrai_(r[10]) };
   }).filter(function (t) { return t.id; });
 }
-/** Arrêts prévus à partir d'une date, avec « fait » quand une livraison a été reçue ce jour-là pour ce client (hors camion de test). */
-function trnVue_(du, ops, test) {
-  var fait = {};
-  ops.forEach(function (o) { if (!o.annule && o.genre === 'livraison' && o.client_id && (test ? o.camion === CAM_TEST : o.camion !== CAM_TEST)) fait[o.date + '|' + o.client_id] = 1; });
+/** Arrêts prévus à partir d'une date, avec « fait » quand une livraison a été reçue ce jour-là pour ce client.
+ *  Un arrêt du camion de test n'est fait que par une livraison du camion de test, et inversement. */
+function trnVue_(du, ops) {
+  var fait = {}, faitTest = {};
+  ops.forEach(function (o) { if (!o.annule && o.genre === 'livraison' && o.client_id) (o.camion === CAM_TEST ? faitTest : fait)[o.date + '|' + o.client_id] = 1; });
   return trnLire_().filter(function (t) { return !t.annule && t.date >= du; }).sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : a.ligne - b.ligne; })
-    .map(function (t) { return { id: t.id, date: t.date, camion: t.camion, client_id: t.client_id, client: t.client, gallons: t.gallons, note: t.note, origine: t.origine, cree_par: t.cree_par, fait: !!fait[t.date + '|' + t.client_id] }; });
+    .map(function (t) { return { id: t.id, date: t.date, camion: t.camion, client_id: t.client_id, client: t.client, gallons: t.gallons, note: t.note, origine: t.origine, cree_par: t.cree_par, fait: !!(t.camion === CAM_TEST ? faitTest : fait)[t.date + '|' + t.client_id] }; });
 }
 /** Ce que le téléphone d'un camion reçoit : les arrêts d'aujourd'hui pour lui (ou pour n'importe quel camion). */
 function trnPourCamion_(code, auj, ops) {
   var test = code === CAM_TEST;
-  return trnVue_(auj, ops, test).filter(function (t) { return t.date === auj && (test ? t.camion === CAM_TEST : (!t.camion || t.camion === code)); })
+  return trnVue_(auj, ops).filter(function (t) { return t.date === auj && (test ? t.camion === CAM_TEST : (!t.camion || t.camion === code)); })
     .map(function (t) { return { id: t.id, client_id: t.client_id, client: t.client, gallons: t.gallons, note: t.note, fait: t.fait }; });
 }
 /** Tableau de bord : clients à livrer maintenant ou bientôt, avec ce que le calcul a utilisé, et la tournée déjà choisie. */
@@ -1815,8 +1816,8 @@ function sugListe_(p) {
   var soldes = camSoldes_(clients, ops), stock = {}, noms = {};
   try { stockEstime_().stations.forEach(function (s) { stock[s.code] = s; }); } catch (e) { }
   camions_().forEach(function (c) { noms[c.code] = c.nom; });
-  var tournee = trnVue_(auj, ops, false).filter(function (t) { return t.camion !== CAM_TEST; }), prevus = {};
-  tournee.forEach(function (t) { t.camion_nom = t.camion ? (noms[t.camion] || t.camion) : ''; (prevus[t.client_id] = prevus[t.client_id] || []).push(t.date); });
+  var tournee = trnVue_(auj, ops), prevus = {};   // les arrêts du camion de test sont montrés (pour s'exercer) mais ne comptent pas comme « déjà prévu »
+  tournee.forEach(function (t) { t.camion_nom = t.camion ? (noms[t.camion] || t.camion) : ''; if (t.camion !== CAM_TEST) (prevus[t.client_id] = prevus[t.client_id] || []).push(t.date); });
   var liste = [], peu = [], arret = [], plusTard = 0, total = 0;
   clients.forEach(function (c) {
     if (c.id === CCL_DEFAUT || !c.actif) return;
@@ -1845,7 +1846,7 @@ function sugListe_(p) {
   liste.sort(function (a, b) { return rang(a) - rang(b) || (b.retard === undefined ? -999 : b.retard) - (a.retard === undefined ? -999 : a.retard) || (a.nom.toLowerCase() < b.nom.toLowerCase() ? -1 : 1); });
   return { aujourdhui: auj, calcule_le: maintenant_(), devise: CURRENCY, liste: liste, plus_tard: plusTard, peu: peu, arret: arret, a_relier: h.a_relier, source: h.source, livraisons: total,
     reglages: { min: SUG_MIN, avant: SUG_AVANT, stock_jours: SUG_STOCK, jours_max: TRN_JOURS },
-    camions: camions_().filter(function (c) { return c.actif && c.code !== CAM_TEST; }),
+    camions: camions_().filter(function (c) { return c.actif; }),
     clients: clients.filter(function (c) { return c.actif && c.id !== CCL_DEFAUT; }).map(function (c) { return { id: c.id, nom: c.nom }; }).sort(function (a, b) { return a.nom.toLowerCase() < b.nom.toLowerCase() ? -1 : 1; }),
     tournee: tournee };
 }
