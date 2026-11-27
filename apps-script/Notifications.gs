@@ -19,10 +19,14 @@ var PROJET = 'rrd-app-94e2c';
 var TZ = 'America/Port-au-Prince';
 var ONGLET_MSG = 'Messages (app)', ONGLET_APP = 'Appareils', CANAL = 'rrd-messages';
 
-function doPost() { return sortie_(traiter_()); }
+function doPost(e) {
+  var b = {}; try { b = JSON.parse((e && e.postData && e.postData.contents) || '{}') || {}; } catch (x) { }
+  if (b.action === 'chatMembres') return sortie_(chatMembres_());
+  return sortie_(traiter_());
+}
 function doGet() { return sortie_({ ok: true, service: 'RRD Notifications' }); }
 function sortie_(o) { return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
-function toutesLes5Minutes() { traiter_(); }
+function toutesLes5Minutes() { traiter_(); try { chatMembres_(); } catch (e) { console.error(e && e.stack || e); } }
 
 /** À lancer une fois : installe le passage toutes les 5 minutes. */
 function installer() {
@@ -143,3 +147,55 @@ function traiter_() {
     return { ok: false };
   } finally { lock.releaseLock(); }
 }
+
+/* ============================ Chat : liste des membres (27/11/2026) ============================
+ * Le serveur du rapport de fermeture note dans l'onglet « Chat (membres) » quel téléphone (identité Firebase anonyme « uid »)
+ * parle sous quel nom. Ce relais recopie cette liste dans la base Firebase (« membres/<uid> »), avec le compte Google du propriétaire
+ * (pas de clé secrète), et retire les téléphones désactivés ou libérés dans l'onglet « Appareils ». La base n'accepte que ses membres.
+ * Il n'écrit dans le classeur que les colonnes « base » et « base_le » de cet onglet. */
+var ONGLET_CHM = 'Chat (membres)', BASE_CHAT = 'https://' + PROJET + '-default-rtdb.firebaseio.com/';
+function chatMembres_() {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(8000)) return { ok: true, occupe: true };
+  try {
+    var ss = SpreadsheetApp.openById(SHEET_ID), sh = ss.getSheetByName(ONGLET_CHM);
+    if (!sh || sh.getLastRow() < 2) return { ok: true, membres: 0 };
+    var h = entetes_(sh, ['base', 'base_le']);
+    ['uid', 'code', 'nom', 'role', 'appareil', 'actif'].forEach(function (c) { if (h[c] === undefined) throw new Error('Colonne absente dans « ' + ONGLET_CHM + ' » : ' + c); });
+    var actifs = {}, shA = ss.getSheetByName(ONGLET_APP);
+    if (shA && shA.getLastRow() >= 2) {
+      var hA = entetes_(shA, []);
+      shA.getRange(2, 1, shA.getLastRow() - 1, shA.getLastColumn()).getValues().forEach(function (r) {
+        var c = String(r[hA.code_activation]).trim(); if (!c) return;
+        actifs[c] = (hA.actif === undefined || /^(oui|true|yes|1)$/i.test(String(r[hA.actif]).trim())) && (hA.jeton === undefined || String(r[hA.jeton] || '').trim() !== '');
+      });
+    }
+    var lignes = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues(), faits = 0, stop = '';
+    var entetesHttp = { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() };
+    for (var i = 0; i < lignes.length && !stop; i++) {
+      var r = lignes[i], uid = String(r[h.uid]).trim(), code = String(r[h.code]).trim();
+      if (!/^[A-Za-z0-9]{20,40}$/.test(uid) || !/^[A-Z0-9-]{2,30}$/.test(code)) continue;
+      var voulu = /^(oui|true)$/i.test(String(r[h.actif]).trim()) && actifs[String(r[h.appareil]).trim()] === true, etat = String(r[h.base]).trim();
+      if (voulu === (etat === 'present')) continue;
+      var rep = UrlFetchApp.fetch(BASE_CHAT + 'membres/' + uid + '.json', voulu
+        ? { method: 'put', contentType: 'application/json', headers: entetesHttp, muteHttpExceptions: true, payload: JSON.stringify({ code: code, nom: String(r[h.nom]).slice(0, 60), role: String(r[h.role]) }) }
+        : { method: 'delete', headers: entetesHttp, muteHttpExceptions: true });
+      if (rep.getResponseCode() === 200) {
+        sh.getRange(i + 2, h.base + 1).setValue(voulu ? 'present' : 'retire');
+        sh.getRange(i + 2, h.base_le + 1).setValue(Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd HH:mm:ss'));
+        faits++;
+      } else stop = 'Base du chat : réponse ' + rep.getResponseCode() + ' ' + String(rep.getContentText() || '').slice(0, 200);
+    }
+    if (stop) console.error(stop);
+    return { ok: !stop, changes: faits, erreur: stop };
+  } finally { lock.releaseLock(); }
+}
+
+/** À lancer une fois depuis l'éditeur après l'ajout du chat : Google demande l'autorisation d'écrire dans la base, puis on vérifie l'accès. */
+function verifierChat() {
+  var r = UrlFetchApp.fetch(BASE_CHAT + 'membres.json?shallow=true', { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, muteHttpExceptions: true });
+  var t = 'Accès à la base du chat : ' + (r.getResponseCode() === 200 ? 'OK' : 'REFUSÉ') + ' (réponse ' + r.getResponseCode() + ')';
+  Logger.log(t + ' — ' + JSON.stringify(chatMembres_()));
+  return t;
+}
+

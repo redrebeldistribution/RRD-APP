@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.32';
+var MOBILE_VERSION = 'm1.33';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var STATION_FORMATION = 'TST', MAX_APPAREILS_FORMATION = 50;   // les codes de la station de test servent à la formation : plusieurs téléphones avec le même code (propriétaire, 26/11/2026)
 var MAX_APPAREILS_ROLE = 5;   // un code DIR ou CPT peut servir sur 5 appareils en même temps (demande du propriétaire, 26/11/2026)
@@ -81,6 +81,7 @@ function apiMobile_(action, b) {
       case 'reponse': return ok_(reponseStation_(app, payload));
       case 'camion': return ok_(String(payload.genre) === 'rapport' ? camRapport_(app, payload) : camEnvoyer_(app, payload));
       case 'camSuggestions': return ok_(sugPourCamion_(app));
+      case 'chatEntrer': return ok_(chatEntrer_(app, payload));
       case 'dir': return ok_(direction_(app, String(b.sous_action || ''), payload));
       default: throw new UserError('Action inconnue.');
     }
@@ -1867,4 +1868,51 @@ function vracRelier_(ctx, p) {
     journal_(ctx, 'vrac-nom-relie', vr.noms[k].ecrit + ' → ' + c.id + ' ' + c.nom);
   } finally { lock.releaseLock(); }
   return sugListe_({});
+}
+
+/* ============================ Chat en direct (m1.33, 27/11/2026) ============================
+ * Demande du propriétaire (27/11/2026) : un chat en direct dans l'application entre stations, camions, direction et comptabilité.
+ * Les messages passent par la base Firebase du projet (« Realtime Database »), pas par ce serveur. Chaque téléphone a une identité
+ * anonyme Firebase ; la base n'accepte que les identités inscrites dans sa liste « membres », et cette liste n'est écrite que par le
+ * relais « RRD Notifications » (avec le compte Google du propriétaire, sans clé secrète). Ici, le serveur vérifie le code du téléphone
+ * et note qui est qui dans l'onglet « Chat (membres) » ; le relais recopie cet onglet dans la base et retire les téléphones désactivés.
+ * Qui parle sous quel nom : une station = la station ; un camion = le camion ; direction et comptabilité = la personne du code. */
+var CHM_ONGLET = 'Chat (membres)';
+var CHM_ENTETES = ['uid', 'code', 'nom', 'role', 'appareil', 'demande_le', 'actif', 'base', 'base_le'];
+function chatMoi_(app) {
+  if (app.role === 'transferts') throw new UserError('Le chat n\'est pas encore ouvert aux agents de transfert.', 'FORBIDDEN');
+  if (app.role === 'camion') return { code: 'CAM-' + app.camion.code, nom: app.camion.nom, role: 'camion' };
+  var act = String(app.ligne.code_activation || '').toUpperCase().replace(/[^A-Z0-9-]/g, '');
+  if (app.role === 'management') return { code: act, nom: String(app.ligne.nom || '').trim() || 'Direction', role: 'direction' };
+  if (app.role === 'accounting') return { code: act, nom: String(app.ligne.nom || '').trim() || 'Comptabilité', role: 'compta' };
+  return { code: String(app.station.code).toUpperCase().replace(/[^A-Z0-9-]/g, ''), nom: String(app.station.nom), role: 'station' };
+}
+/** Le téléphone donne son identité Firebase ; on l'inscrit (ou on la garde) et on réveille le relais. */
+function chatEntrer_(app, p) {
+  var uid = String(p.uid || '').trim(), moi = chatMoi_(app), act = String(app.ligne.code_activation || '');
+  if (!/^[A-Za-z0-9]{20,40}$/.test(uid)) throw new UserError('Identité du chat invalide.');
+  if (!moi.code) throw new UserError('Code du téléphone illisible.');
+  var lock = LockService.getScriptLock(), change = false; lock.waitLock(20000);
+  try {
+    var sh = camFeuille_(CHM_ONGLET, CHM_ENTETES), l = camLignes_(sh, CHM_ENTETES.length), deja = 0;
+    l.forEach(function (r, i) {
+      var u = String(r[0]), memeTel = String(r[4]) === act, actif = estVrai_(r[6]);
+      if (u === uid) {
+        deja = i + 2;
+        if (!actif || String(r[1]) !== moi.code || String(r[2]) !== moi.nom || String(r[3]) !== moi.role || !memeTel) {
+          sh.getRange(i + 2, 2, 1, 6).setValues([[moi.code, moi.nom, moi.role, act, maintenant_(), 'oui']]); change = true;
+        }
+      } else if (memeTel && actif) { sh.getRange(i + 2, 7).setValue('non'); change = true; }   // ancienne identité du même téléphone (application réinstallée)
+    });
+    if (!deja) { sh.appendRow([uid, moi.code, moi.nom, moi.role, act, maintenant_(), 'oui', '', '']); change = true; }
+  } finally { lock.releaseLock(); }
+  if (change) chatReveiller_();
+  var r = camLignes_(camFeuille_(CHM_ONGLET, CHM_ENTETES), CHM_ENTETES.length).filter(function (x) { return String(x[0]) === uid; })[0];
+  return { code: moi.code, nom: moi.nom, role: moi.role, inscrit: !!r && String(r[7]) === 'present' };
+}
+function chatReveiller_() {
+  try {
+    var url = prop_('PUSH_RELAIS_URL');
+    if (url) UrlFetchApp.fetch(url, { method: 'post', payload: JSON.stringify({ action: 'chatMembres' }), contentType: 'text/plain', muteHttpExceptions: true });
+  } catch (e) { }
 }

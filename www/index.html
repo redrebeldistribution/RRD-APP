@@ -73,7 +73,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.29.1';
+var VERSION_APP = '1.30.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -380,7 +380,9 @@ function infosDuJour(liste, date) {
   else periodes = ['', 'AM'];
   return { date: date, envoyes: envoyes, periodes: periodes, connu: !!cache, prerempli: cache ? cache.prerempli : null };
 }
+function accueilChat() { if (!CFG.get('role', '') && CFG.get('jeton', '')) chDemarrer(); }
 function accueil() {
+  accueilChat();
   tous().then(function (liste) {
     var st = CFG.get('station', {}), j = infosDuJour(liste);
     var attente = liste.filter(function (r) { return r.statut === 'attente'; });
@@ -402,6 +404,7 @@ function accueil() {
       if (j.envoyes.length) h += '<p class="mut center">Le rapport de l\'équipe du matin est déjà fait. Ce rapport sera celui de l\'équipe du soir.</p>';
     } else h += '<div class="okb">✅ Les rapports d\'aujourd\'hui sont faits.</div>';
     h += '<button class="sec" style="width:100%;margin-top:10px" onclick="ecranPhotos();phActualiser()">📷 Photos de l\'heure</button>';
+    if (chPossible()) h += '<button class="sec" style="width:100%;margin-top:10px" onclick="ecranChat()">💬 Chat<span class="chBadge">' + chBadgeTxt() + '</span></button>';
     h += '<button class="sec" style="width:100%;margin-top:10px" onclick="ecranManquants()">📅 Rapport manquant (jours passés)</button>';
     var recents = liste.slice().sort(function (a, b) { return a.cree_le < b.cree_le ? 1 : -1; }).slice(0, 10);
     if (recents.length) {
@@ -978,7 +981,7 @@ var CM_NOMS = { livraison: '🚚 Livraison', paiement: '💵 Paiement reçu', ch
 function cmCode() { return 'CAM:' + ((CFG.get('camion', {}) || {}).code || ''); }
 function cmDev() { return (CM.d && CM.d.devise) || DEV; }
 function cmMiens() { var c = cmCode(); return phTous().then(function (l) { return l.filter(function (r) { return r.genre === 'cam' && r.station === c; }); }); }
-function demarrerCamion() { CM.d = CFG.get('camInit', null); CM.sug = CFG.get('camSug', null); camAccueil(); cmActualiser(); }
+function demarrerCamion() { CM.d = CFG.get('camInit', null); CM.sug = CFG.get('camSug', null); camAccueil(); cmActualiser(); chDemarrer(); }
 function cmActualiser(manuel) {
   if (CFG.get('role', '') !== 'camion' || !CFG.get('jeton', '')) return;
   majNet('envoi…');
@@ -1026,7 +1029,8 @@ function camAccueil(msg, err) {
       h += '<div class="err">❌ ' + esc(CM_NOMS[r.op] || r.op) + ' refusé(e) par le bureau :\n' + esc(r.erreur || '') + '\n<button class="sec" style="margin-top:8px" onclick="cmVu(\'' + esc(r.cid) + '\')">J\'ai compris</button></div>';
     });
     if (!d.clients) h += '<div class="note">Liste des clients pas encore reçue. Il faut internet une première fois.</div>';
-    h += '<button class="bigbtn" onclick="cmForm(\'livraison\')">🚚 Nouvelle livraison</button><button class="bigbtn sec" onclick="cmForm(\'paiement\')">💵 Paiement reçu d\'un client</button><button class="bigbtn sec" onclick="cmForm(\'achat\')">⛽ Chargement ou achat</button><button class="bigbtn sec" onclick="cmForm(\'photo\')">📷 Photo (compteur du client, station, autre)</button>';
+    h += '<button class="bigbtn" onclick="cmForm(\'livraison\')">🚚 Nouvelle livraison</button><button class="bigbtn sec" onclick="cmForm(\'paiement\')">💵 Paiement reçu d\'un client</button><button class="bigbtn sec" onclick="cmForm(\'achat\')">⛽ Chargement ou achat</button><button class="bigbtn sec" onclick="cmForm(\'photo\')">📷 Photo (compteur du client, station, autre)</button>' +
+      (chPossible() ? '<button class="bigbtn sec" onclick="ecranChat()">💬 Chat<span class="chBadge">' + chBadgeTxt() + '</span></button>' : '');
     var rap = function (date) {   // '' = pas fait, sinon 'att' ou 'ok'
       var loc = l.filter(function (r) { return r.op === 'rapport' && r.date_rapport === date && r.statut !== 'rejete'; })[0];
       if (loc) return loc.statut === 'envoye' ? 'ok' : 'att';
@@ -1566,7 +1570,7 @@ function demarrerDirection(msg) {
   api('init').then(function (d) {
     majNet('● en ligne');
     if (!d.utilisateur) { CFG.set('role', ''); return accueil(); }
-    D = d; tableau(T.onglet || 'rapports');
+    D = d; tableau(T.onglet || 'rapports'); chDemarrer();
   }).catch(function (e) {
     majNet('○ hors ligne');
     if (e.code === 'NON_ENREGISTRE' || e.code === 'DESACTIVE') { CFG.set('jeton', ''); CFG.set('role', ''); return ecranEnregistrer(e.erreur); }
@@ -1734,15 +1738,15 @@ function exporterCsv() {
 }
 
 function entete() {
-  var tabs = [['rapports', 'Rapports'], ['analyse', '📊 Analyse'], ['resume', 'Résumé du jour'], ['photos', '📷 Photos'], ['bordereaux', '🧾 Bordereaux'], ['stock', IC_CITERNE + ' Stock'], ['camion', '🚚 Camion'], ['livrer', '🧭 À livrer'], ['argent', '💵 Argent'], ['messages', '✉️ Messages'], ['prix', 'Prix']];
+  var tabs = [['rapports', 'Rapports'], ['analyse', '📊 Analyse'], ['resume', 'Résumé du jour'], ['photos', '📷 Photos'], ['bordereaux', '🧾 Bordereaux'], ['stock', IC_CITERNE + ' Stock'], ['camion', '🚚 Camion'], ['livrer', '🧭 À livrer'], ['argent', '💵 Argent'], ['messages', '✉️ Messages'], ['chat', '💬 Chat'], ['prix', 'Prix']];
   if (D.utilisateur.role === 'management') tabs.push(['appareils', 'Téléphones']);
   return '<h1>Tableau de bord</h1><div class="sub">' + esc(D.utilisateur.nom) + ' · ' + (D.utilisateur.role === 'management' ? 'Direction' : 'Comptabilité') + ' · montants en ' + DEV + ' · <a href="#" onclick="changerCode();return false">Changer de code</a></div>' +
     '<div class="mut">Version ' + VERSION_APP + ' (build ' + (window.RRD_BUILD || 0) + ')' + (S.majPrete ? ' — <b>mise à jour ' + esc(S.majPrete) + ' prête : fermez l\'application puis rouvrez-la</b>' : S.majErreur ? ' — mise à jour impossible : ' + esc(S.majErreur) : '') + '</div>' +
-    '<div class="tabs">' + tabs.map(function (t) { return '<button class="' + (T.onglet === t[0] ? '' : 'sec') + '" onclick="tableau(\'' + t[0] + '\')">' + t[1] + '</button>'; }).join('') + '</div>';
+    '<div class="tabs">' + tabs.map(function (t) { return '<button class="' + (T.onglet === t[0] ? '' : 'sec') + '" onclick="tableau(\'' + t[0] + '\')">' + t[1] + (t[0] === 'chat' ? '<span class="chBadge">' + chBadgeTxt() + '</span>' : '') + '</button>'; }).join('') + '</div>';
 }
 function charge() { view(entete() + '<p class="mut center">Chargement…</p>'); }
 function errTab(e) { view(entete() + '<div class="err">' + esc(e.reseau ? 'Pas de connexion. Réessayez.' : e.erreur) + '</div>', '<button class="sec" onclick="tableau(T.onglet)">Réessayer</button>'); }
-function tableau(o) { T.retour = ''; T.onglet = o; charge(); ({ rapports: ongletRapports, analyse: function () { ongletAnalyse(); }, resume: ongletResume, photos: ongletPhotos, bordereaux: ongletBordereaux, stock: function () { ongletStock(); }, camion: function () { ongletCamion(); }, livrer: function () { ongletLivrer(); }, argent: function () { ongletArgent(); }, messages: function () { ongletMessages(); }, prix: ongletPrix, appareils: ongletAppareils })[o](); }
+function tableau(o) { T.retour = ''; T.onglet = o; charge(); ({ rapports: ongletRapports, analyse: function () { ongletAnalyse(); }, resume: ongletResume, photos: ongletPhotos, bordereaux: ongletBordereaux, stock: function () { ongletStock(); }, camion: function () { ongletCamion(); }, livrer: function () { ongletLivrer(); }, chat: function () { ecranChat(); }, argent: function () { ongletArgent(); }, messages: function () { ongletMessages(); }, prix: ongletPrix, appareils: ongletAppareils })[o](); }
 function badgeEcart(e) {
   if (e === null || e === undefined) return '<span class="badge b-warn">prix manquant</span>';
   if (Math.abs(e) < 1) return '<span class="badge b-ok">écart 0</span>';
@@ -2370,6 +2374,196 @@ setInterval(function () { synchroniser(); }, 2 * 60 * 1000);
 S.init = CFG.get('init', null);
 majNet('○ hors ligne');
 /* ======================= Mises à jour automatiques ======================= */
+/* ======================= Chat en direct (m1.33, demande du propriétaire du 27/11/2026) =======================
+ * Stations, camions, direction et comptabilité. Les messages passent par la base Firebase du projet, en direct (flux « EventSource »).
+ * Chaque téléphone a une identité anonyme Firebase ; le bureau l'inscrit dans la liste des membres (voir chatEntrer_ côté serveur).
+ * Salon « Général » pour tout le monde, et conversations à deux. La direction peut lire toutes les conversations.
+ * Sans signal, rien ne part : le texte reste dans la case et un message le dit. */
+var CH = { etat: 'arret', moi: null, auth: null, es: {}, general: {}, fils: {}, prive: {}, membres: {}, ouvert: '', err: '', att: 0, minuterie: null };
+var FB_URL = 'https://rrd-app-94e2c-default-rtdb.firebaseio.com/';
+function chCle() { return (window.RRD_CONFIG && RRD_CONFIG.FIREBASE_KEY) || ''; }
+function chPossible() { var r = CFG.get('role', ''); return !!CFG.get('jeton', '') && r !== 'transferts' && !!chCle() && typeof EventSource !== 'undefined'; }
+function chPost(url, corps, type) { return fetch(url, { method: 'POST', headers: { 'Content-Type': type || 'application/json' }, body: corps }).then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); }); }
+function chNouveau() {
+  return chPost('https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=' + chCle(), JSON.stringify({ returnSecureToken: true })).then(function (x) {
+    if (!x.d.idToken) throw { erreur: 'Inscription au chat refusée.' };
+    return { uid: x.d.localId, idToken: x.d.idToken, refresh: x.d.refreshToken, exp: Date.now() + Number(x.d.expiresIn || 3600) * 1000 };
+  });
+}
+function chJeton(forcer) {   // promesse d'un jeton Firebase valide (renouvelé une fois par heure)
+  var a = CH.auth || CFG.get('chatAuth', null);
+  if (a && a.idToken && !forcer && a.exp > Date.now() + 120000) { CH.auth = a; return Promise.resolve(a.idToken); }
+  var p = a && a.refresh ? chPost('https://securetoken.googleapis.com/v1/token?key=' + chCle(), 'grant_type=refresh_token&refresh_token=' + encodeURIComponent(a.refresh), 'application/x-www-form-urlencoded').then(function (x) {
+    if (x.d.id_token) return { uid: x.d.user_id, idToken: x.d.id_token, refresh: x.d.refresh_token, exp: Date.now() + Number(x.d.expires_in || 3600) * 1000 };
+    return chNouveau();   // identité supprimée ou invalide : on en prend une nouvelle, le bureau l'inscrira
+  }) : chNouveau();
+  return p.then(function (n) { CH.auth = n; CFG.set('chatAuth', n); return n.idToken; });
+}
+function chGet(chemin) { return chJeton().then(function (t) { return fetch(FB_URL + chemin + '.json?auth=' + encodeURIComponent(t)).then(function (r) { return r.ok ? r.json() : Promise.reject({ statut: r.status }); }); }); }
+function chDemarrer() {
+  if (!chPossible() || CH.etat === 'marche' || CH.etat === 'depart') return;
+  CH.etat = 'depart'; CH.err = ''; chMaj();
+  chJeton().then(function () { return api('chatEntrer', { payload: { uid: CH.auth.uid } }); }).then(function (m) {
+    CH.moi = m; CFG.set('chatMoi', m); return chAttendre(0);
+  }).then(function () { CH.etat = 'marche'; CH.att = 0; chEcouter(); chMaj(); }).catch(function (e) {
+    CH.etat = 'arret';
+    CH.err = e && e.attente ? 'Le chat n\'est pas encore ouvert pour ce téléphone. Il le sera dès que le bureau aura fini de le préparer.' : (e && e.erreur) || 'Pas de connexion au chat.';
+    chMaj(); clearTimeout(CH.minuterie); CH.minuterie = setTimeout(chDemarrer, e && e.attente ? 300000 : 60000);
+  });
+}
+function chAttendre(n) {   // la liste des membres est écrite par le bureau quelques secondes après l'inscription
+  return chGet('membres/' + CH.auth.uid).then(function (d) { if (!d) throw { statut: 401 }; }).catch(function (e) {
+    if (e && e.statut === 401 && n < 12) { CH.att = n + 1; chMaj(); return new Promise(function (ok) { setTimeout(ok, 5000); }).then(function () { return chAttendre(n + 1); }); }
+    if (e && e.statut === 401) throw { attente: true };
+    throw e;
+  });
+}
+function chAppliquer(boite, type, chemin, data) {   // applique un évènement « put » ou « patch » du flux à une copie locale
+  var parts = String(chemin || '/').split('/').filter(Boolean), o;
+  if (!parts.length) { if (type === 'put') boite.v = data || {}; else { boite.v = boite.v || {}; Object.keys(data || {}).forEach(function (k) { if (data[k] === null) delete boite.v[k]; else boite.v[k] = data[k]; }); } return; }
+  o = boite.v = boite.v || {};
+  for (var i = 0; i < parts.length - 1; i++) o = o[parts[i]] = o[parts[i]] || {};
+  var k = parts[parts.length - 1];
+  if (type === 'put') { if (data === null) delete o[k]; else o[k] = data; }
+  else { o[k] = o[k] || {}; Object.keys(data || {}).forEach(function (c) { if (data[c] === null) delete o[k][c]; else o[k][c] = data[c]; }); }
+}
+function chFermer(nom) { if (CH.es[nom]) { try { CH.es[nom].close(); } catch (e) { } delete CH.es[nom]; } }
+function chFlux(nom, chemin, requete, boite) {
+  chFermer(nom);
+  return chJeton().then(function (t) {
+    var es = new EventSource(FB_URL + chemin + '.json?auth=' + encodeURIComponent(t) + (requete || ''));
+    CH.es[nom] = es;
+    var f = function (ev) { var d; try { d = JSON.parse(ev.data); } catch (e) { return; } if (!d) return; chAppliquer(boite, ev.type, d.path, d.data); chMaj(); };
+    es.addEventListener('put', f); es.addEventListener('patch', f);
+    es.addEventListener('auth_revoked', function () { chJeton(true).then(function () { chFlux(nom, chemin, requete, boite); }); });
+    es.addEventListener('cancel', function () { chFermer(nom); CH.etat = 'arret'; CH.err = 'Le chat a refusé l\'accès à ce téléphone.'; chMaj(); });
+    es.onerror = function () { if (CH.auth && CH.auth.exp < Date.now() + 60000) chJeton(true).then(function () { chFlux(nom, chemin, requete, boite); }); };
+  });
+}
+function chDirection() { return CH.moi && CH.moi.role === 'direction'; }
+function chEcouter() {
+  chFlux('general', 'general', '&orderBy=%22$key%22&limitToLast=100', CH.general);
+  chFlux('fils', chDirection() ? 'fils' : 'fils/' + CH.moi.code, '', CH.fils);
+  chGet('membres').then(function (m) { CH.membres = m || {}; chMaj(); }).catch(function () { });
+  if (CH.ouvert && CH.ouvert !== 'general') chOuvrirFlux(CH.ouvert);
+}
+function chReprise() { if (!chPossible()) return; if (CH.etat === 'marche') chEcouter(); else chDemarrer(); }
+function chNom(code) {
+  if (CH.moi && code === CH.moi.code) return 'Moi';
+  var m = CH.membres || {}, k = Object.keys(m).filter(function (u) { return m[u] && m[u].code === code; })[0];
+  return k ? m[k].nom : code;
+}
+function chAutre(conv) { var p = conv.split('__'); return p[0] === CH.moi.code ? p[1] : p[0]; }
+function chConv(a, b) { return [a, b].sort().join('__'); }
+function chLu() { return CFG.get('chatLu', {}) || {}; }
+function chMarquerLu(conv) { var l = chLu(); l[conv] = Date.now(); CFG.set('chatLu', l); }
+function chMesConvs() {   // { conv: dernière activité connue } pour les conversations de ce téléphone
+  var o = {}, f = CH.fils.v || {}, moi = CH.moi.code, loc = CFG.get('chatConvs', {}) || {};
+  Object.keys(loc).forEach(function (c) { o[c] = loc[c]; });
+  var mien = chDirection() ? (f[moi] || {}) : f;
+  Object.keys(mien).forEach(function (exp) { var c = chConv(moi, exp); o[c] = Math.max(o[c] || 0, Number(mien[exp] && mien[exp].le) || 0); });
+  return o;
+}
+function chNonLus() {
+  if (CH.etat !== 'marche' || !CH.moi) return 0;
+  var l = chLu(), n = 0, g = CH.general.v || {}, moi = CH.moi.code;
+  Object.keys(g).forEach(function (k) { var m = g[k]; if (m && m.de !== moi && Number(m.le) > (l.general || 0)) n++; });
+  var f = chDirection() ? ((CH.fils.v || {})[moi] || {}) : (CH.fils.v || {});
+  Object.keys(f).forEach(function (exp) { if (Number(f[exp] && f[exp].le) > (l[chConv(moi, exp)] || 0)) n++; });
+  return n;
+}
+function chBadgeTxt() { var n = chNonLus(); return n ? ' <b style="background:var(--bad);color:#fff;border-radius:10px;padding:1px 7px;font-size:13px">' + n + '</b>' : ''; }
+function chMaj() {
+  Array.prototype.forEach.call(document.querySelectorAll('.chBadge'), function (e) { e.innerHTML = chBadgeTxt(); });
+  if (S.ecran === 'chat') ecranChat(); else if (S.ecran === 'chatConv' && CH.ouvert) chAfficherConv(CH.ouvert, true);
+}
+function chHeure(ms) { if (!ms) return ''; var p = partiesHaiti(new Date(Number(ms))), auj = phJourHeure(Date.now()).date; return (p.year + '-' + p.month + '-' + p.day === auj ? '' : p.day + '/' + p.month + ' ') + p.hour + ':' + p.minute; }
+function chRetour() {
+  CH.ouvert = ''; chFermer('conv');
+  var r = CFG.get('role', '');
+  if (r === 'camion') camAccueil(); else if (r) tableau('chat'); else accueil();
+}
+function ecranChat() {
+  var r = CFG.get('role', ''), dir = !!r && r !== 'camion', h = dir ? entete() : '<h1>💬 Chat</h1>';
+  if (dir) { T.onglet = 'chat'; }
+  if (CH.etat !== 'marche') {
+    h += CH.etat === 'depart' ? '<p class="mut">Connexion au chat…' + (CH.att ? ' (préparation par le bureau, ' + CH.att * 5 + ' s)' : '') + '</p>' : '<div class="wait">' + esc(CH.err || 'Chat pas encore connecté.') + '</div><button onclick="CH.etat=\'arret\';chDemarrer()">Réessayer</button>';
+    return view(h, dir ? '' : '<button class="sec" onclick="chRetour()">Retour</button>', 'chat');
+  }
+  var l = chLu(), g = CH.general.v || {}, cles = Object.keys(g).sort(), der = cles.length ? g[cles[cles.length - 1]] : null, moi = CH.moi.code;
+  var ng = cles.filter(function (k) { return g[k] && g[k].de !== moi && Number(g[k].le) > (l.general || 0); }).length;
+  h += '<div class="mut">Vous écrivez comme : <b>' + esc(CH.moi.nom) + '</b></div>';
+  h += '<div class="card" onclick="chAfficherConv(\'general\')" style="cursor:pointer"><div class="row"><div><b>📢 Général</b> <span class="mut">(tout le monde)</span>' + (der ? '<div class="mut">' + esc(chNom(der.de)) + ' : ' + esc(String(der.texte).slice(0, 60)) + '</div>' : '<div class="mut">Aucun message.</div>') + '</div>' +
+    '<div style="text-align:right">' + (ng ? '<b style="background:var(--bad);color:#fff;border-radius:10px;padding:1px 7px">' + ng + '</b>' : '') + '<div class="mut">' + (der ? chHeure(der.le) : '') + '</div></div></div></div>';
+  var convs = chMesConvs(), fm = chDirection() ? ((CH.fils.v || {})[moi] || {}) : (CH.fils.v || {});
+  var liste = Object.keys(convs).sort(function (a, b) { return convs[b] - convs[a]; });
+  h += '<h2>Conversations à deux</h2>';
+  if (!liste.length) h += '<p class="mut">Aucune pour l\'instant.</p>';
+  liste.forEach(function (c) {
+    var autre = chAutre(c), nouveau = Number(fm[autre] && fm[autre].le) > (l[c] || 0);
+    h += '<div class="card" onclick="chAfficherConv(\'' + esc(c) + '\')" style="cursor:pointer"><div class="row"><div><b>' + esc(chNom(autre)) + '</b></div><div style="text-align:right">' + (nouveau ? '<b style="background:var(--bad);color:#fff;border-radius:10px;padding:1px 7px">nouveau</b>' : '') + '<div class="mut">' + chHeure(convs[c]) + '</div></div></div></div>';
+  });
+  var codes = {}, m = CH.membres || {};
+  Object.keys(m).forEach(function (u) { if (m[u] && m[u].code && m[u].code !== moi) codes[m[u].code] = m[u].nom; });
+  var opts = Object.keys(codes).sort(function (a, b) { return codes[a].toLowerCase() < codes[b].toLowerCase() ? -1 : 1; });
+  h += '<label for="chQui">Écrire à</label><select id="chQui"><option value="">— choisir —</option>' + opts.map(function (c) { return '<option value="' + esc(c) + '">' + esc(codes[c]) + '</option>'; }).join('') + '</select>' +
+    '<div style="margin-top:8px"><button class="sec" onclick="var v=$(\'chQui\').value; if(v) chAfficherConv(chConv(CH.moi.code, v)); else alerte(\'Choisissez la personne.\')">Ouvrir la conversation</button></div>';
+  if (!opts.length) h += '<p class="mut">Les autres téléphones apparaissent ici dès qu\'ils ont ouvert l\'application avec le chat.</p>';
+  if (chDirection()) {
+    var f = CH.fils.v || {}, autres = {};
+    Object.keys(f).forEach(function (dest) { Object.keys(f[dest] || {}).forEach(function (exp) { if (dest !== moi && exp !== moi) { var c = chConv(dest, exp); autres[c] = Math.max(autres[c] || 0, Number(f[dest][exp].le) || 0); } }); });
+    var la = Object.keys(autres).sort(function (a, b) { return autres[b] - autres[a]; });
+    if (la.length) h += '<h2>Toutes les conversations (direction, lecture)</h2>' + la.map(function (c) {
+      var p = c.split('__'); return '<div class="card" onclick="chAfficherConv(\'' + esc(c) + '\')" style="cursor:pointer"><div class="row"><div>' + esc(chNom(p[0])) + ' ↔ ' + esc(chNom(p[1])) + '</div><div class="mut">' + chHeure(autres[c]) + '</div></div></div>';
+    }).join('');
+  }
+  view(h, dir ? '' : '<button class="sec" onclick="chRetour()">Retour</button>', 'chat');
+}
+function chOuvrirFlux(conv) { CH.prive = {}; if (conv !== 'general') chFlux('conv', 'prives/' + conv, '&orderBy=%22$key%22&limitToLast=100', CH.prive); }
+function chMsgsHtml(conv) {
+  var moi = CH.moi.code, msgs = conv === 'general' ? (CH.general.v || {}) : (CH.prive.v || {}), cles = Object.keys(msgs).sort(), h = '';
+  if (!cles.length) h += '<p class="mut">' + (conv !== 'general' && !CH.prive.v ? 'Chargement…' : 'Aucun message. Écrivez le premier.') + '</p>';
+  cles.forEach(function (k) {
+    var m = msgs[k]; if (!m) return; var mien = m.de === moi;
+    h += '<div style="display:flex;justify-content:' + (mien ? 'flex-end' : 'flex-start') + ';margin:6px 0"><div style="max-width:82%;padding:8px 11px;border-radius:14px;background:' + (mien ? '#fde2e2' : '#f2f3f5') + '">' +
+      (mien ? '' : '<div style="font-size:12px;font-weight:600">' + esc(chNom(m.de)) + '</div>') + '<div style="white-space:pre-wrap;word-wrap:break-word">' + esc(m.texte) + '</div><div class="mut" style="font-size:11px;text-align:right">' + chHeure(m.le) + '</div></div></div>';
+  });
+  return { html: h, n: cles.length };
+}
+function chAfficherConv(conv, maj) {
+  var moi = CH.moi.code, lecture = conv !== 'general' && conv.split('__').indexOf(moi) < 0, x;
+  if (maj && $('chMsgs')) { x = chMsgsHtml(conv); $('chMsgs').innerHTML = x.html; }   // nouveau message : seulement la liste, la case de texte ne bouge pas
+  else {
+    if (!maj) { CH.ouvert = conv; chOuvrirFlux(conv); }
+    var titre = conv === 'general' ? '📢 Général' : lecture ? conv.split('__').map(chNom).join(' ↔ ') : '💬 ' + chNom(chAutre(conv));
+    x = chMsgsHtml(conv);
+    var bar = lecture ? '<button class="sec" onclick="chRetourListe()">Retour</button>'
+      : '<div style="display:flex;gap:8px;width:100%"><button class="sec" style="flex:0 0 auto" onclick="chRetourListe()">◀</button><textarea id="chTxt" rows="1" maxlength="2000" style="flex:1;min-height:44px" placeholder="Votre message"></textarea><button id="chBtn" style="flex:0 0 auto" onclick="chEnvoyer(\'' + esc(conv) + '\')">Envoyer</button></div>';
+    view('<h1 style="font-size:22px">' + esc(titre) + '</h1><div id="chMsgs">' + x.html + '</div><div id="chFin"></div>', bar, 'chatConv');
+  }
+  var fin = $('chFin'); if (fin && fin.scrollIntoView) fin.scrollIntoView();
+  if (x.n || conv === 'general') chMarquerLu(conv);
+  Array.prototype.forEach.call(document.querySelectorAll('.chBadge'), function (e) { e.innerHTML = chBadgeTxt(); });
+}
+function chRetourListe() { CH.ouvert = ''; chFermer('conv'); ecranChat(); }
+function chEnvoyer(conv) {
+  var t = ($('chTxt').value || '').trim();
+  if (!t) return;
+  if (t.length > 2000) return alerte('Message trop long (2 000 caractères au plus).');
+  $('chBtn').disabled = true;
+  var moi = CH.moi.code, ts = { '.sv': 'timestamp' };
+  chJeton().then(function (tok) {
+    var q = '.json?auth=' + encodeURIComponent(tok);
+    return fetch(FB_URL + (conv === 'general' ? 'general' : 'prives/' + conv) + q, { method: 'POST', body: JSON.stringify({ de: moi, texte: t, le: ts }) }).then(function (r) {
+      if (!r.ok) throw { statut: r.status };
+      if (conv === 'general') return;
+      var c = CFG.get('chatConvs', {}) || {}; c[conv] = Date.now(); CFG.set('chatConvs', c);
+      return fetch(FB_URL + 'fils/' + chAutre(conv) + '/' + moi + q, { method: 'PUT', body: JSON.stringify({ le: ts }) });
+    });
+  }).then(function () { $('chTxt').value = ''; chMarquerLu(conv); }).catch(function (e) {
+    alerte(e && e.statut ? 'Message refusé par le chat (' + e.statut + '). Votre texte est gardé.' : 'Pas envoyé : pas de connexion. Votre texte est gardé ; réessayez quand il y a du signal.');
+  }).then(function () { if ($('chBtn')) $('chBtn').disabled = false; });
+}
 var MAJ_URL = 'https://github.com/redrebeldistribution/RRD-APP/releases/latest/download/web.json';
 function bandeauMaj() {
   if (!S.majApk || !$('app') || $('majApk')) return;
@@ -2396,7 +2590,7 @@ function verifierMaj() {
     }).then(function (b) { return CU.next({ id: b.id }); }).then(function () { S.majPrete = ver; S.majErreur = ''; fond('accueil', accueil); });
   }).catch(function (e) { S.majErreur = String((e && (e.message || e.errorMessage)) || e || '').slice(0, 90); }).then(function () { S.majEnCours = false; });
 }
-document.addEventListener('resume', function () { verifierMaj(); bandeauMaj(); phEnvoyer(); msgCharger(); ntBientot(); repEnvoyer(); pushRepli(); cmReprise(); });
+document.addEventListener('resume', function () { verifierMaj(); bandeauMaj(); phEnvoyer(); msgCharger(); ntBientot(); repEnvoyer(); pushRepli(); cmReprise(); chReprise(); });
 setInterval(function () { phEnvoyer(); fond('photos', ecranPhotos); msgCharger(); repEnvoyer(); cmEnvoyer(); }, 60000);   // file des photos + heure en cours à jour
 setTimeout(verifierMaj, 4000); setInterval(verifierMaj, 3 * 3600 * 1000);
 
