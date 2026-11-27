@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.27';
+var MOBILE_VERSION = 'm1.28';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var STATION_FORMATION = 'TST', MAX_APPAREILS_FORMATION = 50;   // les codes de la station de test servent à la formation : plusieurs téléphones avec le même code (propriétaire, 26/11/2026)
 var MAX_APPAREILS_ROLE = 5;   // un code DIR ou CPT peut servir sur 5 appareils en même temps (demande du propriétaire, 26/11/2026)
@@ -235,7 +235,7 @@ function initMobile_(app) {
   };
   var jour = duJour(date);
   var base = {
-    version: MOBILE_VERSION, devise: CURRENCY, station: { code: st.code, nom: st.nom }, date: date, jours_max: JOURS_DIFFERE_MAX,
+    version: MOBILE_VERSION, devise: CURRENCY, station: { code: st.code, nom: st.nom }, date: date, jours_max: JOURS_DIFFERE_MAX, argent: ARG_STATIONS ? 1 : 0,
     champs: FIELDS, envoyes: jour.map(recuEmploye_), periodes: periodesPossibles(jour), noms_connus: nomsConnus_(st.code)
   };
   base.prerempli = prerempliPour(date, jour, base.periodes[0]);
@@ -272,6 +272,11 @@ function envoyerMobile_(app, p) {
   var st = app.station;
   var dv = dateValideMobile_(p.date);
   var date = dv.date;
+  var arg = argStation_(p);
+  if (arg && arg.bureau > 0) {   // l'argent remis au bureau sort de la caisse : il est compté avec les prélèvements dans le rapport et les anciennes feuilles
+    var prel = String(p.withdrawals === undefined || p.withdrawals === null ? '' : p.withdrawals).trim(), pn = prel === '' ? '0' : phNombre_(prel);
+    if (pn !== '') { p = Object.assign({}, p); p.withdrawals = String(Number(pn) + arg.bureau); }
+  }
   var val = validerRapport(p);
   if (val.erreurs.length) throw new UserError(val.erreurs.join('\n'), 'INVALIDE');
   var noms = decouperNoms(p.employes_service);
@@ -297,6 +302,15 @@ function envoyerMobile_(app, p) {
     }
     var v = val.valeurs;
     var notes = v.notes;
+    if (arg) {
+      if (v.bank_deposit > 0 && !arg.depot_par) throw new UserError('Dépôt en banque : écrivez le nom de la personne qui a fait le dépôt.', 'INVALIDE');
+      if (v.counted_cash > 0 && !arg.caisse_par) throw new UserError('Caisse comptée : écrivez le nom de la personne qui garde la caisse.', 'INVALIDE');
+      var ou = [];
+      if (arg.bureau > 0) ou.push('remis au bureau ' + arg.bureau + ', reçu par ' + arg.bureau_qui + ' (compté dans les prélèvements)');
+      if (v.bank_deposit > 0) ou.push('dépôt fait par ' + arg.depot_par);
+      if (v.counted_cash > 0) ou.push('caisse gardée par ' + arg.caisse_par);
+      if (ou.length) notes = (notes ? notes + ' ' : '') + '[Argent : ' + ou.join(' ; ') + ']';
+    }
     // Chiffres visiblement faux : refusés tant que l'employé n'a pas revérifié et expliqué.
     var ctrls = controles_(st, date, attendue, v);
     var confirmes = [].concat(p.confirme_codes || []).map(String), expl = String(p.explication_controle || '').trim().slice(0, 400);
@@ -321,6 +335,9 @@ function envoyerMobile_(app, p) {
       chat_instance: 'app:' + String(app.ligne.code_activation), gas_received: v.gas_received, periode: attendue, employes_service: noms.join(', ')
     });
     journal_(app, 'rapport-app', ref + ' ' + (attendue || 'journée') + (dv.differe ? ' (différé)' : '') + ' (ligne ' + ligne + ')');
+    if (arg) try {
+      argEntrees_(st.code, st.nom, date, ref, [{ lieu: 'depot', montant: v.bank_deposit, tenu_par: arg.depot_par }, { lieu: 'bureau', montant: arg.bureau, tenu_par: arg.bureau_qui }, { lieu: 'caisse', montant: v.counted_cash, tenu_par: arg.caisse_par }], app.id, '');
+    } catch (e) { console.error(e && e.stack || e); }   // le rapport est déjà enregistré : le registre d'argent ne doit pas le faire échouer
     var r = rapportsEffectifs_().filter(function (x) { return String(x.ref) === ref; })[0];
     var reste = periodesPossibles(rapportsDuJour_(st.code, date));
     return { recu: recuEmploye_(r), reste: reste.length ? reste[0] : null };
@@ -394,6 +411,129 @@ function controles_(st, date, periode, v) {
   return out;
 }
 
+/* ============================ Argent : qui le tient, jusqu'à la preuve (m1.28, 27/11/2026) ============================
+ * Demande du propriétaire (27/11/2026) : pour les camions et les stations, l'argent de chaque rapport va à l'un de trois endroits —
+ * déposé à la banque, remis au bureau, gardé en main — chaque fois avec le nom de la personne qui l'a, et la trace doit être fermée.
+ * Onglet « Argent (app) », où rien n'est jamais effacé :
+ *   genre « entree »  : une ligne par endroit et par rapport (lieu = depot, bureau, main, ou caisse pour la caisse comptée d'une station) ;
+ *   genre « cloture » : quelqu'un du bureau confirme, avec une pièce justificative (photo), que l'argent est bien arrivé
+ *                       (mode = recu_bureau ou depot_verifie). Une confirmation peut être partielle : le reste demeure ouvert.
+ * Une entrée ne compte que si son rapport existe toujours et n'est pas annulé. La caisse d'une station n'est pas une somme à fermer :
+ * elle passe au rapport suivant (solde initial) ; on montre seulement qui la garde d'après le dernier rapport.
+ */
+var ARG_ONGLET = 'Argent (app)';
+var ARG_ENTETES = ['id', 'genre', 'origine', 'origine_nom', 'date', 'rapport', 'lieu', 'montant', 'devise', 'tenu_par', 'pour', 'fichier_id', 'parent', 'mode', 'par', 'le', 'note', 'cid', 'annule'];
+var ARG_STATIONS = false;   // les stations : seulement après l'accord du propriétaire sur les écrans (27/11/2026)
+var ARG_MODES = { depot: ['depot_verifie'], bureau: ['recu_bureau'], main: ['recu_bureau', 'depot_verifie'] };
+function argFeuille_() { var sh = camFeuille_(ARG_ONGLET, ARG_ENTETES); camEntetes_(sh, ARG_ENTETES); return sh; }
+function argLire_(max) {
+  var sh = argFeuille_(), n = sh.getLastRow();
+  if (n < 2) return [];
+  var from = Math.max(2, n - (max || 10000) + 1);
+  return sh.getRange(from, 1, n - from + 1, ARG_ENTETES.length).getValues().map(function (r, i) {
+    return { ligne: from + i, id: String(r[0]), genre: String(r[1]), origine: String(r[2]), origine_nom: String(r[3]), date: phJour_(r[4]), rapport: String(r[5]), lieu: String(r[6]), montant: Number(r[7]) || 0, devise: String(r[8]),
+      tenu_par: String(r[9] || ''), pour: String(r[10] || ''), fichier_id: String(r[11] || ''), parent: String(r[12] || ''), mode: String(r[13] || ''), par: String(r[14] || ''), le: phTexte_(r[15]), note: String(r[16] || ''), cid: String(r[17] || ''), annule: estVrai_(r[18]) };
+  });
+}
+/** Écrit les entrées d'un rapport (à appeler sous le verrou du script). parts : [{ lieu, montant, tenu_par, pour }] ; les montants nuls sont laissés de côté. */
+function argEntrees_(origine, nom, date, rapport, parts, appId, fid) {
+  var sh = argFeuille_(), deja = {}, le = maintenant_();
+  argLire_(10000).forEach(function (x) { if (x.genre === 'entree') deja[x.cid] = 1; });
+  parts.forEach(function (x) {
+    var m = Number(x.montant) || 0, cid = rapport + ':' + x.lieu;
+    if (!(m > 0) || deja[cid]) return;
+    sh.appendRow(['A' + date.replace(/-/g, '').slice(2) + '-' + sh.getLastRow(), 'entree', origine, nom, date, rapport, x.lieu, m, CURRENCY, String(x.tenu_par || '').slice(0, 60), String(x.pour || ''), x.lieu === 'depot' ? (fid || '') : '', '', '', appId, le, '', cid, '']);
+  });
+}
+/** Les entrées valables avec ce qui reste ouvert. */
+function argEtat_() {
+  var l = argLire_(10000), auj = msgJour_(0), okCam = {}, okSt = {}, ordre = {};
+  camRapports_(3000).forEach(function (r) { if (!r.annule) okCam[r.id] = 1; });
+  rapportsEffectifs_().forEach(function (r) { if (!estAnnule(r)) { okSt[String(r.ref)] = 1; ordre[String(r.ref)] = iso(r.date_rapport) + '|' + (ORDRE_PERIODE[String(r.periode || '')] || 0) + '|' + String(r.soumis_le || ''); } });
+  var regle = {}, clot = {};
+  l.forEach(function (x) { if (x.genre === 'cloture' && !x.annule) { regle[x.parent] = Math.round(((regle[x.parent] || 0) + x.montant) * 100) / 100; (clot[x.parent] = clot[x.parent] || []).push(x); } });
+  var entrees = l.filter(function (x) { return x.genre === 'entree' && !x.annule && (x.origine.indexOf('CAM:') === 0 ? okCam[x.rapport] : okSt[x.rapport]) && x.origine !== 'CAM:' + CAM_TEST; });
+  var derniere = {};   // caisse des stations : seule celle du dernier rapport de chaque station compte
+  entrees.forEach(function (x) { if (x.lieu === 'caisse' && (!derniere[x.origine] || (ordre[x.rapport] || '') > (ordre[derniere[x.origine].rapport] || ''))) derniere[x.origine] = x; });
+  var jours = function (d) { return Math.max(0, Math.round((new Date(auj + 'T12:00:00Z') - new Date(d + 'T12:00:00Z')) / 864e5)); };
+  return { toutes: l, clot: clot,
+    caisses: Object.keys(derniere).map(function (k) { var x = derniere[k]; return { origine: x.origine, nom: x.origine_nom, date: x.date, montant: x.montant, tenu_par: x.tenu_par, rapport: x.rapport }; }),
+    lignes: entrees.filter(function (x) { return x.lieu !== 'caisse'; }).map(function (x) {
+      return { id: x.id, origine: x.origine, nom: x.origine_nom, date: x.date, rapport: x.rapport, lieu: x.lieu, montant: x.montant, devise: x.devise, tenu_par: x.tenu_par, pour: x.pour, fichier: x.fichier_id,
+        regle: regle[x.id] || 0, ouvert: Math.round((x.montant - (regle[x.id] || 0)) * 100) / 100, jours: jours(x.date) };
+    }) };
+}
+/** Direction / comptabilité : ce qui est ouvert (par personne), la caisse des stations, et les confirmations des 30 derniers jours. */
+function argListe_() {
+  var e = argEtat_(), ouverts = e.lignes.filter(function (x) { return x.ouvert > 0; }).sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : (a.id < b.id ? -1 : 1); });
+  var tot = { depot: 0, bureau: 0, main: 0 }, pers = {};
+  ouverts.forEach(function (x) {
+    tot[x.lieu] = Math.round(((tot[x.lieu] || 0) + x.ouvert) * 100) / 100;
+    var k = x.tenu_par.toLowerCase(), p = pers[k] = pers[k] || { nom: x.tenu_par, total: 0, lignes: [] };
+    p.total = Math.round((p.total + x.ouvert) * 100) / 100; p.lignes.push(x);
+  });
+  var parId = {}; e.lignes.forEach(function (x) { parId[x.id] = x; });
+  var lim = msgJour_(-30), faites = e.toutes.filter(function (x) { return x.genre === 'cloture' && phJour_(x.le) >= lim; }).sort(function (a, b) { return a.le < b.le ? 1 : -1; }).slice(0, 200).map(function (c) {
+    var x = parId[c.parent] || {};
+    return { id: c.id, parent: c.parent, le: c.le, par: c.par, mode: c.mode, montant: c.montant, note: c.note, fichier: c.fichier_id, annule: c.annule, nom: x.nom || c.origine_nom, date: x.date || c.date, lieu: x.lieu || c.lieu, tenu_par: x.tenu_par || c.tenu_par };
+  });
+  return { devise: CURRENCY, aujourdhui: msgJour_(0), stations_actives: ARG_STATIONS, totaux: tot, ouverts: ouverts,
+    personnes: Object.keys(pers).map(function (k) { return pers[k]; }).sort(function (a, b) { return b.total - a.total; }),
+    caisses: e.caisses.sort(function (a, b) { return a.nom < b.nom ? -1 : 1; }), faites: faites };
+}
+/** Fermer la trace : quelqu'un du bureau confirme, pièce à l'appui, que l'argent est arrivé (au bureau ou à la banque). Toujours avec une pièce. */
+function argConfirmer_(ctx, p) {
+  var montant = Number(phNombre_(String(p.montant === undefined || p.montant === null ? '' : p.montant).trim()));
+  if (!(montant > 0)) throw new UserError('Montant illisible. Écrivez seulement les chiffres.');
+  var note = String(p.note || '').trim().slice(0, 200), doc = String(p.doc || ''), m = doc.match(/^data:image\/(jpeg|png);base64,(.+)$/), octets = null;
+  if (doc && !m) throw new UserError('Pièce invalide : il faut une photo (image).');
+  if (m) { octets = Utilities.base64Decode(m[2]); if (octets.length > 3000000) throw new UserError('Photo de la pièce trop lourde.'); }
+  var lock = LockService.getScriptLock(); lock.waitLock(25000);
+  try {
+    var x = argEtat_().lignes.filter(function (y) { return y.id === String(p.id || ''); })[0];
+    if (!x) throw new UserError('Ligne introuvable (rapport annulé ?). Actualisez la page.');
+    var mode = String(p.mode || '');
+    if ((ARG_MODES[x.lieu] || []).indexOf(mode) < 0) throw new UserError('Choisissez où l\'argent est arrivé.');
+    if (montant > x.ouvert) throw new UserError('Il ne reste que ' + x.ouvert + ' ' + x.devise + ' à confirmer sur cette ligne.');
+    var memePiece = !octets && estVrai_(p.piece_du_rapport) && x.fichier;
+    if (!octets && !memePiece) throw new UserError('Ajoutez la pièce justificative : une photo du reçu signé, du bordereau ou du relevé.');
+    var fid = memePiece ? x.fichier : '', le = maintenant_(), auj = msgJour_(0);
+    if (octets) {
+      var f = phDossier_({ code: 'ARGENT', nom: 'Pièces justificatives' }, auj, 'ARG', 'RRD – Argent, pièces justificatives (app, privé)').createFile(Utilities.newBlob(octets, 'image/' + m[1], 'ARGENT_' + x.id + '_' + le.replace(/[^0-9]/g, '') + '.' + (m[1] === 'png' ? 'png' : 'jpg')));
+      f.setDescription('Pièce justificative (application RRD) — ' + x.nom + ' — ' + x.date + ' — ' + montant + ' ' + x.devise + ' — confirmé par ' + ctx.nom); fid = f.getId();
+    }
+    var sh = argFeuille_(), id = 'F' + auj.replace(/-/g, '').slice(2) + '-' + sh.getLastRow();
+    sh.appendRow([id, 'cloture', x.origine, x.nom, auj, x.rapport, x.lieu, montant, x.devise, x.tenu_par, x.pour, fid, x.id, mode, ctx.nom + ' (' + (ctx.role === 'accounting' ? 'comptabilité' : 'direction') + ')', le, note, id, '']);
+    journal_(ctx, 'argent-confirme', x.id + ' ' + x.nom + ' ' + x.date + ' ' + x.lieu + ' ' + montant + ' → ' + mode + (note ? ' : ' + note : ''));
+  } finally { lock.releaseLock(); }
+  return argListe_();
+}
+/** La direction annule une confirmation faite par erreur : la ligne reste, marquée, et l'argent redevient ouvert. */
+function argAnnuler_(ctx, p) {
+  var motif = String(p.motif || '').trim().slice(0, 150);
+  if (!motif) throw new UserError('Écrivez la raison.');
+  var lock = LockService.getScriptLock(); lock.waitLock(25000);
+  try {
+    var c = argLire_(10000).filter(function (x) { return x.genre === 'cloture' && x.id === String(p.id || ''); })[0];
+    if (!c) throw new UserError('Confirmation introuvable.');
+    if (c.annule) throw new UserError('Déjà annulée.');
+    var sh = argFeuille_();
+    sh.getRange(c.ligne, ARG_ENTETES.indexOf('annule') + 1).setValue('oui');
+    sh.getRange(c.ligne, ARG_ENTETES.indexOf('note') + 1).setValue((c.note ? c.note + ' ; ' : '') + 'Annulée le ' + maintenant_() + ' par ' + ctx.nom + ' : ' + motif);
+    journal_(ctx, 'argent-annule', c.id + ' (' + c.parent + ') : ' + motif);
+  } finally { lock.releaseLock(); }
+  return argListe_();
+}
+/** Station (quand ARG_STATIONS est activé) : lit et vérifie les cases « où est l'argent » d'un rapport de fermeture. null = ancien téléphone, rien à tracer. */
+function argStation_(p) {
+  if (!ARG_STATIONS || !estVrai_(p.argent_v)) return null;
+  var mt = function (v, quoi) { var t = String(v === undefined || v === null ? '' : v).trim(); if (t === '' || t === '0') return 0; var x = phNombre_(t); if (x === '') throw new UserError(quoi + ' : montant illisible. Écrivez seulement les chiffres.', 'INVALIDE'); return Number(x); };
+  var nom = function (k) { return String(p[k] || '').trim().replace(/\s+/g, ' ').slice(0, 60); };
+  var a = { bureau: mt(p.remis_bureau, 'Remis au bureau'), bureau_qui: nom('remis_bureau_a'), depot_par: nom('depot_par'), caisse_par: nom('caisse_par') };
+  if (a.bureau > 0 && !a.bureau_qui) throw new UserError('Remis au bureau : écrivez le nom de la personne du bureau qui a reçu l\'argent.', 'INVALIDE');
+  return a;
+}
+
 /* ============================ Direction / comptabilité ============================ */
 
 function initDirection_(app) {
@@ -436,6 +576,9 @@ function direction_(app, sous, p) {
     case 'camion': exiger_(ctx, ['management', 'accounting']); return camListe_(p);
     case 'camClient': exiger_(ctx, ['management', 'accounting']); return camClient_(ctx, p);
     case 'camReleve': exiger_(ctx, ['management', 'accounting']); return camReleve_(p);
+    case 'argent': exiger_(ctx, ['management', 'accounting']); return argListe_();
+    case 'argentConfirmer': exiger_(ctx, ['management', 'accounting']); return argConfirmer_(ctx, p);
+    case 'argentAnnuler': exiger_(ctx, ['management']); return argAnnuler_(ctx, p);
     case 'camAnnuler': exiger_(ctx, ['management']); return camAnnuler_(ctx, p);
     case 'camRapportAnnuler': exiger_(ctx, ['management']); return camRapportAnnuler_(ctx, p);
     default: throw new UserError('Action inconnue.');
@@ -684,7 +827,7 @@ function photosListe_(p) {
 /** Renvoie une photo (seulement un fichier listé dans l'onglet « Photos horaires »). */
 function photoVoir_(p) {
   var id = String(p.id || '');
-  if (!id || !(phLire_(15000).some(function (r) { return r.fichier_id === id; }) || bdLire_(5000).some(function (r) { return r.fichier_id === id; }) || camOps_(8000).some(function (r) { return r.fichier_id === id; }) || camRapports_(3000).some(function (r) { return r.fichier_id === id; }))) throw new UserError('Photo introuvable.');
+  if (!id || !(phLire_(15000).some(function (r) { return r.fichier_id === id; }) || bdLire_(5000).some(function (r) { return r.fichier_id === id; }) || camOps_(8000).some(function (r) { return r.fichier_id === id; }) || argLire_(10000).some(function (r) { return r.fichier_id === id; }) || camRapports_(3000).some(function (r) { return r.fichier_id === id; }))) throw new UserError('Photo introuvable.');
   var f = DriveApp.getFileById(id), b = f.getBlob();
   return { nom: f.getName(), photo: 'data:image/jpeg;base64,' + Utilities.base64Encode(b.getBytes()) };
 }
@@ -1486,6 +1629,9 @@ function camRapport_(app, p) {
     sh.appendRow([id, date, cam.code, employes, t.charge, t.livre, t.nb, t.montant, t.recu, t.credit, t.paiements, t.achats, Object.keys(t.autres).map(function (k) { return k + ' : ' + t.autres[k]; }).join(' ; '),
       t.attendu, remis, Math.round((t.attendu - remis) * 100) / 100, t.sans_prix, String(p.note || '').slice(0, 300), Utilities.formatDate(fait, TZ, 'yyyy-MM-dd HH:mm:ss'), Utilities.formatDate(recu, TZ, 'yyyy-MM-dd HH:mm:ss'), fid, app.id, cid, '',
       ou.depose, ou.depose_pour, ou.depose_par, ou.bureau, ou.bureau_qui, ou.main, ou.main_qui]);
+    if (detail) try {
+      argEntrees_('CAM:' + cam.code, cam.nom, date, id, [{ lieu: 'depot', montant: ou.depose, tenu_par: ou.depose_par, pour: ou.depose_pour }, { lieu: 'bureau', montant: ou.bureau, tenu_par: ou.bureau_qui }, { lieu: 'main', montant: ou.main, tenu_par: ou.main_qui }], app.id, fid);
+    } catch (e) { console.error(e && e.stack || e); }   // le rapport est déjà enregistré : le registre d'argent ne doit pas le faire échouer
     return { recu: true, cid: cid, id: id };
   } finally { lock.releaseLock(); }
 }

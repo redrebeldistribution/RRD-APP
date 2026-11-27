@@ -73,7 +73,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.26.0';
+var VERSION_APP = '1.27.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -498,6 +498,11 @@ function nouveau(date) {
     ecranFormulaire();
   });
 }
+/* Où est l'argent (m1.28) : le bureau active ces cases pour les stations ; tant que ce n'est pas fait, le rapport reste comme avant. */
+function argentOn() { return !!((S.init && S.init.argent) || (CFG.get('init', null) || {}).argent); }
+function argNomHtml(k, label, aide) {
+  return '<label for="f_' + k + '">' + label + '</label><input id="f_' + k + '" autocomplete="off" maxlength="60" list="nomsConnus" value="' + esc(V[k] || '') + '"' + (aide ? ' placeholder="' + aide + '"' : '') + '>';
+}
 function champHtml(f) {
   var val = V[f.k] !== undefined ? V[f.k] : '';
   return '<label for="f_' + f.k + '">' + esc(f.label) + (f.req ? ' *' : '') + (f.money ? ' <span class="unit">(' + DEV + ')</span>' : '') + '</label>' +
@@ -521,6 +526,12 @@ function ecranFormulaire(msgErr) {
     '<div class="mut">Toutes les personnes qui ont travaillé, séparées par une virgule. La première personne est celle qui envoie le rapport.</div>';
   champs().forEach(function (f) {
     h += champHtml(f);
+    if (argentOn()) {
+      if (f.k === 'counted_cash') h += argNomHtml('caisse_par', 'Caisse gardée par (nom) *', 'la personne qui garde l\'argent de la caisse');
+      if (f.k === 'bank_deposit') h += argNomHtml('depot_par', 'Dépôt fait par (nom) — s\'il y a un dépôt', '');
+      if (f.k === 'withdrawals') h += '<label for="f_remis_bureau">Remis au bureau <span class="unit">(' + DEV + ')</span></label><input id="f_remis_bureau" inputmode="decimal" autocomplete="off" value="' + esc(V.remis_bureau || '') + '">' +
+        argNomHtml('remis_bureau_a', 'Reçu par (nom de la personne du bureau) — s\'il y a de l\'argent remis', '');
+    }
     if (f.k === 'closing_meter') h += '<div class="note">Gallons vendus : <b id="gal">—</b></div>';
     if (f.k === 'other_expenses') h += '<label for="f_other_expenses_detail">Détail des autres dépenses</label><input id="f_other_expenses_detail" value="' + esc(V.other_expenses_detail || '') + '">';
   });
@@ -537,6 +548,7 @@ function lireChamps() {
   V.other_expenses_detail = (($('f_other_expenses_detail') || {}).value || '').trim();
   V.notes = (($('f_notes') || {}).value || '').trim();
   V.employes_service = (($('f_employes_service') || {}).value || '').trim();
+  if (argentOn()) { ['caisse_par', 'depot_par', 'remis_bureau', 'remis_bureau_a'].forEach(function (k) { V[k] = (($('f_' + k) || {}).value || '').trim().replace(/\s+/g, ' '); }); V.argent_v = 1; }
   if (J.retard) V.raison_retard = (($('f_raison') || {}).value || '').trim();
   var r = document.querySelector('input[name="per"]:checked'); if (r) V.periode = r.value;
 }
@@ -569,6 +581,12 @@ function verifier() {
   if (!err.length && nb(V.closing_meter) < nb(V.opening_meter)) err.push('Le compteur de fermeture doit être plus grand ou égal au compteur d\'ouverture.');
   if (!err.length && nb(V.closing_meter) - nb(V.opening_meter) > 5000) err.push('Plus de 5 000 gallons vendus : vérifiez les compteurs.');
   if (!err.length && nb(V.other_expenses) > 0 && !V.other_expenses_detail) err.push('Autres dépenses : écrivez le détail.');
+  if (argentOn()) {
+    if (V.remis_bureau !== '' && (nb(V.remis_bureau) === null || nb(V.remis_bureau) < 0)) err.push('Remis au bureau : « ' + V.remis_bureau + ' » n\'est pas un nombre valide.');
+    else if (nb(V.remis_bureau) > 0 && !V.remis_bureau_a) err.push('Remis au bureau : écrivez le nom de la personne du bureau qui a reçu l\'argent.');
+    if (nb(V.bank_deposit) > 0 && !V.depot_par) err.push('Dépôt en banque : écrivez le nom de la personne qui a fait le dépôt.');
+    if (nb(V.counted_cash) > 0 && !V.caisse_par) err.push('Caisse comptée : écrivez le nom de la personne qui garde la caisse.');
+  }
   if (!V.employes_service) err.unshift('Employé(s) de service : obligatoire.');
   if (J.retard && !V.raison_retard) err.unshift('Raison du retard : obligatoire.');
   if (err.length) return ecranFormulaire(err.join('\n'));
@@ -624,6 +642,11 @@ function resume() {
     if (f.k === 'closing_meter') h += '<tr><td>Gallons vendus</td><td class="n"><b>' + fmt(nb(V.closing_meter) - nb(V.opening_meter)) + '</b></td></tr>';
   });
   if (V.other_expenses_detail) h += '<tr><td>Détail dépenses</td><td class="n">' + esc(V.other_expenses_detail) + '</td></tr>';
+  if (argentOn()) {
+    if (nb(V.remis_bureau) > 0) h += '<tr><td>Remis au bureau</td><td class="n"><b>' + fmt(nb(V.remis_bureau)) + '</b> <span class="unit">$ HT</span><br>reçu par ' + esc(V.remis_bureau_a) + '</td></tr>';
+    if (nb(V.bank_deposit) > 0) h += '<tr><td>Dépôt fait par</td><td class="n">' + esc(V.depot_par) + '</td></tr>';
+    if (nb(V.counted_cash) > 0) h += '<tr><td>Caisse gardée par</td><td class="n">' + esc(V.caisse_par) + '</td></tr>';
+  }
   if (V.notes) h += '<tr><td>Notes</td><td class="n">' + esc(V.notes) + '</td></tr>';
   if (V.explication_controle && (V.confirme_codes || []).length) h += '<tr><td>⚠️ Explication</td><td class="n">' + esc(V.explication_controle) + '</td></tr>';
   h += '<tr><td>Photo</td><td class="n">' + (PHOTO ? 'oui' : 'non') + '</td></tr></table></div>' +
@@ -638,6 +661,7 @@ function enregistrerRapport() {
   var r = { ref: J.ref || refAleatoire(st.code, J.date), station: st.code, date: J.date, periode: V.periode || '', cree_le: J.cree_le || maintenant(), statut: 'attente', photo: PHOTO };
   Object.keys(V).forEach(function (k) { if (k !== 'periode') r[k] = V[k]; });
   champs().forEach(function (f) { if (r[f.k] !== '' && r[f.k] !== undefined) r[f.k] = String(nb(r[f.k])); });
+  if (r.argent_v) r.remis_bureau = r.remis_bureau === '' || r.remis_bureau === undefined ? '' : String(nb(r.remis_bureau));
   if (J.retard) r.en_retard = true; else delete r.raison_retard;
   sauver(r).then(function () { ecranRecu(r, true); synchroniser(); });
 }
@@ -653,6 +677,8 @@ function ecranRecu(r, nouveau) {
     '<tr><td>Employé(s) de service</td><td class="n">' + esc(r.employes_service) + '</td></tr>' +
     '<tr><td>Gallons vendus</td><td class="n"><b>' + fmt(nb(r.closing_meter) - nb(r.opening_meter)) + '</b></td></tr>';
   champs().forEach(function (f) { if (r[f.k] !== '' && r[f.k] !== undefined) h += '<tr><td>' + esc(f.label) + '</td><td class="n">' + fmt(nb(r[f.k])) + (f.money ? ' <span class="unit">$ HT</span>' : '') + '</td></tr>'; });
+  if (r.argent_v) h += (nb(r.remis_bureau) > 0 ? '<tr><td>Remis au bureau</td><td class="n">' + fmt(nb(r.remis_bureau)) + ' <span class="unit">$ HT</span><br>reçu par ' + esc(r.remis_bureau_a || '') + '</td></tr>' : '') +
+    (r.depot_par ? '<tr><td>Dépôt fait par</td><td class="n">' + esc(r.depot_par) + '</td></tr>' : '') + (r.caisse_par ? '<tr><td>Caisse gardée par</td><td class="n">' + esc(r.caisse_par) + '</td></tr>' : '');
   h += '</table></div><p class="mut">Une erreur ? Prévenez le bureau : il peut annuler le rapport pour que vous puissiez le refaire.</p>';
   view(h, '<button onclick="accueil()">Retour</button>');
 }
@@ -1670,14 +1696,14 @@ function exporterCsv() {
 }
 
 function entete() {
-  var tabs = [['rapports', 'Rapports'], ['analyse', '📊 Analyse'], ['resume', 'Résumé du jour'], ['photos', '📷 Photos'], ['bordereaux', '🧾 Bordereaux'], ['stock', IC_CITERNE + ' Stock'], ['camion', '🚚 Camion'], ['messages', '✉️ Messages'], ['prix', 'Prix']];
+  var tabs = [['rapports', 'Rapports'], ['analyse', '📊 Analyse'], ['resume', 'Résumé du jour'], ['photos', '📷 Photos'], ['bordereaux', '🧾 Bordereaux'], ['stock', IC_CITERNE + ' Stock'], ['camion', '🚚 Camion'], ['argent', '💵 Argent'], ['messages', '✉️ Messages'], ['prix', 'Prix']];
   if (D.utilisateur.role === 'management') tabs.push(['appareils', 'Téléphones']);
   return '<h1>Tableau de bord</h1><div class="sub">' + esc(D.utilisateur.nom) + ' · ' + (D.utilisateur.role === 'management' ? 'Direction' : 'Comptabilité') + ' · montants en ' + DEV + ' · <a href="#" onclick="changerCode();return false">Changer de code</a></div>' +
     '<div class="tabs">' + tabs.map(function (t) { return '<button class="' + (T.onglet === t[0] ? '' : 'sec') + '" onclick="tableau(\'' + t[0] + '\')">' + t[1] + '</button>'; }).join('') + '</div>';
 }
 function charge() { view(entete() + '<p class="mut center">Chargement…</p>'); }
 function errTab(e) { view(entete() + '<div class="err">' + esc(e.reseau ? 'Pas de connexion. Réessayez.' : e.erreur) + '</div>', '<button class="sec" onclick="tableau(T.onglet)">Réessayer</button>'); }
-function tableau(o) { T.retour = ''; T.onglet = o; charge(); ({ rapports: ongletRapports, analyse: function () { ongletAnalyse(); }, resume: ongletResume, photos: ongletPhotos, bordereaux: ongletBordereaux, stock: function () { ongletStock(); }, camion: function () { ongletCamion(); }, messages: function () { ongletMessages(); }, prix: ongletPrix, appareils: ongletAppareils })[o](); }
+function tableau(o) { T.retour = ''; T.onglet = o; charge(); ({ rapports: ongletRapports, analyse: function () { ongletAnalyse(); }, resume: ongletResume, photos: ongletPhotos, bordereaux: ongletBordereaux, stock: function () { ongletStock(); }, camion: function () { ongletCamion(); }, argent: function () { ongletArgent(); }, messages: function () { ongletMessages(); }, prix: ongletPrix, appareils: ongletAppareils })[o](); }
 function badgeEcart(e) {
   if (e === null || e === undefined) return '<span class="badge b-warn">prix manquant</span>';
   if (Math.abs(e) < 1) return '<span class="badge b-ok">écart 0</span>';
@@ -1999,6 +2025,81 @@ function phVoir(id, i) {
   call('photoVoir', { id: id }).then(function (d) { c.innerHTML = '<img class="photo" src="' + d.photo + '" alt="">'; }, function (e) { c.innerHTML = '<div class="err">' + esc(e.reseau ? 'Pas de connexion.' : e.erreur) + '</div>'; });
 }
 
+
+/* ----- Direction / comptabilité : l'argent des rapports, qui le tient, et la preuve qu'il est arrivé (m1.28) ----- */
+var ARGD = null, ARG = { doc: '' };
+var ARG_LIEU = { depot: '🏦 Déposé à la banque', bureau: '🏢 Remis au bureau', main: '👤 Gardé en main' }, ARG_MODE = { recu_bureau: 'reçu au bureau', depot_verifie: 'dépôt vérifié' };
+function ongletArgent(data, msg) {
+  var rendre = function (d) {
+    ARGD = d;
+    var dv = esc(d.devise || DEV), dir = D.utilisateur.role === 'management', t = d.totaux || {}, tot = Math.round(((t.depot || 0) + (t.bureau || 0) + (t.main || 0)) * 100) / 100;
+    var h = entete() + (msg ? '<div class="okb">' + esc(msg) + '</div>' : '') +
+      '<div class="card"><div class="mut">Argent des rapports pas encore confirmé</div><div class="big" style="color:' + (tot > 0 ? 'var(--bad)' : 'var(--ok)') + '">' + fmt(tot) + ' ' + dv + '</div>' +
+      '<div>🏦 Dépôts à vérifier : <b>' + fmt(t.depot || 0) + '</b></div><div>🏢 Remis au bureau, à confirmer : <b>' + fmt(t.bureau || 0) + '</b></div><div>👤 Gardé en main : <b>' + fmt(t.main || 0) + '</b></div>' +
+      '<div class="mut">Chaque somme reste au nom de la personne écrite dans le rapport jusqu\'à ce que quelqu\'un du bureau confirme, pièce à l\'appui, qu\'elle est arrivée.' + (d.stations_actives ? '' : ' Pour l\'instant : camions seulement.') + '</div></div>';
+    if (!d.personnes.length) h += '<p class="mut">Rien à confirmer.</p>';
+    d.personnes.forEach(function (p) {
+      h += '<h2>' + esc(p.nom) + ' — ' + fmt(p.total) + ' ' + dv + '</h2>' + p.lignes.map(function (x, i) {
+        var k = esc(x.id).replace(/[^A-Za-z0-9]/g, '');
+        return '<div class="card"><div class="row"><div><b>' + ARG_LIEU[x.lieu] + '</b>' + (x.pour ? ' pour ' + esc(x.pour) : '') + '<div class="mut">' + esc(x.nom) + ' · rapport du ' + dfr(x.date) + (x.jours > 0 ? ' · il y a ' + x.jours + ' jour(s)' : '') + '</div>' +
+          (x.regle > 0 ? '<div class="mut">Déjà confirmé : ' + fmt(x.regle) + ' sur ' + fmt(x.montant) + '</div>' : '') + '</div>' +
+          '<div style="text-align:right"><div class="big" style="font-size:20px">' + fmt(x.ouvert) + '</div>' + (x.fichier ? '<button class="sec" style="padding:6px 10px" onclick="phVoir(\'' + esc(x.fichier) + '\',\'a' + k + '\')">Bordereau</button> ' : '') +
+          '<button style="padding:6px 10px" onclick="argConfirmer(\'' + esc(x.id) + '\')">Confirmer</button></div></div><div id="phva' + k + '"></div></div>';
+      }).join('');
+    });
+    if ((d.caisses || []).length) h += '<h2>Caisse des stations</h2><div class="card">' + d.caisses.map(function (c) { return '<div><b>' + esc(c.nom) + '</b> : ' + fmt(c.montant) + ' ' + dv + ', gardée par <b>' + esc(c.tenu_par || '—') + '</b> <span class="mut">(rapport du ' + dfr(c.date) + ')</span></div>'; }).join('') +
+      '<div class="mut">La caisse passe au rapport suivant (solde initial) : ce n\'est pas une somme à confirmer.</div></div>';
+    h += '<h2>Confirmations des 30 derniers jours</h2>';
+    if (!(d.faites || []).length) h += '<p class="mut">Aucune pour l\'instant.</p>';
+    else h += '<table><tr><th>Quand</th><th>Quoi</th><th class="n">Montant</th><th></th></tr>' + d.faites.map(function (f, i) {
+      return '<tr' + (f.annule ? ' style="opacity:.5"' : '') + '><td>' + dfr(String(f.le).slice(0, 10)).slice(0, 5) + '<div class="mut">' + esc(String(f.le).slice(11, 16)) + '</div></td><td><b>' + esc(ARG_MODE[f.mode] || f.mode) + '</b>' + (f.annule ? ' <span class="badge">annulée</span>' : '') +
+        '<div class="mut">' + esc(f.nom) + ' · rapport du ' + dfr(f.date).slice(0, 5) + ' · ' + esc(f.tenu_par) + '</div><div class="mut">confirmé par ' + esc(f.par) + (f.note ? ' · ' + esc(f.note) : '') + '</div></td><td class="n">' + fmt(f.montant) + '</td>' +
+        '<td class="n">' + (f.fichier ? '<button class="sec" style="padding:6px 10px" onclick="phVoir(\'' + esc(f.fichier) + '\',\'f' + i + '\')">Pièce</button>' : '') + (dir && !f.annule ? '<div><a href="#" onclick="argAnnuler(\'' + esc(f.id) + '\');return false">Annuler</a></div>' : '') + '</td></tr>' +
+        '<tr><td colspan="4" id="phvf' + i + '" style="border:0;padding:0"></td></tr>';
+    }).join('') + '</table>';
+    view(h);
+  };
+  if (data) return rendre(data);
+  call('argent').then(rendre).catch(errTab);
+}
+function argConfirmer(id) {
+  var x = (ARGD.ouverts || []).filter(function (y) { return y.id === id; })[0]; if (!x) return;
+  ARG.doc = '';
+  var modes = x.lieu === 'depot' ? [['depot_verifie', 'Le dépôt est bien à la banque']] : x.lieu === 'bureau' ? [['recu_bureau', 'L\'argent est bien arrivé au bureau']] : [['recu_bureau', 'Remis au bureau'], ['depot_verifie', 'Déposé à la banque']];
+  view('<h1>Confirmer</h1><div class="sub">' + ARG_LIEU[x.lieu] + ' · ' + esc(x.nom) + ' · rapport du ' + dfr(x.date) + '</div>' +
+    '<div class="card">Au nom de <b>' + esc(x.tenu_par) + '</b>' + (x.pour ? ' · pour ' + esc(x.pour) : '') + '<div class="big">' + fmt(x.ouvert) + ' ' + esc(x.devise) + '</div>' + (x.regle > 0 ? '<div class="mut">Déjà confirmé : ' + fmt(x.regle) + ' sur ' + fmt(x.montant) + '</div>' : '') + '</div>' +
+    '<label for="agMode">Ce que vous confirmez</label><select id="agMode">' + modes.map(function (m) { return '<option value="' + m[0] + '">' + m[1] + '</option>'; }).join('') + '</select>' +
+    '<label for="agMt">Montant confirmé (' + esc(x.devise) + ') — moins si une partie seulement est arrivée</label><input id="agMt" inputmode="decimal" autocomplete="off" value="' + esc(String(x.ouvert)) + '">' +
+    '<label>Pièce justificative * (photo du reçu signé, du bordereau ou du relevé de banque)</label><input type="file" id="agDoc" accept="image/*" onchange="argDoc(this)"><div id="agDocEtat" class="mut"></div>' +
+    (x.fichier ? '<label style="display:flex;gap:10px;align-items:center;color:var(--txt);font-size:16px;margin:10px 0"><input type="checkbox" id="agPiece" style="width:auto"> Le bordereau joint au rapport est la pièce</label>' : '') +
+    '<label for="agNote">Note (facultatif)</label><input id="agNote" autocomplete="off" maxlength="200" placeholder="n° du reçu, du bordereau…">',
+    '<button class="sec" onclick="tableau(\'argent\')">Annuler</button><button id="bAg" onclick="argConfirmerOk(\'' + esc(id) + '\')">Confirmer</button>', 'argConfirmer');
+}
+function argDoc(input) {
+  var f = input.files && input.files[0]; if (!f) return;
+  $('agDocEtat').textContent = 'Préparation de la pièce…';
+  var img = new Image(), url = URL.createObjectURL(f);
+  img.onload = function () {
+    var k = Math.min(1, 1600 / Math.max(img.width, img.height)), cv = document.createElement('canvas'); cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
+    cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height); ARG.doc = cv.toDataURL('image/jpeg', 0.75); URL.revokeObjectURL(url);
+    if ($('agDocEtat')) $('agDocEtat').textContent = 'Pièce prête ✓';
+  };
+  img.onerror = function () { ARG.doc = ''; URL.revokeObjectURL(url); if ($('agDocEtat')) $('agDocEtat').textContent = 'Image illisible : choisissez une photo.'; };
+  img.src = url;
+}
+function argConfirmerOk(id) {
+  var piece = !!($('agPiece') && $('agPiece').checked), mt = String($('agMt').value || '').trim();
+  if (nb(mt) === null || !(nb(mt) > 0)) return alerte('Montant : écrivez seulement les chiffres.');
+  if (!ARG.doc && !piece) return alerte('Ajoutez la pièce justificative : une photo du reçu signé, du bordereau ou du relevé.');
+  $('bAg').disabled = true; $('bAg').textContent = 'Envoi…';
+  call('argentConfirmer', { id: id, montant: String(nb(mt)), mode: $('agMode').value, note: String($('agNote').value || '').trim(), doc: ARG.doc, piece_du_rapport: piece && !ARG.doc }).then(function (d) { ARG.doc = ''; ongletArgent(d, 'Confirmation enregistrée.'); })
+    .catch(function (e) { if ($('bAg')) { $('bAg').disabled = false; $('bAg').textContent = 'Confirmer'; } alerte(e.erreur || 'Pas de connexion.'); });
+}
+function argAnnuler(id) {
+  var m = prompt('Pourquoi annuler cette confirmation ? L\'argent redeviendra « à confirmer ».');
+  if (m === null || !String(m).trim()) return;
+  call('argentAnnuler', { id: id, motif: String(m).trim() }).then(function (d) { ongletArgent(d, 'Confirmation annulée.'); }).catch(function (e) { alerte(e.erreur || 'Pas de connexion.'); });
+}
 
 /* ----- Direction : bordereaux de dépôt envoyés par les stations ----- */
 /* Stock estimé de propane par station : reçu − vendu depuis la dernière fois « à sec » (ou, sans date connue, depuis le point le plus bas). */
