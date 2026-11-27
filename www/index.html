@@ -73,7 +73,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.29.0';
+var VERSION_APP = '1.29.1';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -1164,7 +1164,7 @@ function cmSuggestions(l, d, auj, rapportFait) {
   var sg = CM.sug, maintenant = phJourHeure(Date.now()), demain = rapportFait || maintenant.heure >= ((sg && sg.heure_demain) || 18);
   var cible = demain ? jourPlus(auj, 1) : auj, J = sg && (sg.jours || []).filter(function (x) { return x.date === cible; })[0];
   var h = '<h2>💡 ' + (demain ? 'Suggestions pour demain, ' + jourNom(cible) + ' ' + dfr(cible).slice(0, 5) : 'Suggestions du jour') + '</h2>' +
-    '<div class="mut">D\'après l\'habitude de chaque client. Ce sont des idées pour vous aider, pas des ordres : vous n\'êtes pas obligé de les suivre.</div>';
+    '<div class="mut">D\'après l\'habitude des clients. Ce sont des idées, pas des ordres.</div>';
   if (!J) return h + '<p class="mut">' + (sg ? 'Pas encore reçues pour ce jour.' : 'Pas encore reçues.') + ' Il faut du signal : touchez « Envoyer / actualiser ».</p>';
   var livres = {};
   if (!demain) {
@@ -1173,12 +1173,11 @@ function cmSuggestions(l, d, auj, rapportFait) {
   }
   var liste = J.liste.slice().sort(function (a, b) { return (livres[a.id] ? 1 : 0) - (livres[b.id] ? 1 : 0); });
   if (!liste.length) return h + '<p class="mut">Aucun client attendu' + (demain ? ' demain' : ' aujourd\'hui') + ' d\'après leur habitude.</p>';
-  var carte = function (s) {
-    var quand = s.motif === 'stock' ? '<b>Stock bas : ' + (s.stock_jours < 1 ? 'presque plus de gaz' : 'environ ' + s.stock_jours + ' jour' + (s.stock_jours > 1 ? 's' : '') + ' de gaz') + '</b>'
-      : s.retard > 0 ? '<b style="color:var(--bad)">Attendu le ' + dfr(s.prochaine).slice(0, 5) + ' (' + s.retard + ' j de retard)</b>'
-      : '<b>Attendu le ' + dfr(s.prochaine).slice(0, 5) + '</b>';
-    return '<div class="card"' + (livres[s.id] ? ' style="opacity:.6"' : '') + '><div class="row"><div><b>' + esc(s.nom) + '</b><div>' + quand + '</div>' +
-      (s.rythme ? '<div class="mut">D\'habitude environ ' + fmt(s.gallons) + ' gal tous les ' + fmt(s.rythme) + ' j · dernière livraison le ' + dfr(s.dernier).slice(0, 5) + '</div>' : '') + '</div>' +
+  var carte = function (s) {   // court (propriétaire, 27/11/2026) : dernière livraison, retard s'il y en a, gallons suggérés
+    var retard = s.motif === 'stock' ? 'stock bas' : s.retard > 0 ? 'en retard de ' + s.retard + ' j' : '';
+    return '<div class="card" style="padding:10px 12px' + (livres[s.id] ? ';opacity:.6' : '') + '"><div class="row"><div><b>' + esc(s.nom) + '</b>' +
+      '<div class="mut">Dernière livraison : ' + (s.dernier ? dfr(s.dernier).slice(0, 5) : '—') + (retard ? ' · <b style="color:var(--bad)">' + retard + '</b>' : '') + '</div>' +
+      '<div>Suggéré : <b>' + (s.gallons ? fmt(s.gallons) + ' gal' : '—') + '</b></div></div>' +
       '<div style="text-align:right">' + (livres[s.id] ? '<span style="color:var(--ok)">✅ livré</span>' : demain ? '' : '<button class="sec" style="padding:8px 12px" onclick="cmLivrerA(\'' + esc(s.id) + '\')">Livrer</button>') + '</div></div></div>';
   };
   h += liste.slice(0, 10).map(carte).join('');
