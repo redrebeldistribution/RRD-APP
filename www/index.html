@@ -73,7 +73,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.28.1';
+var VERSION_APP = '1.29.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -973,12 +973,12 @@ function pushRepli() { if (!PUSH.refus) pushDemarrer(); }   // au retour dans l'
 /* ======================= Camion de livraison (build 46) =======================
  * Téléphone d'un camion (code CM…) : livraisons (le chauffeur tape les gallons, le prix vient du bureau), paiements reçus,
  * chargements de propane et autres achats. Tout est gardé sur le téléphone puis envoyé dès qu'il y a du signal. */
-var CM = { d: null, f: null, gps: null, envoi: false };
+var CM = { d: null, f: null, gps: null, envoi: false, sug: null };
 var CM_NOMS = { livraison: '🚚 Livraison', paiement: '💵 Paiement reçu', chargement: '⛽ Chargement de propane', achat: '🧾 Achat', photo: '📷 Photo', rapport: '📋 Rapport du jour' };
 function cmCode() { return 'CAM:' + ((CFG.get('camion', {}) || {}).code || ''); }
 function cmDev() { return (CM.d && CM.d.devise) || DEV; }
 function cmMiens() { var c = cmCode(); return phTous().then(function (l) { return l.filter(function (r) { return r.genre === 'cam' && r.station === c; }); }); }
-function demarrerCamion() { CM.d = CFG.get('camInit', null); camAccueil(); cmActualiser(); }
+function demarrerCamion() { CM.d = CFG.get('camInit', null); CM.sug = CFG.get('camSug', null); camAccueil(); cmActualiser(); }
 function cmActualiser(manuel) {
   if (CFG.get('role', '') !== 'camion' || !CFG.get('jeton', '')) return;
   majNet('envoi…');
@@ -987,6 +987,7 @@ function cmActualiser(manuel) {
     if (d.mode !== 'camion') return;
     CM.d = d; CFG.set('camInit', d); CFG.set('camion', d.camion);
     if (manuel) { if (S.ecran === 'camion') camAccueil('À jour.'); } else fond('camion', function () { camAccueil(); });
+    cmSugCharger();
   }).catch(function (e) {
     majNet(e && e.reseau ? '○ hors ligne' : '● en ligne');
     if (e && (e.code === 'NON_ENREGISTRE' || e.code === 'DESACTIVE')) { CFG.set('jeton', ''); CFG.set('role', ''); return ecranEnregistrer(e.erreur); }
@@ -1026,16 +1027,6 @@ function camAccueil(msg, err) {
     });
     if (!d.clients) h += '<div class="note">Liste des clients pas encore reçue. Il faut internet une première fois.</div>';
     h += '<button class="bigbtn" onclick="cmForm(\'livraison\')">🚚 Nouvelle livraison</button><button class="bigbtn sec" onclick="cmForm(\'paiement\')">💵 Paiement reçu d\'un client</button><button class="bigbtn sec" onclick="cmForm(\'achat\')">⛽ Chargement ou achat</button><button class="bigbtn sec" onclick="cmForm(\'photo\')">📷 Photo (compteur du client, station, autre)</button>';
-    var trn = d.date === auj ? (d.tournee || []) : [];   // arrêts choisis par le bureau pour aujourd'hui
-    if (trn.length) {
-      var livres = {}; l.forEach(function (r) { if (r.op === 'livraison' && r.date === auj && r.statut !== 'rejete' && r.client_id) livres[r.client_id] = 1; });
-      var reste = trn.filter(function (x) { return !x.fait && !livres[x.client_id]; }).length;
-      h += '<h2>À livrer aujourd\'hui</h2><div class="mut">Arrêts demandés par le bureau : ' + (reste ? reste + ' à faire sur ' + trn.length : 'tous faits ✓') + '.</div>' + trn.map(function (x) {
-        var ok = x.fait || livres[x.client_id];
-        return '<div class="card"><div class="row"><div><b>' + esc(x.client) + '</b>' + (x.gallons !== '' && x.gallons !== undefined && x.gallons !== null ? '<div class="mut">prévu : environ ' + fmt(x.gallons) + ' gal</div>' : '') + (x.note ? '<div class="mut">' + esc(x.note) + '</div>' : '') + '</div>' +
-          '<div style="text-align:right">' + (ok ? '<span style="color:var(--ok)">✅ livré</span>' : '<button style="padding:8px 12px" onclick="cmLivrerA(\'' + esc(x.client_id) + '\')">Livrer</button>') + '</div></div></div>';
-      }).join('');
-    }
     var rap = function (date) {   // '' = pas fait, sinon 'att' ou 'ok'
       var loc = l.filter(function (r) { return r.op === 'rapport' && r.date_rapport === date && r.statut !== 'rejete'; })[0];
       if (loc) return loc.statut === 'envoye' ? 'ok' : 'att';
@@ -1047,6 +1038,7 @@ function camAccueil(msg, err) {
     if (manq.length) h += '<div class="wait">📋 ' + (manq.length === 1 ? 'Le rapport du ' + dfr(manq[0].date).slice(0, 5) + ' n\'est pas fait.' : manq.length + ' rapports des jours passés ne sont pas faits.') +
       manq.map(function (x) { return '<br><button style="margin-top:8px" onclick="cmRapport(\'' + x.date + '\')">Faire le rapport du ' + dfr(x.date).slice(0, 5) + '</button>'; }).join('') + '</div>';
     h += ra ? '<div class="okb">📋 Rapport du jour ' + (ra === 'ok' ? 'reçu par le bureau ✓' : 'enregistré, en attente de signal ⏳') + '</div>' : '<button class="bigbtn" style="background:var(--ok)" onclick="cmRapport(\'' + auj + '\')">📋 Rapport du jour (fin de journée)</button>';
+    h += cmSuggestions(l, d, auj, !!ra);
     var vus = {}, jour = [];
     l.forEach(function (r) { if (r.date === auj && r.statut !== 'rejete' && r.op !== 'rapport') { vus[r.cid] = 1; jour.push(cmLocal(r)); } });
     if (d.date === auj) (d.jour || []).forEach(function (o) { if (!vus[o.cid]) { o.statut = 'envoye'; jour.push(o); } });
@@ -1164,7 +1156,39 @@ function crTotal() {   // total des trois cases, à côté de ce que le bureau a
   el.innerHTML = bon ? 'Total : <b>' + fmt(Math.round(tot * 100) / 100) + ' ' + esc(cmDev()) + '</b>' + (att !== '' && att !== null ? ' · attendu d\'après le bureau : <b>' + fmt(Number(att)) + '</b>' : '') : 'Total : écrivez seulement les chiffres.';
 }
 function cmTypeChange() { var ch = $('cmType').value === 'chargement'; $('cmChB').classList.toggle('hidden', !ch); $('cmAcB').classList.toggle('hidden', ch); }
-function cmLivrerA(id) {   // depuis un arrêt de la tournée : ouvre la livraison avec le client déjà choisi
+var JOURS_FR = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
+function jourNom(s) { return JOURS_FR[new Date(s + 'T12:00:00Z').getUTCDay()]; }
+/* Suggestions de livraison (m1.32) : calculées par le bureau d'après l'habitude de chaque client, montrées sans que le bureau ait rien à faire.
+ * Celles de demain remplacent celles du jour à 18 h (heure d'Haïti) ou dès que le rapport du jour est fait (demande du propriétaire, 27/11/2026). */
+function cmSuggestions(l, d, auj, rapportFait) {
+  var sg = CM.sug, maintenant = phJourHeure(Date.now()), demain = rapportFait || maintenant.heure >= ((sg && sg.heure_demain) || 18);
+  var cible = demain ? jourPlus(auj, 1) : auj, J = sg && (sg.jours || []).filter(function (x) { return x.date === cible; })[0];
+  var h = '<h2>💡 ' + (demain ? 'Suggestions pour demain, ' + jourNom(cible) + ' ' + dfr(cible).slice(0, 5) : 'Suggestions du jour') + '</h2>' +
+    '<div class="mut">D\'après l\'habitude de chaque client. Ce sont des idées pour vous aider, pas des ordres : vous n\'êtes pas obligé de les suivre.</div>';
+  if (!J) return h + '<p class="mut">' + (sg ? 'Pas encore reçues pour ce jour.' : 'Pas encore reçues.') + ' Il faut du signal : touchez « Envoyer / actualiser ».</p>';
+  var livres = {};
+  if (!demain) {
+    l.forEach(function (r) { if (r.op === 'livraison' && r.date === auj && r.statut !== 'rejete' && r.client_id) livres[r.client_id] = 1; });
+    if (d.date === auj) (d.jour || []).forEach(function (o) { if (o.genre === 'livraison' && o.client_id) livres[o.client_id] = 1; });
+  }
+  var liste = J.liste.slice().sort(function (a, b) { return (livres[a.id] ? 1 : 0) - (livres[b.id] ? 1 : 0); });
+  if (!liste.length) return h + '<p class="mut">Aucun client attendu' + (demain ? ' demain' : ' aujourd\'hui') + ' d\'après leur habitude.</p>';
+  var carte = function (s) {
+    var quand = s.motif === 'stock' ? '<b>Stock bas : ' + (s.stock_jours < 1 ? 'presque plus de gaz' : 'environ ' + s.stock_jours + ' jour' + (s.stock_jours > 1 ? 's' : '') + ' de gaz') + '</b>'
+      : s.retard > 0 ? '<b style="color:var(--bad)">Attendu le ' + dfr(s.prochaine).slice(0, 5) + ' (' + s.retard + ' j de retard)</b>'
+      : '<b>Attendu le ' + dfr(s.prochaine).slice(0, 5) + '</b>';
+    return '<div class="card"' + (livres[s.id] ? ' style="opacity:.6"' : '') + '><div class="row"><div><b>' + esc(s.nom) + '</b><div>' + quand + '</div>' +
+      (s.rythme ? '<div class="mut">D\'habitude environ ' + fmt(s.gallons) + ' gal tous les ' + fmt(s.rythme) + ' j · dernière livraison le ' + dfr(s.dernier).slice(0, 5) + '</div>' : '') + '</div>' +
+      '<div style="text-align:right">' + (livres[s.id] ? '<span style="color:var(--ok)">✅ livré</span>' : demain ? '' : '<button class="sec" style="padding:8px 12px" onclick="cmLivrerA(\'' + esc(s.id) + '\')">Livrer</button>') + '</div></div></div>';
+  };
+  h += liste.slice(0, 10).map(carte).join('');
+  if (liste.length > 10) h += '<details><summary class="mut">Voir les ' + (liste.length - 10) + ' autres</summary>' + liste.slice(10).map(carte).join('') + '</details>';
+  return h + (sg.calcule_le ? '<div class="mut">Calculé le ' + esc(String(sg.calcule_le).slice(8, 10) + '/' + String(sg.calcule_le).slice(5, 7) + ' à ' + String(sg.calcule_le).slice(11, 16)) + '.</div>' : '');
+}
+function cmSugCharger() {   // à part de l'ouverture, pour qu'elle reste rapide ; la dernière liste reste sur le téléphone (sans signal)
+  return api('camSuggestions').then(function (s) { CM.sug = s; CFG.set('camSug', s); if (S.ecran === 'camion') camAccueil(); }).catch(function () { });
+}
+function cmLivrerA(id) {   // depuis une suggestion : ouvre la livraison avec le client déjà choisi
   cmForm('livraison');
   var s = $('cmCli'); if (!s) return;
   for (var i = 0; i < s.options.length; i++) if (s.options[i].value === id) { s.value = id; cmCliChange(); break; }
@@ -2046,28 +2070,6 @@ function phVoir(id, i) {
 var ARGD = null, ARG = { doc: '' };
 var ARG_LIEU = { depot: '🏦 Déposé à la banque', bureau: '🏢 Remis au bureau', main: '👤 Gardé en main' }, ARG_MODE = { recu_bureau: 'reçu au bureau', depot_verifie: 'dépôt vérifié' };
 var LIVD = null;
-function livJour(d, auj) { return d === auj ? 'Aujourd\'hui (' + dfr(d).slice(0, 5) + ')' : d === jourPlus(auj, 1) ? 'Demain (' + dfr(d).slice(0, 5) + ')' : dfr(d).slice(0, 5); }
-function livChamps(k, gal) {   // les cases d'un arrêt : date, camion, gallons prévus, note
-  var d = LIVD;
-  return '<div class="row"><div><label>Jour</label><input type="date" id="lfD_' + k + '" value="' + d.aujourdhui + '" min="' + d.aujourdhui + '" max="' + jourPlus(d.aujourdhui, d.reglages.jours_max) + '"></div>' +
-    '<div><label>Camion</label><select id="lfC_' + k + '"><option value="">N\'importe quel camion</option>' + d.camions.map(function (c) { return '<option value="' + esc(c.code) + '">' + esc(c.nom) + '</option>'; }).join('') + '</select></div></div>' +
-    '<label>Gallons prévus (facultatif)</label><input id="lfG_' + k + '" inputmode="decimal" autocomplete="off" value="' + (gal || '') + '">' +
-    '<label>Note pour le chauffeur (facultatif)</label><input id="lfN_' + k + '" autocomplete="off" maxlength="200">';
-}
-function livForm(id) {
-  var el = $('lf_' + id), s = LIVD.liste.filter(function (x) { return x.id === id; })[0] || {};
-  if (el.innerHTML) { el.innerHTML = ''; return; }
-  el.innerHTML = '<div class="note" style="margin-top:8px">' + livChamps(id, s.gallons) + '<div style="margin-top:10px"><button onclick="livAjouter(\'' + esc(id) + '\',\'' + esc(id) + '\',\'suggestion\')">Ajouter à la tournée</button></div></div>';
-}
-function livAjouter(k, id, origine) {
-  if (!id) return alerte('Choisissez le client.');
-  call('tourneeAjouter', { client_id: id, date: $('lfD_' + k).value, camion: $('lfC_' + k).value, gallons: $('lfG_' + k).value, note: $('lfN_' + k).value, origine: origine })
-    .then(function (d) { ongletLivrer(d, 'Ajouté à la tournée. Le chauffeur le verra en ouvrant l\'application.'); }).catch(function (e) { alerte(e.erreur || 'Pas de connexion.'); });
-}
-function livRetirer(id) {
-  if (!confirm('Retirer cet arrêt de la tournée ?')) return;
-  call('tourneeRetirer', { id: id }).then(function (d) { ongletLivrer(d, 'Arrêt retiré.'); }).catch(function (e) { alerte(e.erreur || 'Pas de connexion.'); });
-}
 function livRelier(i) {
   var a = LIVD.a_relier[i], v = $('lr_' + i).value, c = LIVD.clients.filter(function (x) { return x.id === v; })[0];
   if (!c) return alerte('Choisissez le client.');
@@ -2080,18 +2082,10 @@ function ongletLivrer(data, msg, relire) {
     var auj = d.aujourdhui, dv = esc(d.devise || DEV), src = d.source || {}, og = src.onglets || [], jusqu = '';
     og.forEach(function (o) { if (o.dernier > jusqu) jusqu = o.dernier; });
     var h = entete() + (msg ? '<div class="okb">' + esc(msg) + '</div>' : '') +
-      '<div class="card"><b>Livraisons à proposer</b><div class="mut">Estimation d\'après le passé de chaque client : sa dernière livraison + l\'écart habituel entre ses livraisons. Ce n\'est pas une commande. Rien n\'est envoyé au client, et le chauffeur ne voit un arrêt que si vous le mettez dans la tournée.</div>' +
+      '<div class="card"><b>Livraisons suggérées</b><div class="mut">Estimation d\'après le passé de chaque client : sa dernière livraison + l\'écart habituel entre ses livraisons. Ce n\'est pas une commande et rien n\'est envoyé au client. Les chauffeurs voient la même liste sur leur téléphone, sans les montants, comme une suggestion qu\'ils ne sont pas obligés de suivre ; celle du lendemain à partir de 18 h ou dès leur rapport du jour.</div>' +
       (src.erreur ? '<div class="err" style="margin-top:8px">Le classeur VRAC 2025 n\'a pas pu être lu (' + esc(src.erreur) + '). Les propositions utilisent seulement les livraisons tapées dans l\'application.</div>'
         : '<div class="mut" style="margin-top:6px">Source : classeur VRAC 2025 — ' + og.map(function (o) { return esc(o.nom); }).join(', ') + (jusqu ? ' ; dernière livraison écrite le ' + dfr(jusqu).slice(0, 5) : '') + ' — et l\'application. Lu le ' + esc(src.lu_le || '') + '.</div>') +
       '<div style="margin-top:8px"><button class="sec" onclick="ongletLivrer(null,\'\',1)">🔄 Relire le classeur</button></div></div>';
-    h += '<h2>Tournée</h2>';
-    if (!d.tournee.length) h += '<p class="mut">Aucun arrêt choisi. Utilisez « Mettre dans la tournée » sur un client : le chauffeur verra l\'arrêt sur son téléphone le jour choisi.</p>';
-    var jr = '';
-    d.tournee.forEach(function (x) {
-      if (x.date !== jr) { jr = x.date; h += '<div class="mut" style="margin:10px 0 4px"><b>' + livJour(x.date, auj) + '</b></div>'; }
-      h += '<div class="card"><div class="row"><div><b>' + esc(x.client) + '</b><div class="mut">' + (x.camion_nom ? esc(x.camion_nom) : 'n\'importe quel camion') + (x.gallons !== '' ? ' · prévu ' + fmt(x.gallons) + ' gal' : '') + ' · choisi par ' + esc(x.cree_par) + '</div>' + (x.note ? '<div class="mut">' + esc(x.note) + '</div>' : '') + '</div>' +
-        '<div style="text-align:right">' + (x.fait ? '<span style="color:var(--ok)">✅ livré</span>' : '<span class="mut">à faire</span><div><a href="#" onclick="livRetirer(\'' + esc(x.id) + '\');return false">Retirer</a></div>') + '</div></div></div>';
-    });
     var carte = function (s) {
       var quand = '';
       if (s.motif === 'stock') quand = '<b style="color:var(--bad)">Stock estimé : ' + (s.stock.jours < 1 ? 'moins d\'un jour de gaz' : 'environ ' + s.stock.jours + ' jour' + (s.stock.jours > 1 ? 's' : '') + ' de gaz') + '</b>';
@@ -2101,9 +2095,7 @@ function ongletLivrer(data, msg, relire) {
       return '<div class="card"><div><b>' + esc(s.nom) + '</b>' + (s.groupe ? ' <span class="badge">' + esc(s.groupe) + '</span>' : '') + (s.station ? ' <span class="badge">notre station</span>' : '') + '<div>' + quand + '</div>' +
         (s.rythme ? '<div class="mut">Dernière livraison : ' + dfr(s.dernier).slice(0, 5) + ' (il y a ' + s.depuis + ' j) · d\'habitude tous les ' + fmt(s.rythme) + ' j · environ ' + fmt(s.gallons) + ' gal</div><div class="mut">Calculé sur ' + s.utilises + ' jours de livraison, du ' + dfr(s.du).slice(0, 5) + ' au ' + dfr(s.dernier).slice(0, 5) + '.</div>' : '<div class="mut">Pas assez de livraisons pour un rythme (' + s.n + ').</div>') +
         (s.stock ? '<div class="mut">' + (s.stock.fiable ? 'Stock estimé au ' + dfr(s.stock.au).slice(0, 5) + ' : ' + fmt(s.stock.gallons) + ' gal (' + s.stock.pct + ' %) · ventes ≈ ' + fmt(s.stock.vente_jour) + ' gal par jour' : 'Stock estimé pas utilisé : ' + esc(s.stock.raison)) + '</div>' : '') +
-        (s.solde > 0 ? '<div style="color:var(--bad)">Doit : <b>' + fmt(s.solde) + ' ' + dv + '</b></div>' : '') +
-        (s.prevus.length ? '<div style="color:var(--ok)">Déjà dans la tournée : ' + s.prevus.map(function (x) { return livJour(x, auj); }).join(', ') + '</div>' : '') + '</div>' +
-        '<div style="margin-top:8px"><button class="sec" style="padding:6px 10px" onclick="livForm(\'' + esc(s.id) + '\')">Mettre dans la tournée</button></div><div id="lf_' + esc(s.id) + '"></div></div>';
+        (s.solde > 0 ? '<div style="color:var(--bad)">Doit : <b>' + fmt(s.solde) + ' ' + dv + '</b></div>' : '') + '</div>';
     };
     var mnt = d.liste.filter(function (s) { return s.statut === 'retard'; }), bt = d.liste.filter(function (s) { return s.statut === 'bientot'; });
     h += '<h2>À livrer maintenant (' + mnt.length + ')</h2>' + (mnt.length ? mnt.map(carte).join('') : '<p class="mut">Personne n\'est en retard sur son rythme habituel.</p>');
@@ -2114,7 +2106,6 @@ function ongletLivrer(data, msg, relire) {
     if (d.peu.length) h += '<details class="card"><summary><b>Pas assez d\'historique (' + d.peu.length + ')</b></summary><div class="mut">Il faut au moins ' + d.reglages.min + ' jours de livraison pour calculer un rythme.</div>' + d.peu.map(function (x) {
       return '<div>' + esc(x.nom) + ' — ' + (x.n ? x.n + ' jour(s) de livraison, le dernier le ' + dfr(x.dernier).slice(0, 5) : 'aucune livraison trouvée') + '</div>'; }).join('') + '</details>';
     var optC = '<option value="">— choisir le client —</option>' + d.clients.map(function (c) { return '<option value="' + esc(c.id) + '">' + esc(c.nom) + '</option>'; }).join('');
-    h += '<h2>Ajouter un autre client à la tournée</h2><label>Client</label><select id="lfCli">' + optC + '</select>' + livChamps('M', '') + '<div style="margin-top:10px"><button onclick="livAjouter(\'M\',$(\'lfCli\').value,\'bureau\')">Ajouter à la tournée</button></div>';
     if (d.a_relier.length) {
       h += '<h2>Noms du classeur à relier (' + d.a_relier.length + ')</h2><p class="mut">Ces noms sont écrits dans le classeur VRAC 2025 mais ne sont pas ceux d\'un client de l\'application. Tant qu\'un nom n\'est pas relié, ses livraisons ne comptent pour personne : l\'application ne devine pas.</p>';
       var ligne = function (a, i) {
