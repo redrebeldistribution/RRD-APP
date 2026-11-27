@@ -73,7 +73,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.25.0';
+var VERSION_APP = '1.26.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -223,7 +223,8 @@ function phCorps(r) {
 }
 function cmCorps(r) {
   return ['camion', { payload: { genre: r.op, cid: r.cid, pris_ms: r.pris_ms, photo: r.photo, client_id: r.client_id, client: r.client, gallons: r.gallons, mode: r.mode, paye: r.paye, montant: r.montant, devise: r.devise,
-    bon_no: r.bon_no, fournisseur: r.fournisseur, detail: r.detail, note: r.note, lat: r.lat, lon: r.lon, precision: r.precision, date: r.date_rapport, employes: r.employes, remis: r.remis } }];
+    bon_no: r.bon_no, fournisseur: r.fournisseur, detail: r.detail, note: r.note, lat: r.lat, lon: r.lon, precision: r.precision, date: r.date_rapport, employes: r.employes, remis: r.remis,
+    depose: r.depose, depose_pour: r.depose_pour, depose_par: r.depose_par, bureau: r.bureau, bureau_qui: r.bureau_qui, main: r.main, main_qui: r.main_qui } }];
 }
 /* Envoi d'un élément de la file : si le bureau a déjà répondu pendant que l'application était fermée, on reprend cette réponse. */
 function apiFile(corps, cid) {
@@ -975,7 +976,7 @@ function cmLigne(o) {   // une opération en une ligne (historique d'un client, 
   } else if (o.genre === 'paiement') t = 'paiement reçu <b>' + fmt(Number(o.montant)) + ' ' + esc(dv) + '</b>';
   else if (o.genre === 'chargement') t = fmt(Number(o.gallons)) + ' gal chargés';
   else if (o.genre === 'photo') t = esc(o.detail || '');
-  else if (o.genre === 'rapport') t = 'argent remis ' + fmt(Number(o.remis)) + ' ' + esc(dv);
+  else if (o.genre === 'rapport') t = 'argent de la journée ' + fmt(Number(o.remis)) + ' ' + esc(dv);
   else t = fmt(Number(o.montant)) + ' ' + esc(dv);
   return t;
 }
@@ -1107,10 +1108,24 @@ function cmRapport(date) {
       Object.keys(t.autres || {}).map(function (k) { return ' · ' + esc(k) + ' : ' + fmt(t.autres[k]); }).join('') + '</div>' + (t.sans_prix ? '<div class="mut">' + t.sans_prix + ' livraison(s) sans prix : le bureau calculera.</div>' : '') + '</div>';
     else h += '<div class="note">Le résumé de la journée sera calculé par le bureau avec les opérations envoyées.</div>';
     h += '<label for="crEmp">Employés du camion (chauffeur et aides) *</label><input id="crEmp" autocomplete="off" value="' + esc(CFG.get('camEmp', '')) + '" placeholder="ex. Paul Michel, Jean Rose">' +
-      '<label for="crRemis">Argent remis au bureau ou déposé (' + esc(cmDev()) + ') *</label><input id="crRemis" inputmode="decimal" autocomplete="off" placeholder="seulement les chiffres, 0 si rien">' +
-      '<label for="cmNote">Note (facultatif)</label><input id="cmNote" autocomplete="off"><label>Photo de la feuille du jour ou du bordereau (facultatif)</label><button class="sec" style="width:100%" onclick="cmPrendre()">📷 Prendre la photo</button><div id="cmPrev" class="mut"></div>';
+      '<h2>Où est l\'argent de la journée ? *</h2><p class="mut">Remplissez chaque case où il y a de l\'argent (' + esc(cmDev()) + '), avec le nom de la personne qui l\'a. Aucun argent aujourd\'hui : écrivez 0 dans « Gardé en main ».</p>' +
+      '<div class="card"><b>🏦 Déposé à la banque</b><label for="crDep">Montant déposé</label><input id="crDep" inputmode="decimal" autocomplete="off" placeholder="seulement les chiffres" oninput="crTotal()">' +
+        '<label for="crDepPour">Dépôt fait pour</label><select id="crDepPour">' + BD_BENEF.map(function (b) { return '<option>' + esc(b) + '</option>'; }).join('') + '</select>' +
+        '<label for="crDepPar">Déposé par (nom)</label><input id="crDepPar" autocomplete="off" maxlength="60"></div>' +
+      '<div class="card"><b>🏢 Remis au bureau</b><label for="crBur">Montant remis</label><input id="crBur" inputmode="decimal" autocomplete="off" placeholder="seulement les chiffres" oninput="crTotal()">' +
+        '<label for="crBurQui">Reçu par (nom de la personne du bureau)</label><input id="crBurQui" autocomplete="off" maxlength="60"></div>' +
+      '<div class="card"><b>👤 Gardé en main</b><label for="crMain">Montant gardé</label><input id="crMain" inputmode="decimal" autocomplete="off" placeholder="seulement les chiffres" oninput="crTotal()">' +
+        '<label for="crMainQui">Gardé par (nom)</label><input id="crMainQui" autocomplete="off" maxlength="60"></div>' +
+      '<div class="note" id="crTot" data-att="' + (t && !(att && date === auj) ? esc(String(t.attendu)) : '') + '">Total : —</div>' +
+      '<label for="cmNote">Note (facultatif)</label><input id="cmNote" autocomplete="off"><label>Photo du bordereau de dépôt (obligatoire s\'il y a un dépôt) ou de la feuille du jour</label><button class="sec" style="width:100%" onclick="cmPrendre()">📷 Prendre la photo</button><div id="cmPrev" class="mut"></div>';
     view(h, '<button class="sec" onclick="CM.f=null;camAccueil()">Annuler</button><button onclick="cmValider()">Envoyer le rapport</button>', 'camForm');
   });
+}
+function crTotal() {   // total des trois cases, à côté de ce que le bureau attend
+  var el = $('crTot'); if (!el) return;
+  var tot = 0, bon = true; ['crDep', 'crBur', 'crMain'].forEach(function (id) { var v = String(($(id) || {}).value || '').trim(); if (!v) return; var n = nb(v); if (n === null || n < 0) bon = false; else tot += n; });
+  var att = el.getAttribute('data-att');
+  el.innerHTML = bon ? 'Total : <b>' + fmt(Math.round(tot * 100) / 100) + ' ' + esc(cmDev()) + '</b>' + (att !== '' && att !== null ? ' · attendu d\'après le bureau : <b>' + fmt(Number(att)) + '</b>' : '') : 'Total : écrivez seulement les chiffres.';
 }
 function cmTypeChange() { var ch = $('cmType').value === 'chargement'; $('cmChB').classList.toggle('hidden', !ch); $('cmAcB').classList.toggle('hidden', ch); }
 function cmClient() {   // le client choisi : { id, nom, prix } (prix 0 = pas encore fixé par le bureau)
@@ -1178,10 +1193,22 @@ function cmValider() {
   var r = { cid: 'C' + ms.toString(36) + Math.random().toString(36).slice(2, 8), genre: 'cam', op: f.genre, station: cmCode(), pris_ms: ms, date: jh.date, heure: jh.heure, heure_txt: jh.txt.slice(-5), statut: 'attente', photo: f.photo, note: val('cmNote'), bon_no: val('cmBon') };
   var chiffres = function (v, quoi) { var n = nb(v); if (n === null || !(n > 0)) { alerte(quoi + ' : écrivez seulement les chiffres (ex. 300).'); return null; } return n; };
   if (f.genre === 'rapport') {
-    r.date_rapport = f.date; r.employes = val('crEmp'); r.remis = val('crRemis');
+    r.date_rapport = f.date; r.employes = val('crEmp');
     if (!r.employes) return alerte('Écrivez les employés du camion.');
-    if (r.remis !== '0' && (nb(r.remis) === null || nb(r.remis) < 0)) return alerte('Argent remis : écrivez seulement les chiffres (0 si rien).');
-    r.remis = String(nb(r.remis)); CFG.set('camEmp', r.employes);
+    var cases = [['crDep', 'depose', 'Dépôt à la banque'], ['crBur', 'bureau', 'Argent remis au bureau'], ['crMain', 'main', 'Argent gardé en main']], total = 0, rempli = false;
+    for (var ci = 0; ci < cases.length; ci++) {
+      var cv = val(cases[ci][0]), cn = cv === '' ? 0 : nb(cv);
+      if (cv !== '') rempli = true;
+      if (cn === null || cn < 0) return alerte(cases[ci][2] + ' : écrivez seulement les chiffres.');
+      r[cases[ci][1]] = String(cn); total += cn;
+    }
+    if (!rempli) return alerte('Dites où est l\'argent de la journée : remplissez au moins une case (0 dans « Gardé en main » s\'il n\'y a pas d\'argent).');
+    r.depose_pour = val('crDepPour'); r.depose_par = val('crDepPar'); r.bureau_qui = val('crBurQui'); r.main_qui = val('crMainQui');
+    if (nb(r.depose) > 0 && !r.depose_par) return alerte('Écrivez le nom de la personne qui a fait le dépôt.');
+    if (nb(r.bureau) > 0 && !r.bureau_qui) return alerte('Écrivez le nom de la personne du bureau qui a reçu l\'argent.');
+    if (nb(r.main) > 0 && !r.main_qui) return alerte('Écrivez le nom de la personne qui garde l\'argent.');
+    if (nb(r.depose) > 0 && !f.photo) return alerte('Prenez la photo du bordereau de dépôt.');
+    r.remis = String(Math.round(total * 100) / 100); CFG.set('camEmp', r.employes);
   } else if (f.genre === 'photo') {
     var cp = cmClient(); r.client_id = cp ? cp.id : ''; r.client = cp ? cp.nom : ''; r.detail = val('cmTp');
     if (!f.photo) return alerte('Prenez la photo.');
@@ -1466,7 +1493,10 @@ function repEnvoyer() {
 var D = null, T = { onglet: 'rapports', du: '', au: '', station: '', date: '' }, R = null, CORR = null, ANNUL = null;
 function call(action, payload) { return api('dir', { sous_action: action, payload: payload || {} }); }
 function fmt2(n) { return fmt(n); }
-function alerte(t) { var d = document.createElement('div'); d.className = 'err'; d.textContent = t; $('app').insertBefore(d, $('app').firstChild); window.scrollTo(0, 0); }
+function alerte(t) {   // un seul message à la fois : le nouveau remplace l'ancien
+  Array.prototype.forEach.call(document.querySelectorAll('#app .err[data-alerte]'), function (e) { e.parentNode.removeChild(e); });
+  var d = document.createElement('div'); d.className = 'err'; d.setAttribute('data-alerte', '1'); d.textContent = t; $('app').insertBefore(d, $('app').firstChild); window.scrollTo(0, 0);
+}
 function demarrerDirection(msg) {
   view('<p class="center mut" style="margin-top:40px">Connexion au bureau…</p>');
   api('init').then(function (d) {
@@ -1830,10 +1860,26 @@ function ongletCamion(data, msg) {
       });
       h += '<p class="mut">' + (d.soldes.length - dus.length - autresG.length) + ' client(s) ne doivent rien.</p>';
     }
+    var tient = {}, aTient = false;   // qui tient l'argent, d'après les rapports affichés
+    (d.rapports || []).forEach(function (r) {
+      if (!r.fait || !r.ou) return;
+      [['🏦 Déposé par', r.ou.depose, r.ou.depose_par], ['🏢 Au bureau, reçu par', r.ou.bureau, r.ou.bureau_qui], ['👤 En main, gardé par', r.ou.main, r.ou.main_qui]].forEach(function (x) {
+        if (!(x[1] > 0)) return; aTient = true;
+        var g = tient[x[0]] = tient[x[0]] || {}, cle = String(x[2]).toLowerCase(), f = g[cle] = g[cle] || { nom: x[2], tot: 0 };
+        f.tot = Math.round((f.tot + x[1]) * 100) / 100;
+      });
+    });
+    if (aTient) h += '<h2>Qui tient l\'argent</h2><div class="card">' + Object.keys(tient).map(function (k) {
+      return '<div><b>' + k + '</b></div>' + Object.keys(tient[k]).map(function (c) { return '<div>' + esc(tient[k][c].nom) + ' : <b>' + fmt(tient[k][c].tot) + ' ' + esc(dv) + '</b></div>'; }).join('');
+    }).join('<div style="height:6px"></div>') + '<div class="mut">D\'après les rapports du jour des dates affichées. Les noms sont ceux écrits par le chauffeur.</div></div>';
     if ((d.rapports || []).length) h += '<h2>Rapports du jour</h2>' + d.rapports.map(function (r, i) {
       var k = r.totaux;
       return '<div class="card"><div class="row"><div><b>' + dfr(r.date).slice(0, 5) + ' · ' + esc(r.camion_nom) + '</b><div class="mut">chargé ' + fmt(k.charge) + ' gal · livré ' + fmt(k.livre) + ' gal (' + k.nb + ') · reçu ' + fmt(Math.round((k.recu + k.paiements) * 100) / 100) + ' · crédit ' + fmt(k.credit) + ' · achats ' + fmt(k.achats) + '</div>' +
-        (r.fait ? '<div>✅ ' + esc(r.employes) + ' — argent remis <b>' + fmt(r.remis) + ' ' + esc(dv) + '</b> (attendu ' + fmt(k.attendu) + ')' + (r.difference ? ' — <b style="color:var(--bad)">différence ' + fmt(r.difference) + '</b>' : '') + '</div>' +
+        (r.fait ? '<div>✅ ' + esc(r.employes) + ' — argent <b>' + fmt(r.remis) + ' ' + esc(dv) + '</b> (attendu ' + fmt(k.attendu) + ')' + (r.difference ? ' — <b style="color:var(--bad)">différence ' + fmt(r.difference) + '</b>' : '') + '</div>' +
+          (r.ou ? (r.ou.depose ? '<div>🏦 Déposé : <b>' + fmt(r.ou.depose) + '</b> pour ' + esc(r.ou.depose_pour) + ', par <b>' + esc(r.ou.depose_par) + '</b></div>' : '') +
+            (r.ou.bureau ? '<div>🏢 Au bureau : <b>' + fmt(r.ou.bureau) + '</b>, reçu par <b>' + esc(r.ou.bureau_qui) + '</b></div>' : '') +
+            (r.ou.main ? '<div>👤 En main : <b>' + fmt(r.ou.main) + '</b>, gardé par <b>' + esc(r.ou.main_qui) + '</b></div>' : '')
+            : '<div class="mut">Rapport fait avant le détail « où est l\'argent » : seul le total est connu.</div>') +
           (r.change ? '<div class="mut">Des opérations ont été reçues ou annulées après ce rapport.</div>' : '') + (r.note ? '<div class="mut">' + esc(r.note) + '</div>' : '')
           : '<div><b style="color:var(--bad)">⚠️ rapport du jour pas fait</b></div>') + '</div><div style="text-align:right">' + (r.fichier ? '<button class="sec" style="padding:6px 10px" onclick="phVoir(\'' + esc(r.fichier) + '\',\'r' + i + '\')">Voir</button>' : '') +
         (r.fait && dir ? '<div><a href="#" onclick="camRapAnnuler(\'' + esc(r.id) + '\');return false">Annuler</a></div>' : '') + '</div></div><div id="phvr' + i + '"></div></div>';

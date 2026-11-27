@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.26';
+var MOBILE_VERSION = 'm1.27';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var STATION_FORMATION = 'TST', MAX_APPAREILS_FORMATION = 50;   // les codes de la station de test servent à la formation : plusieurs téléphones avec le même code (propriétaire, 26/11/2026)
 var MAX_APPAREILS_ROLE = 5;   // un code DIR ou CPT peut servir sur 5 appareils en même temps (demande du propriétaire, 26/11/2026)
@@ -784,7 +784,7 @@ function resumeApp_(date) {
     if (cr.length) t += '\n\n🚚 Camions (' + jr.split('-').reverse().join('/') + ', ' + CURRENCY + ')\n' + cr.map(function (x) {
       var k = x.totaux, n = function (v) { return Number(v).toLocaleString('fr-FR'); };
       return '• ' + x.camion_nom + ' : chargé ' + n(k.charge) + ' gal, livré ' + n(k.livre) + ' gal (' + k.nb + ' livraison(s)), reçu ' + n(k.recu + k.paiements) + ', crédit ' + n(k.credit) + ', achats ' + n(k.achats) +
-        (k.sans_prix ? ', ' + k.sans_prix + ' livraison(s) sans prix' : '') + (x.fait ? ' — rapport fait : argent remis ' + n(x.remis) + (x.difference ? ', différence ' + n(x.difference) : '') : ' — ⚠️ rapport du jour pas encore fait');
+        (k.sans_prix ? ', ' + k.sans_prix + ' livraison(s) sans prix' : '') + (x.fait ? ' — rapport fait : argent ' + n(x.remis) + (x.ou ? ' (' + [x.ou.depose ? 'déposé ' + n(x.ou.depose) + ' par ' + x.ou.depose_par : '', x.ou.bureau ? 'au bureau ' + n(x.ou.bureau) + ' reçu par ' + x.ou.bureau_qui : '', x.ou.main ? 'en main ' + n(x.ou.main) + ' gardé par ' + x.ou.main_qui : ''].filter(String).join(' ; ') + ')' : '') + (x.difference ? ', différence ' + n(x.difference) : '') : ' — ⚠️ rapport du jour pas encore fait');
     }).join('\n');
   } catch (e) { console.error(e && e.stack || e); }   // les camions non plus
   return t;
@@ -1108,6 +1108,7 @@ function camDe_(station) {   // « CAM:1 » → le camion, ou null
 /* Ajoute à droite les colonnes qui manquent dans un onglet déjà créé. N'écrit que dans des cases d'en-tête vides : rien n'est écrasé. */
 function camEntetes_(sh, entetes) {
   if (sh.getLastColumn() >= entetes.length) return;
+  if (sh.getMaxColumns() < entetes.length) sh.insertColumnsAfter(sh.getMaxColumns(), entetes.length - sh.getMaxColumns());
   var l = sh.getRange(1, 1, 1, entetes.length).getValues()[0];
   for (var i = 0; i < entetes.length; i++) if (!String(l[i] || '').trim()) sh.getRange(1, i + 1).setValue(entetes[i]);
 }
@@ -1397,7 +1398,10 @@ function camAnnuler_(ctx, p) {
  */
 var CRP_ONGLET = 'Rapports camion (app)';
 var CRP_ENTETES = ['id', 'date', 'camion', 'employes', 'charge_gal', 'livre_gal', 'nb_livraisons', 'montant_livraisons', 'recu_livraisons', 'credit', 'paiements_recus', 'achats',
-  'autres_monnaies', 'argent_attendu', 'argent_remis', 'difference', 'sans_prix', 'note', 'fait_le', 'recu_le', 'fichier_id', 'appareil', 'cid', 'annule'];
+  'autres_monnaies', 'argent_attendu', 'argent_remis', 'difference', 'sans_prix', 'note', 'fait_le', 'recu_le', 'fichier_id', 'appareil', 'cid', 'annule',
+  'depose', 'depose_pour', 'depose_par', 'remis_bureau', 'remis_bureau_a', 'en_main', 'en_main_par'];
+/* Où est l'argent de la journée (m1.27, propriétaire, 27/11/2026) : déposé à la banque, remis au bureau, ou gardé en main — chaque montant avec
+ * le nom de la personne qui a l'argent. « argent_remis » reste le total des trois. Un rapport d'avant m1.27 n'a que le total : le détail reste vide. */
 /** Totaux d'un camion pour un jour, dans la monnaie des rapports. Les gourdes sont converties (5 gourdes = 1 dollar haïtien) ; les dollars US sont listés à part. */
 function camTotauxJour_(ops, camion, date) {
   var t = { charge: 0, livre: 0, nb: 0, montant: 0, recu: 0, credit: 0, paiements: 0, achats: 0, autres: {}, sans_prix: 0 };
@@ -1419,12 +1423,14 @@ function camTotauxJour_(ops, camion, date) {
 }
 function camRapports_(max) {
   var sh = camFeuille_(CRP_ONGLET, CRP_ENTETES), n = sh.getLastRow();
+  camEntetes_(sh, CRP_ENTETES);
   if (n < 2) return [];
   var from = Math.max(2, n - (max || 3000) + 1), nbr = function (v) { return v === '' || v === null ? '' : Number(v); };
   return sh.getRange(from, 1, n - from + 1, CRP_ENTETES.length).getValues().map(function (r, i) {
     return { ligne: from + i, id: String(r[0]), date: phJour_(r[1]), camion: String(r[2]).trim().toUpperCase(), employes: String(r[3] || ''), charge: nbr(r[4]), livre: nbr(r[5]), nb: nbr(r[6]), montant: nbr(r[7]),
       recu: nbr(r[8]), credit: nbr(r[9]), paiements: nbr(r[10]), achats: nbr(r[11]), autres: String(r[12] || ''), attendu: nbr(r[13]), remis: nbr(r[14]), difference: nbr(r[15]), sans_prix: nbr(r[16]),
-      note: String(r[17] || ''), fait_le: phTexte_(r[18]), fichier_id: String(r[20] || ''), cid: String(r[22] || ''), annule: estVrai_(r[23]) };
+      note: String(r[17] || ''), fait_le: phTexte_(r[18]), fichier_id: String(r[20] || ''), cid: String(r[22] || ''), annule: estVrai_(r[23]),
+      depose: nbr(r[24]), depose_pour: String(r[25] || ''), depose_par: String(r[26] || ''), bureau: nbr(r[27]), bureau_qui: String(r[28] || ''), main: nbr(r[29]), main_qui: String(r[30] || '') };
   });
 }
 /** Pour le téléphone du camion : rapports d'aujourd'hui et des 7 jours d'avant (faits ou non), pour envoyer ceux qui manquent (propriétaire, 26/11/2026). */
@@ -1443,9 +1449,24 @@ function camRapport_(app, p) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > auj || date < msgJour_(-7)) throw new UserError('Date du rapport invalide.');
   var employes = String(p.employes || '').trim().slice(0, 150);
   if (!employes) throw new UserError('Écrivez les employés du camion.');
-  var rs = String(p.remis === undefined || p.remis === null ? '' : p.remis).trim(), remis = rs === '0' ? '0' : phNombre_(rs);
-  if (remis === '') throw new UserError('Argent remis illisible. Écrivez seulement les chiffres (0 si rien).');
-  remis = Number(remis);
+  var detail = ['depose', 'bureau', 'main'].some(function (k) { return p[k] !== undefined && p[k] !== null; }), remis, ou = { depose: '', depose_pour: '', depose_par: '', bureau: '', bureau_qui: '', main: '', main_qui: '' };
+  if (detail) {   // téléphone m1.27 : trois endroits possibles, chacun avec le nom de la personne qui a l'argent
+    var mt = function (k, quoi) { var v = String(p[k] === undefined || p[k] === null ? '' : p[k]).trim(); if (v === '' || v === '0') return 0; var x = phNombre_(v); if (x === '') throw new UserError(quoi + ' : montant illisible. Écrivez seulement les chiffres.'); return Number(x); };
+    var nom = function (k) { return String(p[k] || '').trim().replace(/\s+/g, ' ').slice(0, 60); };
+    ou.depose = mt('depose', 'Dépôt à la banque'); ou.bureau = mt('bureau', 'Argent remis au bureau'); ou.main = mt('main', 'Argent gardé en main');
+    if (ou.depose > 0) {
+      ou.depose_pour = BD_BENEF.indexOf(String(p.depose_pour)) >= 0 ? String(p.depose_pour) : 'Autre'; ou.depose_par = nom('depose_par');
+      if (!ou.depose_par) throw new UserError('Écrivez le nom de la personne qui a fait le dépôt.');
+      if (!String(p.photo || '')) throw new UserError('Il faut la photo du bordereau de dépôt.');
+    }
+    if (ou.bureau > 0) { ou.bureau_qui = nom('bureau_qui'); if (!ou.bureau_qui) throw new UserError('Écrivez le nom de la personne du bureau qui a reçu l\'argent.'); }
+    if (ou.main > 0) { ou.main_qui = nom('main_qui'); if (!ou.main_qui) throw new UserError('Écrivez le nom de la personne qui garde l\'argent.'); }
+    remis = Math.round((ou.depose + ou.bureau + ou.main) * 100) / 100;
+  } else {
+    var rs = String(p.remis === undefined || p.remis === null ? '' : p.remis).trim(); remis = rs === '0' ? '0' : phNombre_(rs);
+    if (remis === '') throw new UserError('Argent remis illisible. Écrivez seulement les chiffres (0 si rien).');
+    remis = Number(remis);
+  }
   var photo = String(p.photo || ''), m = photo.match(/^data:image\/jpeg;base64,(.+)$/), octets = null;
   if (photo && !m) throw new UserError('Photo invalide.');
   if (m) { octets = Utilities.base64Decode(m[1]); if (octets.length > 3000000) throw new UserError('Photo trop lourde.'); }
@@ -1461,8 +1482,10 @@ function camRapport_(app, p) {
       f.setDescription('Rapport du jour (application RRD) — ' + cam.nom + ' — ' + date + ' — ' + cid); fid = f.getId();
     }
     var sh = camFeuille_(CRP_ONGLET, CRP_ENTETES), id = 'RC' + date.replace(/-/g, '').slice(2) + '-' + cam.code + '-' + sh.getLastRow();
+    camEntetes_(sh, CRP_ENTETES);
     sh.appendRow([id, date, cam.code, employes, t.charge, t.livre, t.nb, t.montant, t.recu, t.credit, t.paiements, t.achats, Object.keys(t.autres).map(function (k) { return k + ' : ' + t.autres[k]; }).join(' ; '),
-      t.attendu, remis, Math.round((t.attendu - remis) * 100) / 100, t.sans_prix, String(p.note || '').slice(0, 300), Utilities.formatDate(fait, TZ, 'yyyy-MM-dd HH:mm:ss'), Utilities.formatDate(recu, TZ, 'yyyy-MM-dd HH:mm:ss'), fid, app.id, cid, '']);
+      t.attendu, remis, Math.round((t.attendu - remis) * 100) / 100, t.sans_prix, String(p.note || '').slice(0, 300), Utilities.formatDate(fait, TZ, 'yyyy-MM-dd HH:mm:ss'), Utilities.formatDate(recu, TZ, 'yyyy-MM-dd HH:mm:ss'), fid, app.id, cid, '',
+      ou.depose, ou.depose_pour, ou.depose_par, ou.bureau, ou.bureau_qui, ou.main, ou.main_qui]);
     return { recu: true, cid: cid, id: id };
   } finally { lock.releaseLock(); }
 }
@@ -1488,7 +1511,8 @@ function camRapportsVue_(du, au, filtre) {
   Object.keys(cles).sort().reverse().forEach(function (k) {
     var d = k.split('|')[0], cam = k.split('|')[1], r = raps.filter(function (x) { return x.date === d && x.camion === cam; })[0], t = camTotauxJour_(ops, cam, d);
     out.push({ date: d, camion: cam, camion_nom: noms[cam] || cam, totaux: t, fait: !!r, id: r ? r.id : '', employes: r ? r.employes : '', remis: r ? r.remis : '', fait_le: r ? r.fait_le : '', note: r ? r.note : '', fichier: r ? r.fichier_id : '',
-      difference: r ? Math.round((t.attendu - r.remis) * 100) / 100 : '', change: !!r && (r.attendu !== t.attendu || r.livre !== t.livre) });
+      difference: r ? Math.round((t.attendu - r.remis) * 100) / 100 : '', change: !!r && (r.attendu !== t.attendu || r.livre !== t.livre),
+      ou: r && (r.depose !== '' || r.bureau !== '' || r.main !== '') ? { depose: r.depose || 0, depose_pour: r.depose_pour, depose_par: r.depose_par, bureau: r.bureau || 0, bureau_qui: r.bureau_qui, main: r.main || 0, main_qui: r.main_qui } : null });
   });
   return out;
 }
