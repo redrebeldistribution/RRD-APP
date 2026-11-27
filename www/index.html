@@ -73,7 +73,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.24.0';
+var VERSION_APP = '1.25.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -1132,7 +1132,12 @@ function cmCliChange() {
       hist.sort(function (a, b) { return (a.date + a.heure) < (b.date + b.heure) ? 1 : -1; });
       ((d.historique || {})[v] || []).forEach(function (o) { if (!vus[o.cid]) hist.push(o); });
       hist = hist.slice(0, 5);
-      $('cmHist').innerHTML = '<div class="note"><b>5 dernières opérations de ce client</b>' + (hist.length ? hist.map(function (o) { return '<div>' + dfr(o.date).slice(0, 5) + ' · ' + cmLigne(o) + '</div>'; }).join('') : '<div class="mut">Aucune opération enregistrée dans l\'application pour ce client.</div>') + '</div>';
+      var c0 = (d.clients || []).filter(function (x) { return x.id === v; })[0], dv0 = esc(cmDev()), sol = '';
+      var du = function (x) { return x > 0 ? '<b style="color:var(--bad)">' + fmt(x) + ' ' + dv0 + '</b>' : x < 0 ? '<b style="color:var(--ok)">avance de ' + fmt(-x) + ' ' + dv0 + '</b>' : '<b style="color:var(--ok)">rien</b>'; };
+      if (c0 && typeof c0.solde === 'number') sol = '<div class="note"><div>Ce client doit : ' + du(c0.solde) + '</div>' +
+        (c0.groupe ? '<div>Tout le client ' + esc(c0.groupe) + ' (' + c0.nb_groupe + ' points de livraison) : ' + du(c0.solde_groupe) + '</div>' : '') +
+        '<div class="mut">D\'après le bureau. Les opérations pas encore envoyées n\'y sont pas.</div></div>';
+      $('cmHist').innerHTML = sol + '<div class="note"><b>5 dernières opérations de ce client</b>' + (hist.length ? hist.map(function (o) { return '<div>' + dfr(o.date).slice(0, 5) + ' · ' + cmLigne(o) + '</div>'; }).join('') : '<div class="mut">Aucune opération enregistrée dans l\'application pour ce client.</div>') + '</div>';
     });
   }
   if ($('cmMt')) cmMontant();
@@ -1808,6 +1813,23 @@ function ongletCamion(data, msg) {
       '<div>Paiements reçus (anciens crédits) : <b>' + fmt(t.encaisse) + ' ' + esc(dv) + '</b></div>' + Object.keys(t.achats).map(function (k) { return '<div>' + (k.indexOf('Paiements') === 0 ? esc(k) : 'Achats en ' + esc(k)) + ' : <b>' + fmt(t.achats[k]) + '</b></div>'; }).join('') +
       (t.sans_prix ? '<div class="wait">' + t.sans_prix + ' livraison(s) sans prix : le montant est resté vide. Fixez le prix du client plus bas ; les prochaines livraisons seront calculées.</div>' : '') +
       '<div class="mut">Gallons tapés par le chauffeur, prix du bureau. Vérifiez avec la photo du bon.</div></div>';
+    if (d.soldes) {
+      var dus = d.soldes.filter(function (g) { return g.solde > 0; }), autresG = d.soldes.filter(function (g) { return g.solde <= 0 && (g.solde < 0 || g.sans_prix || Object.keys(g.autres || {}).length); });
+      var totDu = 0; dus.forEach(function (g) { totDu += g.solde; }); totDu = Math.round(totDu * 100) / 100;
+      h += '<h2>Ce que les clients doivent</h2><div class="card"><div class="big" style="color:' + (totDu > 0 ? 'var(--bad)' : 'var(--ok)') + '">' + fmt(totDu) + ' ' + esc(dv) + '</div><div>' + dus.length + ' client(s) avec un crédit en cours</div>' +
+        '<div class="mut">Solde = solde de départ + crédits des livraisons − paiements reçus. Tous les camions et toutes les dates, sans le camion de test ni les opérations annulées. ' +
+        'Ce qu\'un client devait avant l\'application n\'est compté que si vous écrivez son solde de départ (plus bas, dans la liste des clients).</div></div>';
+      dus.concat(autresG).forEach(function (g) {
+        var aut = Object.keys(g.autres || {});
+        h += '<div class="card"><div class="row"><div><b>' + esc(g.nom) + '</b>' + (g.groupe ? ' <span class="badge">' + g.membres.length + ' points de livraison</span>' : '') +
+          (g.groupe ? g.membres.map(function (m) { return '<div class="mut">' + esc(m.nom) + ' : ' + fmt(m.solde) + '</div>'; }).join('') : '') +
+          (aut.length ? '<div class="wait" style="margin:6px 0 0">Paiements reçus dans une autre monnaie, pas déduits : ' + aut.map(function (k) { return fmt(g.autres[k]) + ' ' + esc(k); }).join(', ') + '</div>' : '') +
+          (g.sans_prix ? '<div class="wait" style="margin:6px 0 0">' + g.sans_prix + ' livraison(s) sans prix : pas comptée(s).</div>' : '') +
+          (g.dernier ? '<div class="mut">Dernière opération : ' + dfr(g.dernier) + '</div>' : '') + '</div>' +
+          '<div style="text-align:right"><div class="big" style="font-size:20px;color:' + (g.solde > 0 ? 'var(--bad)' : 'var(--ok)') + '">' + (g.solde < 0 ? 'avance ' + fmt(-g.solde) : fmt(g.solde)) + '</div><button class="sec" style="padding:6px 10px" onclick="camReleve(\'' + esc(g.cle) + '\')">Relevé</button></div></div></div>';
+      });
+      h += '<p class="mut">' + (d.soldes.length - dus.length - autresG.length) + ' client(s) ne doivent rien.</p>';
+    }
     if ((d.rapports || []).length) h += '<h2>Rapports du jour</h2>' + d.rapports.map(function (r, i) {
       var k = r.totaux;
       return '<div class="card"><div class="row"><div><b>' + dfr(r.date).slice(0, 5) + ' · ' + esc(r.camion_nom) + '</b><div class="mut">chargé ' + fmt(k.charge) + ' gal · livré ' + fmt(k.livre) + ' gal (' + k.nb + ') · reçu ' + fmt(Math.round((k.recu + k.paiements) * 100) / 100) + ' · crédit ' + fmt(k.credit) + ' · achats ' + fmt(k.achats) + '</div>' +
@@ -1828,10 +1850,13 @@ function ongletCamion(data, msg) {
     h += '<h2>Clients et prix au gallon (' + esc(dv) + ')</h2><p class="mut">Le chauffeur ne tape que les gallons : le montant est calculé avec le prix écrit ici. Un changement de prix ne touche pas les livraisons déjà reçues.</p>' +
       '<div class="card"><div class="row"><div><b>Prix pour un client sans prix</b><div class="mut">' + (def && def.prix > 0 ? fmt(def.prix) + ' ' + esc(dv) + ' le gallon' : '<b style="color:var(--bad)">pas encore fixé</b>') + '</div></div><div><button class="sec" onclick="camPrix(\'DEFAUT\')">Changer</button></div></div></div>';
     d.clients.filter(function (c) { return c.id !== 'DEFAUT'; }).sort(function (a, b) { return a.nom.toLowerCase() < b.nom.toLowerCase() ? -1 : 1; }).forEach(function (c) {
-      h += '<div class="card"' + (c.actif ? '' : ' style="opacity:.5"') + '><div class="row"><div><b>' + esc(c.nom) + '</b>' + (c.actif ? '' : ' <span class="badge">retiré</span>') + '<div class="mut">' + (c.prix > 0 ? fmt(c.prix) + ' ' + esc(dv) + ' le gallon' : 'prix par défaut') + (c.station ? ' · station : ' + esc(stN[c.station] || c.station) : '') + '</div></div>' +
+      h += '<div class="card"' + (c.actif ? '' : ' style="opacity:.5"') + '><div class="row"><div><b>' + esc(c.nom) + '</b>' + (c.actif ? '' : ' <span class="badge">retiré</span>') + '<div class="mut">' + (c.prix > 0 ? fmt(c.prix) + ' ' + esc(dv) + ' le gallon' : 'prix par défaut') + (c.station ? ' · station : ' + esc(stN[c.station] || c.station) : '') + (c.groupe ? ' · groupe : <b>' + esc(c.groupe) + '</b>' : '') + '</div>' +
+        (d.soldes ? '<div class="mut">' + (c.depart === null || c.depart === undefined ? 'Pas de solde de départ' : 'Solde de départ : <b>' + fmt(c.depart) + '</b> au ' + dfr(c.depart_le)) +
+          ' · <a href="#" onclick="camGroupe(\'' + esc(c.id) + '\');return false">Groupe</a> · <a href="#" onclick="camDepart(\'' + esc(c.id) + '\');return false">Solde de départ</a> · <a href="#" onclick="camReleve(\'' + esc(c.id) + '\',1);return false">Relevé</a></div>' : '') + '</div>' +
         '<div><button class="sec" onclick="camPrix(\'' + esc(c.id) + '\')">Prix</button> <button class="sec" onclick="camActif(\'' + esc(c.id) + '\',' + (c.actif ? 'false' : 'true') + ')">' + (c.actif ? 'Retirer' : 'Remettre') + '</button></div></div></div>';
     });
     h += '<h2>Nouveau client</h2><label>Nom</label><input id="ccNom" autocomplete="off"><label>Prix au gallon (' + esc(dv) + ') — vide = prix par défaut</label><input id="ccPrix" inputmode="decimal" autocomplete="off">' +
+      '<label>Groupe (si ce client a plusieurs points de livraison) — facultatif</label><input id="ccGr" autocomplete="off" maxlength="40">' +
       '<label>C\'est une de nos stations ? (pour le stock estimé)</label><select id="ccSt"><option value="">Non</option>' + d.stations.map(function (s) { return '<option value="' + esc(s.code) + '">' + esc(s.nom) + '</option>'; }).join('') + '</select>' +
       '<div style="margin-top:10px"><button id="bCc" onclick="camClientAjouter()">Ajouter le client</button></div>';
     view(h);
@@ -1847,10 +1872,58 @@ function camPrix(id) {
   if (v === null || !String(v).trim()) return;
   call('camClient', { id: id, prix: String(v).trim(), vue: camVue() }).then(function (d) { ongletCamion(d, 'Prix enregistré.'); }).catch(function (e) { alerte(e.erreur || 'Pas de connexion.'); });
 }
+/* Groupe : réunit les points de livraison d'un même client pour additionner ce qu'il doit. */
+function camGroupe(id) {
+  var c = CAMD.clients.filter(function (x) { return x.id === id; })[0]; if (!c) return;
+  var noms = {}; CAMD.clients.forEach(function (x) { if (x.groupe) noms[x.groupe] = 1; });
+  var v = prompt('Groupe de ' + c.nom + ' : le nom du client qui possède plusieurs points de livraison.' + (Object.keys(noms).length ? '\nGroupes déjà créés : ' + Object.keys(noms).sort().join(', ') + '.' : '') + '\nLaissez vide pour le sortir de son groupe.', c.groupe || '');
+  if (v === null) return;
+  call('camClient', { id: id, groupe: String(v).trim(), vue: camVue() }).then(function (d) { ongletCamion(d, String(v).trim() ? c.nom + ' est dans le groupe ' + String(v).trim() + '.' : c.nom + ' n\'est plus dans un groupe.'); }).catch(function (e) { alerte(e.erreur || 'Pas de connexion.'); });
+}
+/* Solde de départ : ce que le client devait avant l'application. Toujours avec sa date et sa source ; jamais deviné. */
+function camDepart(id) {
+  var c = CAMD.clients.filter(function (x) { return x.id === id; })[0]; if (!c) return;
+  var a = c.depart !== null && c.depart !== undefined, hier = jourPlus(CAMD.aujourdhui, -1);
+  view('<h1>Solde de départ</h1><div class="sub">' + esc(c.nom) + '</div>' +
+    '<p class="mut">Ce que ce client devait avant l\'application, à la fin du jour choisi. Les livraisons et paiements de l\'application jusqu\'à ce jour ne sont pas recomptés ; ceux d\'après s\'ajoutent.</p>' +
+    '<label>Montant dû (' + esc(CAMD.devise || DEV) + ') — avec un signe moins si le client a une avance</label><input id="sdMt" autocomplete="off" value="' + (a ? esc(String(c.depart)) : '') + '" placeholder="seulement les chiffres">' +
+    '<label>À la fin du</label><input type="date" id="sdLe" value="' + esc(a && c.depart_le ? c.depart_le : hier) + '" max="' + CAMD.aujourdhui + '">' +
+    '<label>D\'où vient ce chiffre ? (obligatoire)</label><input id="sdSrc" autocomplete="off" maxlength="150" placeholder="cahier des crédits, relevé, feuille…">' +
+    (a ? '<div class="note">Aujourd\'hui : ' + fmt(c.depart) + ' au ' + dfr(c.depart_le) + '<div class="mut">' + esc(c.depart_source || '') + '</div></div><div style="margin-top:10px"><a href="#" onclick="camDepartOk(\'' + esc(id) + '\',1);return false">Retirer le solde de départ</a></div>' : ''),
+    '<button class="sec" onclick="tableau(\'camion\')">Annuler</button><button id="bSd" onclick="camDepartOk(\'' + esc(id) + '\')">Enregistrer</button>', 'camDepart');
+}
+function camDepartOk(id, retirer) {
+  var p = retirer ? { id: id, depart: '', vue: camVue() } : { id: id, depart: String($('sdMt').value || '').trim(), depart_le: $('sdLe').value, depart_source: String($('sdSrc').value || '').trim(), vue: camVue() };
+  if (retirer && !confirm('Retirer le solde de départ de ce client ?')) return;
+  if (!retirer && !p.depart) return alerte('Écrivez le montant, seulement les chiffres.');
+  if (!retirer && p.depart_source.length < 3) return alerte('Écrivez d\'où vient ce chiffre (cahier, relevé, feuille…).');
+  if ($('bSd')) $('bSd').disabled = true;
+  call('camClient', p).then(function (d) { ongletCamion(d, retirer ? 'Solde de départ retiré.' : 'Solde de départ enregistré.'); }).catch(function (e) { if ($('bSd')) $('bSd').disabled = false; alerte(e.erreur || 'Pas de connexion.'); });
+}
+/* Relevé : chaque livraison et chaque paiement du client (ou de tout son groupe), avec le solde après chacun. seul = 1 : ce point de livraison seulement. */
+function camReleve(cle, seul) {
+  if (seul) { var g = ((CAMD && CAMD.soldes) || []).filter(function (x) { return x.membres.some(function (m) { return m.cle === cle; }); })[0]; if (g && !g.groupe) cle = g.cle; }
+  call('camReleve', { cle: cle }).then(function (r) {
+    var dv = esc(r.devise || DEV), plus = r.membres.length > 1, aut = Object.keys(r.autres || {});
+    var h = '<h1>Relevé — ' + esc(r.nom) + '</h1><div class="sub">' + (plus ? r.membres.length + ' points de livraison · ' : '') + 'calculé le ' + esc(r.calcule_le) + '</div>' +
+      '<div class="card center"><div class="mut">' + (r.solde < 0 ? 'Avance du client' : 'Le client doit') + '</div><div class="big" style="color:' + (r.solde > 0 ? 'var(--bad)' : 'var(--ok)') + '">' + fmt(Math.abs(r.solde)) + ' ' + dv + '</div></div>' +
+      '<div class="card">' + r.membres.map(function (m) {
+        return '<div>' + (plus ? '<b>' + esc(m.nom) + '</b> : ' + fmt(m.solde) + ' — ' : '') + (m.depart === null || m.depart === undefined ? '<span class="mut">pas de solde de départ</span>' : 'solde de départ ' + fmt(m.depart) + ' au ' + dfr(m.depart_le) + '<div class="mut">' + esc(m.depart_source || '') + '</div>') + '</div>';
+      }).join('') + '</div>' +
+      (aut.length ? '<div class="wait">Paiements reçus dans une autre monnaie, pas déduits du solde : ' + aut.map(function (k) { return fmt(r.autres[k]) + ' ' + esc(k); }).join(', ') + '.</div>' : '') +
+      (r.sans_prix ? '<div class="wait">' + r.sans_prix + ' livraison(s) sans prix : pas comptée(s) dans le solde.</div>' : '');
+    if (!r.lignes.length) h += '<p class="mut">Aucune livraison ni paiement dans l\'application pour ce client.</p>';
+    else h += '<table><tr><th>Date</th><th>Opération</th><th class="n">Effet</th><th class="n">Solde</th></tr>' + (r.depart ? '<tr><td></td><td class="mut">Solde de départ</td><td class="n"></td><td class="n">' + fmt(r.depart) + '</td></tr>' : '') + r.lignes.map(function (l) {
+      return '<tr><td>' + dfr(l.date).slice(0, 5) + '<div class="mut">' + esc(l.heure) + '</div></td><td>' + (plus ? '<b>' + esc(l.client) + '</b><br>' : '') + cmLigne(l) + (l.bon_no ? '<div class="mut">bon n° ' + esc(l.bon_no) + '</div>' : '') + '</td>' +
+        '<td class="n">' + (l.effet === null ? '<span class="mut">à part</span>' : l.effet > 0 ? '+' + fmt(l.effet) : l.effet < 0 ? '−' + fmt(-l.effet) : '0') + '</td><td class="n"><b>' + fmt(l.solde) + '</b></td></tr>';
+    }).join('') + '</table>';
+    view(h, '<button class="sec" onclick="tableau(\'camion\')">Retour</button>', 'camReleve');
+  }).catch(function (e) { alerte(e.erreur || 'Pas de connexion.'); });
+}
 function camActif(id, actif) { call('camClient', { id: id, actif: actif, vue: camVue() }).then(function (d) { ongletCamion(d, actif ? 'Client remis dans la liste.' : 'Client retiré de la liste du chauffeur.'); }).catch(function (e) { alerte(e.erreur || 'Pas de connexion.'); }); }
 function camClientAjouter() {
   $('bCc').disabled = true;
-  call('camClient', { nom: $('ccNom').value, prix: $('ccPrix').value, station: $('ccSt').value, vue: camVue() }).then(function (d) { ongletCamion(d, 'Client ajouté.'); }).catch(function (e) { $('bCc').disabled = false; alerte(e.erreur || 'Pas de connexion.'); });
+  call('camClient', { nom: $('ccNom').value, prix: $('ccPrix').value, station: $('ccSt').value, groupe: $('ccGr') ? $('ccGr').value : '', vue: camVue() }).then(function (d) { ongletCamion(d, 'Client ajouté.'); }).catch(function (e) { $('bCc').disabled = false; alerte(e.erreur || 'Pas de connexion.'); });
 }
 function camRapAnnuler(id) {
   var m = prompt('Pourquoi annuler ce rapport ? (le chauffeur pourra le refaire)'); if (m === null || !String(m).trim()) return;

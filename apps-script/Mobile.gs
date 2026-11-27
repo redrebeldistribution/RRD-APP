@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.25';
+var MOBILE_VERSION = 'm1.26';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var STATION_FORMATION = 'TST', MAX_APPAREILS_FORMATION = 50;   // les codes de la station de test servent à la formation : plusieurs téléphones avec le même code (propriétaire, 26/11/2026)
 var MAX_APPAREILS_ROLE = 5;   // un code DIR ou CPT peut servir sur 5 appareils en même temps (demande du propriétaire, 26/11/2026)
@@ -435,6 +435,7 @@ function direction_(app, sous, p) {
     case 'stockRegler': exiger_(ctx, ['management']); return stockRegler_(ctx, p);
     case 'camion': exiger_(ctx, ['management', 'accounting']); return camListe_(p);
     case 'camClient': exiger_(ctx, ['management', 'accounting']); return camClient_(ctx, p);
+    case 'camReleve': exiger_(ctx, ['management', 'accounting']); return camReleve_(p);
     case 'camAnnuler': exiger_(ctx, ['management']); return camAnnuler_(ctx, p);
     case 'camRapportAnnuler': exiger_(ctx, ['management']); return camRapportAnnuler_(ctx, p);
     default: throw new UserError('Action inconnue.');
@@ -1078,7 +1079,7 @@ function messageSupprimer_(ctx, p) {
 var CAM_ONGLET = 'Camions', CAM_ENTETES = ['code', 'nom', 'actif', 'note'];
 var CAM_DEFAUT = [['1', 'Camion 1'], ['2', 'Camion 2'], ['3', 'Camion 3'], ['TEST', 'Camion test (formation)']];
 var CAM_TEST = 'TEST', CAM_CODE_TEST = 'CMT-0001';
-var CCL_ONGLET = 'Clients camion', CCL_ENTETES = ['id', 'nom', 'prix_gal', 'station', 'actif', 'modifie_le', 'modifie_par', 'note'];
+var CCL_ONGLET = 'Clients camion', CCL_ENTETES = ['id', 'nom', 'prix_gal', 'station', 'actif', 'modifie_le', 'modifie_par', 'note', 'groupe', 'solde_depart', 'solde_depart_le', 'solde_depart_source'];
 var CCL_DEFAUT = 'DEFAUT';   // ligne spéciale : prix pour un client qui n'a pas encore son prix
 var COP_ONGLET = 'Camion (app)';
 var COP_ENTETES = ['id', 'genre', 'date', 'camion', 'client_id', 'client', 'gallons', 'prix_gal', 'montant', 'paye', 'credit', 'devise', 'bon_no', 'fournisseur', 'detail',
@@ -1104,11 +1105,85 @@ function camDe_(station) {   // « CAM:1 » → le camion, ou null
   var code = String(station || '').trim().toUpperCase().replace(/^CAM:/, '');
   return camions_().filter(function (c) { return c.code === code && c.actif; })[0] || null;
 }
+/* Ajoute à droite les colonnes qui manquent dans un onglet déjà créé. N'écrit que dans des cases d'en-tête vides : rien n'est écrasé. */
+function camEntetes_(sh, entetes) {
+  if (sh.getLastColumn() >= entetes.length) return;
+  var l = sh.getRange(1, 1, 1, entetes.length).getValues()[0];
+  for (var i = 0; i < entetes.length; i++) if (!String(l[i] || '').trim()) sh.getRange(1, i + 1).setValue(entetes[i]);
+}
+/* Clients des camions. « groupe » réunit les points de livraison d'un même client (m1.26) ; « solde_depart » est ce que le client devait
+ * au soir de « solde_depart_le », écrit par le bureau avec sa source : l'application ne l'invente jamais (vide = pas de solde de départ). */
 function camClients_() {
   var sh = camFeuille_(CCL_ONGLET, CCL_ENTETES, [[CCL_DEFAUT, '(prix pour un client sans prix)', '', '', 'oui', maintenant_(), '', 'à remplir par le bureau']]);
-  return camLignes_(sh, 5).map(function (r, i) {
-    return { ligne: i + 2, id: String(r[0]).trim(), nom: String(r[1] || '').trim(), prix: stkNum_(r[2]) || 0, station: String(r[3] || '').trim().toUpperCase(), actif: estVrai_(r[4]) };
+  camEntetes_(sh, CCL_ENTETES);
+  return camLignes_(sh, CCL_ENTETES.length).map(function (r, i) {
+    var dep = r[9] === '' || r[9] === null || r[9] === undefined || String(r[9]).trim() === '' ? null : stkNum_(r[9]);
+    return { ligne: i + 2, id: String(r[0]).trim(), nom: String(r[1] || '').trim(), prix: stkNum_(r[2]) || 0, station: String(r[3] || '').trim().toUpperCase(), actif: estVrai_(r[4]),
+      groupe: String(r[8] || '').trim(), depart: dep, depart_le: dep === null ? '' : phJour_(r[10]), depart_source: dep === null ? '' : String(r[11] || '').trim() };
   }).filter(function (c) { return c.id; });
+}
+/* ============================ Soldes des clients des camions (m1.26, 27/11/2026) ============================
+ * Demande du propriétaire (27/11/2026) : savoir ce que chaque client doit, en réunissant les stations d'un même client.
+ * Solde = solde de départ (bureau) + crédits des livraisons − paiements reçus, dans la monnaie des rapports.
+ * Les gourdes sont converties (5 gourdes = 1 dollar haïtien) ; les paiements dans une autre monnaie sont listés à part, jamais convertis.
+ * Opérations annulées et camion de test : jamais comptés. Une livraison sans prix n'a pas de montant : elle est signalée, pas estimée. */
+function camCle_(o) { return o.client_id || ('N:' + String(o.client || '').trim().toLowerCase()); }
+function camArr_(x) { return Math.round(x * 100) / 100; }
+function camEffet_(o) {   // effet d'une opération sur le solde, dans la monnaie des rapports ; null = à part (sans prix, autre monnaie)
+  if (o.genre === 'livraison') return o.montant === '' ? null : (Number(o.credit) || 0);
+  if (o.devise === CURRENCY) return -(Number(o.montant) || 0);
+  if (o.devise === 'HTG' && CURRENCY === 'dollars haïtiens') return -camArr_((Number(o.montant) || 0) / 5);
+  return null;
+}
+function camCompte_(o, c) {   // l'opération entre-t-elle dans le solde de ce client ?
+  if (o.annule || o.camion === CAM_TEST || (o.genre !== 'livraison' && o.genre !== 'paiement')) return false;
+  return !(c && c.depart !== null && c.depart_le && o.date <= c.depart_le);   // déjà comprise dans le solde de départ
+}
+function camSoldes_(clients, ops) {
+  var par = {}, info = {};
+  var fiche = function (k, nom) { return par[k] = par[k] || { cle: k, nom: nom, groupe: '', actif: true, depart: null, depart_le: '', depart_source: '', credit: 0, paye: 0, autres: {}, sans_prix: 0, dernier: '', solde: 0 }; };
+  clients.forEach(function (c) {
+    if (c.id === CCL_DEFAUT) return;
+    info[c.id] = c; var f = fiche(c.id, c.nom); f.groupe = c.groupe; f.actif = c.actif; f.depart = c.depart; f.depart_le = c.depart_le; f.depart_source = c.depart_source;
+  });
+  ops.forEach(function (o) {
+    var k = camCle_(o);
+    if (!camCompte_(o, info[k])) return;
+    var f = fiche(k, o.client), e = camEffet_(o);
+    if (o.date > f.dernier) f.dernier = o.date;
+    if (e === null) { if (o.genre === 'livraison') f.sans_prix++; else f.autres[o.devise] = camArr_((f.autres[o.devise] || 0) + (Number(o.montant) || 0)); }
+    else if (e >= 0) f.credit += e; else f.paye += -e;
+  });
+  Object.keys(par).forEach(function (k) { var f = par[k]; f.credit = camArr_(f.credit); f.paye = camArr_(f.paye); f.solde = camArr_((f.depart || 0) + f.credit - f.paye); });
+  return par;
+}
+/** Les soldes réunis par client (groupe), le plus gros d'abord. Un client sans groupe est seul dans le sien. */
+function camGroupes_(par) {
+  var g = {};
+  Object.keys(par).forEach(function (k) {
+    var f = par[k], cle = f.groupe ? 'G:' + f.groupe.toUpperCase() : k;
+    var x = g[cle] = g[cle] || { cle: cle, nom: f.groupe || f.nom, groupe: f.groupe, solde: 0, autres: {}, sans_prix: 0, dernier: '', membres: [] };
+    x.solde = camArr_(x.solde + f.solde); x.sans_prix += f.sans_prix; if (f.dernier > x.dernier) x.dernier = f.dernier;
+    Object.keys(f.autres).forEach(function (d) { x.autres[d] = camArr_((x.autres[d] || 0) + f.autres[d]); });
+    x.membres.push({ cle: f.cle, nom: f.nom, actif: f.actif, solde: f.solde, depart: f.depart, depart_le: f.depart_le, depart_source: f.depart_source, credit: f.credit, paye: f.paye, sans_prix: f.sans_prix, dernier: f.dernier });
+  });
+  return Object.keys(g).map(function (k) { g[k].membres.sort(function (a, b) { return a.nom.toLowerCase() < b.nom.toLowerCase() ? -1 : 1; }); return g[k]; })
+    .sort(function (a, b) { return b.solde - a.solde || (a.nom.toLowerCase() < b.nom.toLowerCase() ? -1 : 1); });
+}
+/** Direction / comptabilité : relevé d'un client (ou de tout un groupe) — chaque livraison et chaque paiement, avec le solde après chacun. */
+function camReleve_(p) {
+  var clients = camClients_(), ops = camOps_(8000), par = camSoldes_(clients, ops), cle = String(p.cle || '');
+  var gr = camGroupes_(par).filter(function (x) { return x.cle === cle; })[0];
+  if (!gr) throw new UserError('Client introuvable.');
+  var dans = {}, info = {}; gr.membres.forEach(function (m) { dans[m.cle] = m; }); clients.forEach(function (c) { info[c.id] = c; });
+  var depart = 0; gr.membres.forEach(function (m) { depart += m.depart || 0; });
+  var solde = camArr_(depart), lignes = ops.filter(function (o) { var k = camCle_(o); return dans[k] && camCompte_(o, info[k]); })
+    .sort(function (a, b) { return a.pris_le < b.pris_le ? -1 : 1; }).map(function (o) {
+      var e = camEffet_(o); if (e !== null) solde = camArr_(solde + e);
+      return { id: o.id, date: o.date, heure: o.pris_le.slice(11, 16), camion: o.camion, client: o.client, genre: o.genre, gallons: o.gallons, prix: o.prix, montant: o.montant, paye: o.paye, credit: o.credit,
+        devise: o.devise, bon_no: o.bon_no, effet: e, solde: solde, fichier: o.fichier_id };
+    });
+  return { cle: gr.cle, nom: gr.nom, groupe: gr.groupe, devise: CURRENCY, depart: camArr_(depart), membres: gr.membres, lignes: lignes, solde: gr.solde, autres: gr.autres, sans_prix: gr.sans_prix, calcule_le: maintenant_() };
 }
 function camOps_(max) {
   var sh = camFeuille_(COP_ONGLET, COP_ENTETES), n = sh.getLastRow();
@@ -1137,8 +1212,14 @@ function camInit_(app) {
     (hist[k] = hist[k] || []).push(camPourTel_(o));
   });
   Object.keys(hist).forEach(function (k) { hist[k] = hist[k].slice(-5).reverse(); });
+  var par = camSoldes_(clients, ops.filter(function (o) { return o.camion !== CAM_TEST; })), grp = {};
+  camGroupes_(par).forEach(function (g) { if (g.groupe) g.membres.forEach(function (m) { grp[m.cle] = { nom: g.nom, solde: g.solde, nb: g.membres.length }; }); });
   return { version: MOBILE_VERSION, mode: 'camion', devise: CURRENCY, camion: { code: cam.code, nom: cam.nom, test: test }, date: auj,
-    clients: clients.filter(function (c) { return c.actif && c.id !== CCL_DEFAUT; }).map(function (c) { return { id: c.id, nom: c.nom, prix: c.prix }; })
+    clients: clients.filter(function (c) { return c.actif && c.id !== CCL_DEFAUT; }).map(function (c) {
+      var x = { id: c.id, nom: c.nom, prix: c.prix, solde: par[c.id] ? par[c.id].solde : 0 }, g = grp[c.id];
+      if (g && g.nb > 1) { x.groupe = g.nom; x.solde_groupe = g.solde; x.nb_groupe = g.nb; }
+      return x;
+    })
       .sort(function (a, b) { return a.nom.toLowerCase() < b.nom.toLowerCase() ? -1 : 1; }),
     prix_defaut: defaut ? defaut.prix : 0, historique: hist, fournisseurs: CAM_FOURNISSEURS, types_photo: CAM_PHOTOS, devises: camDevises_(),
     jour: ops.filter(function (o) { return o.camion === cam.code && o.date === auj; }).map(camPourTel_), rapports: camRapportsTel_(cam.code, ops) };
@@ -1231,7 +1312,8 @@ function camListe_(p) {
   var auj = msgJour_(0), ok = function (d) { return /^\d{4}-\d{2}-\d{2}$/.test(String(d || '')); };
   var au = ok(p.au) ? String(p.au) : auj, du = ok(p.du) ? String(p.du) : au, filtre = String(p.camion || '').trim().toUpperCase();
   var cams = camions_(), noms = {}; cams.forEach(function (c) { noms[c.code] = c.nom; });
-  var ops = camOps_(8000).filter(function (o) { return o.date >= du && o.date <= au && (filtre ? o.camion === filtre : o.camion !== CAM_TEST); })
+  var toutes = camOps_(8000), lesClients = camClients_(), soldes = camGroupes_(camSoldes_(lesClients, toutes));
+  var ops = toutes.filter(function (o) { return o.date >= du && o.date <= au && (filtre ? o.camion === filtre : o.camion !== CAM_TEST); })
     .sort(function (a, b) { return a.pris_le < b.pris_le ? 1 : -1; });
   var t = { livre: 0, charge: 0, montant: 0, paye: 0, credit: 0, encaisse: 0, sans_prix: 0, achats: {} };
   ops.forEach(function (o) {
@@ -1242,7 +1324,8 @@ function camListe_(p) {
     else if (o.genre === 'achat') t.achats[o.devise] = (t.achats[o.devise] || 0) + (Number(o.montant) || 0);
   });
   return { du: du, au: au, aujourdhui: auj, camion: filtre, camions: cams, totaux: t, devise: CURRENCY, rapports: camRapportsVue_(du, au, filtre), stations: stations_().filter(function (s) { return estVrai_(s.actif); }).map(function (s) { return { code: String(s.code), nom: String(s.nom) }; }),
-    clients: camClients_().map(function (c) { return { id: c.id, nom: c.nom, prix: c.prix, station: c.station, actif: c.actif }; }),
+    clients: lesClients.map(function (c) { return { id: c.id, nom: c.nom, prix: c.prix, station: c.station, actif: c.actif, groupe: c.groupe, depart: c.depart, depart_le: c.depart_le, depart_source: c.depart_source }; }),
+    soldes: soldes,
     ops: ops.map(function (o) { var x = camPourTel_(o); x.id = o.id; x.camion_nom = noms[o.camion] || o.camion; x.fichier = o.fichier_id; x.lat = o.lat; x.lon = o.lon; x.prec = o.prec; x.annule = o.annule; x.note = o.note; return x; }) };
 }
 /** Le bureau crée un client ou change son prix (aussi le prix par défaut, id = DEFAUT). Le changement ne touche pas les livraisons déjà reçues. */
@@ -1260,12 +1343,35 @@ function camClient_(ctx, p) {
       var nom = id === CCL_DEFAUT ? c.nom : (String(p.nom || '').trim().slice(0, 80) || c.nom);
       sh.getRange(c.ligne, 2, 1, 6).setValues([[nom, prix === null ? (c.prix || '') : prix, p.station === undefined ? c.station : station, p.actif === undefined ? (c.actif ? 'oui' : 'non') : (p.actif ? 'oui' : 'non'), maintenant_(), ctx.nom]]);
       journal_(ctx, 'camion-client', id + ' ' + nom + ' prix=' + (prix === null ? c.prix : prix) + ' (avant : ' + c.prix + ')');
+      if (p.groupe !== undefined && id !== CCL_DEFAUT) {
+        var groupe = String(p.groupe || '').trim().replace(/\s+/g, ' ').slice(0, 40);
+        var meme = clients.filter(function (x) { return x.groupe && x.groupe.toUpperCase() === groupe.toUpperCase(); })[0];
+        if (meme) groupe = meme.groupe;   // même écriture que le groupe qui existe déjà
+        sh.getRange(c.ligne, 9).setValue(groupe);
+        journal_(ctx, 'camion-groupe', id + ' ' + nom + ' groupe=« ' + groupe + ' » (avant : « ' + c.groupe + ' »)');
+      }
+      if (p.depart !== undefined && id !== CCL_DEFAUT) {
+        var avant = c.depart === null ? 'aucun' : c.depart + ' au ' + c.depart_le + ' (' + c.depart_source + ')';
+        if (String(p.depart === null ? '' : p.depart).trim() === '') {
+          sh.getRange(c.ligne, 10, 1, 3).setValues([['', '', '']]);
+          journal_(ctx, 'camion-solde-depart', id + ' ' + nom + ' retiré (avant : ' + avant + ')');
+        } else {
+          var dep = Number(phNombre_(String(p.depart).trim().replace(/^-/, ''))) * (/^-/.test(String(p.depart).trim()) ? -1 : 1);
+          if (isNaN(dep) || Math.abs(dep) > 100000000 || phNombre_(String(p.depart).trim().replace(/^-/, '')) === '') throw new UserError('Solde de départ illisible. Écrivez seulement les chiffres.');
+          var le = String(p.depart_le || ''), src = String(p.depart_source || '').trim().slice(0, 200);
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(le) || le > msgJour_(0)) throw new UserError('Donnez la date du solde de départ (pas dans le futur).');
+          if (src.length < 3) throw new UserError('Écrivez d\'où vient ce solde (cahier, feuille, relevé…).');
+          sh.getRange(c.ligne, 10, 1, 3).setValues([[dep, le, src + ' — ' + ctx.nom + ', ' + maintenant_()]]);
+          journal_(ctx, 'camion-solde-depart', id + ' ' + nom + ' ' + dep + ' au ' + le + ' — ' + src + ' (avant : ' + avant + ')');
+        }
+      }
     } else {
       var nomN = String(p.nom || '').trim().slice(0, 80);
       if (!nomN) throw new UserError('Écrivez le nom du client.');
       if (clients.some(function (x) { return x.nom.toLowerCase() === nomN.toLowerCase(); })) throw new UserError('Ce client existe déjà.');
       var num = 1; clients.forEach(function (x) { var k = Number(x.id.replace(/^K/, '')); if (k >= num) num = k + 1; });
-      sh.appendRow(['K' + num, nomN, prix === null ? '' : prix, station, 'oui', maintenant_(), ctx.nom, 'créé par le bureau']);
+      var grN = String(p.groupe || '').trim().replace(/\s+/g, ' ').slice(0, 40), memeN = clients.filter(function (x) { return x.groupe && x.groupe.toUpperCase() === grN.toUpperCase(); })[0];
+      sh.appendRow(['K' + num, nomN, prix === null ? '' : prix, station, 'oui', maintenant_(), ctx.nom, 'créé par le bureau', memeN ? memeN.groupe : grN]);
       journal_(ctx, 'camion-client+', 'K' + num + ' ' + nomN + ' prix=' + (prix === null ? '' : prix));
     }
   } finally { lock.releaseLock(); }
