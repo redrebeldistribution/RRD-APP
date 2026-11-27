@@ -73,7 +73,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.23.1';
+var VERSION_APP = '1.24.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -205,6 +205,67 @@ function api(action, extra) {
       if (!j.ok) throw { erreur: j.erreur, code: j.code || '', reseau: j.code === 'SERVEUR', controles: j.controles || null };
       return j.data;
     }, function () { clearTimeout(t); throw { erreur: 'Pas de connexion.', reseau: true }; });
+}
+
+/* ======================= Envoi quand l'application est fermée =======================
+ * Application installée build 60 et plus. Chaque élément en attente (rapport, photo, bordereau, opération de camion) est aussi copié
+ * dans la mémoire privée du téléphone, sous la forme exacte que le bureau reçoit. Quand l'application n'est plus à l'écran,
+ * une tâche d'Android envoie ces copies dès qu'il y a du réseau et garde la réponse du bureau. À la prochaine ouverture,
+ * l'application lit ces réponses (apiFile) au lieu d'envoyer une deuxième fois. Le bureau ne garde jamais deux fois le même élément. */
+var FOND = { cours: null, encore: false }, FOND_NATIF = 60;
+function fondOk() { return !WEB && !!NAT.RrdFond; }
+function fondId(cid) { return String(cid).replace(/[^A-Za-z0-9-]/g, '-').slice(0, 80) || '-'; }
+function rapCorps(r) { var payload = {}; Object.keys(r).forEach(function (k) { if (['statut', 'cree_le', 'erreur', 'vu', 'recu_le', 'station', 'controles'].indexOf(k) < 0) payload[k] = r[k]; }); return ['envoyer', { payload: payload }]; }
+function phCorps(r) {
+  return r.genre === 'bordereau'
+    ? ['bordereau', { payload: { cid: r.cid, pris_ms: r.pris_ms, photo: r.photo, montant: r.montant, devise: r.devise, beneficiaire: r.beneficiaire, numero: r.numero, note: r.note, date_depot: r.date_depot } }]
+    : ['photo', { payload: { cid: r.cid, type: r.type, pris_ms: r.pris_ms, compteur: r.compteur, photo: r.photo } }];
+}
+function cmCorps(r) {
+  return ['camion', { payload: { genre: r.op, cid: r.cid, pris_ms: r.pris_ms, photo: r.photo, client_id: r.client_id, client: r.client, gallons: r.gallons, mode: r.mode, paye: r.paye, montant: r.montant, devise: r.devise,
+    bon_no: r.bon_no, fournisseur: r.fournisseur, detail: r.detail, note: r.note, lat: r.lat, lon: r.lon, precision: r.precision, date: r.date_rapport, employes: r.employes, remis: r.remis } }];
+}
+/* Envoi d'un élément de la file : si le bureau a déjà répondu pendant que l'application était fermée, on reprend cette réponse. */
+function apiFile(corps, cid) {
+  if (!fondOk()) return api(corps[0], corps[1]);
+  return NAT.RrdFond.resultat({ id: fondId(cid) }).then(function (x) { return (x && x.rep) || ''; }, function () { return ''; }).then(function (rep) {
+    var j = null; if (rep) try { j = JSON.parse(rep); } catch (e) { }
+    if (!j || typeof j.ok !== 'boolean') return api(corps[0], corps[1]);
+    if (!j.ok) throw { erreur: j.erreur, code: j.code || '', reseau: false, controles: j.controles || null };
+    return j.data;
+  });
+}
+/* Tout ce que ce téléphone doit encore envoyer, dans l'ordre : les rapports d'abord, puis photos, bordereaux et opérations par heure de prise. */
+function fondElements() {
+  var role = CFG.get('role', ''), att = function (r) { return r.statut === 'attente'; };
+  if (!CFG.get('jeton', '')) return Promise.resolve([]);
+  if (role === 'camion') return cmMiens().then(function (l) { return l.filter(att).map(function (r) { return { cid: r.cid, ordre: r.pris_ms, corps: cmCorps(r) }; }); });
+  if (role) return Promise.resolve([]);
+  return Promise.all([tous(), phMiens()]).then(function (x) {
+    return x[0].filter(att).sort(function (a, b) { return a.cree_le < b.cree_le ? -1 : 1; }).map(function (r, i) { return { cid: r.ref, ordre: i + 1, corps: rapCorps(r) }; })
+      .concat(x[1].filter(att).map(function (r) { return { cid: r.cid, ordre: r.pris_ms, corps: phCorps(r) }; }));
+  });
+}
+/* Met les copies du téléphone d'accord avec la file : ajoute ce qui manque, retire ce qui est réglé. Sans effet sur une ancienne application. */
+function fondAligner() {
+  if (!fondOk()) return Promise.resolve();
+  if (FOND.cours) { FOND.encore = true; return FOND.cours; }
+  var F = NAT.RrdFond, url = (window.RRD_CONFIG && RRD_CONFIG.API_URL) || CFG.get('api', '');
+  var travail = F.regler({ url: url, jeton: CFG.get('jeton', '') }).then(function () { return Promise.all([F.etat(), fondElements()]); }).then(function (x) {
+    var la = {}, faits = {}, veut = {}, ops = [];
+    (x[0].attente || []).forEach(function (id) { la[id] = 1; }); (x[0].faits || []).forEach(function (id) { faits[id] = 1; });
+    x[1].forEach(function (e) { veut[fondId(e.cid)] = 1; });
+    Object.keys(Object.assign({}, la, faits)).forEach(function (id) { if (!veut[id]) ops.push(function () { return F.retirer({ id: id }); }); });
+    x[1].forEach(function (e) {
+      var id = fondId(e.cid);
+      if (!la[id] && !faits[id]) ops.push(function () { return F.ajouter({ id: id, ordre: e.ordre, corps: JSON.stringify(Object.assign({ action: e.corps[0], jeton: '@@JETON@@' }, e.corps[1])) }); });
+    });
+    return ops.reduce(function (p, f) { return p.then(f).catch(function () { }); }, Promise.resolve());
+  });
+  FOND.cours = Promise.race([travail, new Promise(function (res) { setTimeout(res, 8000); })]).catch(function () { }).then(function () {
+    FOND.cours = null; if (FOND.encore) { FOND.encore = false; return fondAligner(); }
+  });
+  return FOND.cours;
 }
 
 /* ======================= État ======================= */
@@ -609,13 +670,12 @@ function synchroniser(manuel) {
     if (e.code === 'NON_ENREGISTRE' || e.code === 'DESACTIVE') { arret = true; CFG.set('jeton', ''); ecranEnregistrer(e.erreur); }
   }).then(function () {
     if (arret) return;
-    return marquerAnnules(S.init).then(tous).then(function (liste) {
+    return fondAligner().then(function () { return marquerAnnules(S.init); }).then(tous).then(function (liste) {
       var attente = liste.filter(function (r) { return r.statut === 'attente'; }).sort(function (a, b) { return a.cree_le < b.cree_le ? -1 : 1; });
       return attente.reduce(function (p, r) {
         return p.then(function () {
           if (arret) return;
-          var payload = {}; Object.keys(r).forEach(function (k) { if (['statut', 'cree_le', 'erreur', 'vu', 'recu_le', 'station', 'controles'].indexOf(k) < 0) payload[k] = r[k]; });
-          return api('envoyer', { payload: payload }).then(function (d) {
+          return apiFile(rapCorps(r), r.ref).then(function (d) {
             S.en_ligne = true;
             if (d.recu && d.recu.ref !== r.ref) r.ref_serveur = d.recu.ref;
             r.statut = 'envoye'; r.recu_le = d.recu ? d.recu.soumis_le : maintenant(); r.photo = r.photo ? 'envoyée' : '';
@@ -630,7 +690,7 @@ function synchroniser(manuel) {
       }, Promise.resolve());
     });
   }).then(function () {
-    S.sync = false; majNet(S.en_ligne ? '● en ligne' : '○ hors ligne'); ntBientot();
+    S.sync = false; majNet(S.en_ligne ? '● en ligne' : '○ hors ligne'); ntBientot(); fondAligner();
     if (!arret && S.ecran === 'manquants') ecranManquants();
     else if (!arret && (S.ecran === 'accueil' || manuel)) accueil();
   });
@@ -805,14 +865,12 @@ function phVu(cid) { phTous().then(function (l) { var r = l.filter(function (x) 
 function phEnvoyer() {
   if (PH.envoi || !CFG.get('jeton', '') || CFG.get('role', '')) return Promise.resolve();
   PH.envoi = true;
-  return phMiens().then(function (l) {
+  return fondAligner().then(phMiens).then(function (l) {
     var file = l.filter(function (r) { return r.statut === 'attente'; }).sort(function (a, b) { return a.pris_ms - b.pris_ms; }), i = 0;
     function suivant() {
       if (i >= file.length) return;
       var r = file[i++];
-      return (r.genre === 'bordereau'
-        ? api('bordereau', { payload: { cid: r.cid, pris_ms: r.pris_ms, photo: r.photo, montant: r.montant, devise: r.devise, beneficiaire: r.beneficiaire, numero: r.numero, note: r.note, date_depot: r.date_depot } })
-        : api('photo', { payload: { cid: r.cid, type: r.type, pris_ms: r.pris_ms, compteur: r.compteur, photo: r.photo } })).then(function () {
+      return apiFile(phCorps(r), r.cid).then(function () {
         r.statut = 'envoye'; delete r.photo;
       }, function (e) {
         if (e.reseau || e.code === 'NON_ENREGISTRE' || e.code === 'DESACTIVE') throw e;   // pas de signal ou téléphone à réenregistrer : on réessaiera
@@ -822,7 +880,7 @@ function phEnvoyer() {
     }
     return suivant();
   }).catch(function () { }).then(function () {
-    PH.envoi = false;
+    PH.envoi = false; fondAligner();
     return phTous().then(function (l) {   // on ne garde sur le téléphone que 2 jours d'historique (les photos elles-mêmes sont au bureau)
       var lim = Date.now() - 2 * 864e5, vieux = l.filter(function (r) { return r.pris_ms < lim && r.statut !== 'attente'; });
       if (vieux.length) return ptx('readwrite', function (s) { vieux.forEach(function (r) { s.delete(r.cid); }); });
@@ -1168,14 +1226,13 @@ function cmValider() {
 function cmEnvoyer() {
   if (CM.envoi || CFG.get('role', '') !== 'camion' || !CFG.get('jeton', '')) return Promise.resolve();
   CM.envoi = true;
-  return cmMiens().then(function (l) {
+  return fondAligner().then(cmMiens).then(function (l) {
     var vieux = l.filter(function (r) { return r.statut !== 'attente' && Date.now() - r.pris_ms > 3 * 864e5; });
     var file = l.filter(function (r) { return r.statut === 'attente'; }).sort(function (a, b) { return a.pris_ms - b.pris_ms; }), i = 0;
     function suivant() {
       if (i >= file.length) return;
       var r = file[i++];
-      return api('camion', { payload: { genre: r.op, cid: r.cid, pris_ms: r.pris_ms, photo: r.photo, client_id: r.client_id, client: r.client, gallons: r.gallons, mode: r.mode, paye: r.paye, montant: r.montant, devise: r.devise,
-        bon_no: r.bon_no, fournisseur: r.fournisseur, detail: r.detail, note: r.note, lat: r.lat, lon: r.lon, precision: r.precision, date: r.date_rapport, employes: r.employes, remis: r.remis } }).then(function (x) {
+      return apiFile(cmCorps(r), r.cid).then(function (x) {
         r.statut = 'envoye'; r.photo = ''; r.srv = { montant: x.montant, paye: x.paye, credit: x.credit };
         return ptx('readwrite', function (s) { s.put(r); }).then(suivant);
       }, function (e) {
@@ -1185,7 +1242,7 @@ function cmEnvoyer() {
       });
     }
     return Promise.resolve(vieux.length ? ptx('readwrite', function (s) { vieux.forEach(function (r) { s.delete(r.cid); }); }) : null).then(suivant);
-  }).catch(function () { }).then(function () { CM.envoi = false; });
+  }).catch(function () { }).then(function () { CM.envoi = false; fondAligner(); });
 }
 function cmReprise() { if (CFG.get('role', '') === 'camion') { if (S.ecran === 'camion') cmActualiser(); else cmEnvoyer(); } }
 
@@ -1193,16 +1250,19 @@ function cmReprise() { if (CFG.get('role', '') === 'camion') { if (S.ecran === '
  * Ce que le téléphone sait faire en plus : position GPS, lecture d'un code-barres ou QR (carte de fidélité), photo en direct,
  * empreinte / code du téléphone, Bluetooth (imprimante de reçus). Cet écran ne sert qu'à vérifier ; rien n'est envoyé au bureau. */
 var TT = { res: {}, scan: false }, TT_NATIF = 43;   // premier build de l'application installée qui a ces fonctions
-var TT_LISTE = [['gps', '📍 Position GPS'], ['code', '🔳 Lecture d\'un code (carte de fidélité)'], ['photo', '📷 Photo en direct'], ['bio', '🔒 Empreinte ou code du téléphone'], ['bt', '🖨 Bluetooth (imprimante de reçus)']];
+var TT_LISTE = [['gps', '📍 Position GPS'], ['code', '🔳 Lecture d\'un code (carte de fidélité)'], ['photo', '📷 Photo en direct'], ['bio', '🔒 Empreinte ou code du téléphone'], ['bt', '🖨 Bluetooth (imprimante de reçus)'], ['fond', '📤 Envoi quand l\'application est fermée']];
 function ttErr(e) { return String((e && (e.message || e.errorMessage || e.erreur)) || e || 'erreur inconnue').slice(0, 160); }
 function ecranTestTel() {
   var h = '<h1>Tester ce téléphone</h1><div class="sub">Appuyez sur chaque ligne. Rien n\'est envoyé au bureau.</div>';
   if (S.natif && S.natif < TT_NATIF) h += '<div class="wait">Ces fonctions demandent la nouvelle application (build ' + TT_NATIF + ' ou plus). Celle qui est installée sur ce téléphone est le build ' + S.natif + '. À installer une seule fois ; le code et les données restent.' +
     (S.apk ? '<br><button style="margin-top:8px" onclick="S.majApk=S.apk;installerApk()">Installer</button>' : '') + '</div>';
+  if (!WEB && S.natif && S.natif >= TT_NATIF && S.natif < FOND_NATIF) h += '<div class="wait">L\'envoi quand l\'application est fermée demande la nouvelle application (build ' + FOND_NATIF + ' ou plus). Celle de ce téléphone est le build ' + S.natif + '. À installer une seule fois ; le code et les données restent.' +
+    (S.apk ? '<br><button style="margin-top:8px" onclick="S.majApk=S.apk;installerApk()">Installer</button>' : '') + '</div>';
   TT_LISTE.forEach(function (x) {
     var r = TT.res[x[0]];
     h += '<div class="card"><div class="row"><div><b>' + x[1] + '</b><div class="mut" style="white-space:pre-line">' + (r ? (r.ok ? '<span style="color:var(--ok)">✓ ' : '<span style="color:var(--bad)">✗ ') + esc(r.txt) + '</span>' : 'pas encore testé') + '</div>' +
-      (r && r.img ? '<img class="prev" style="max-height:120px" src="' + r.img + '">' : '') + '</div>' +
+      (r && r.img ? '<img class="prev" style="max-height:120px" src="' + r.img + '">' : '') +
+      (r && r.batt ? '<div style="margin-top:6px"><button class="sec" style="padding:6px 10px" onclick="NAT.RrdFond.reglages()">Ouvrir les paramètres de RRD</button></div>' : '') + '</div>' +
       '<div><button class="sec" onclick="ttLancer(\'' + x[0] + '\')">' + (r && r.cours ? '…' : 'Tester') + '</button></div></div></div>';
   });
   h += '<p class="mut center">Version ' + VERSION_APP + ' (écrans : build ' + (window.RRD_BUILD || 0) + (S.natif ? ' · application installée : build ' + S.natif : '') + ')</p>';
@@ -1257,6 +1317,19 @@ function ttLancer(k) {
         if (!P.BluetoothSerial) return;
         return P.BluetoothSerial.isEnabled().then(function (e) { lignes.push('Liaison série (imprimantes classiques) : ' + (e.enabled ? 'prête' : 'Bluetooth éteint')); });
       }).then(function () { ttFin(k, lignes.length > 0, lignes.join('\n') || 'Aucune réponse du Bluetooth.'); });
+  }
+  if (k === 'fond') {
+    if (!P.RrdFond) return ttFin(k, false, 'Pas sur cette application. Il faut la nouvelle (build ' + FOND_NATIF + ' ou plus), à installer une fois ; le code et les données restent.');
+    faire = fondAligner().then(function () { return P.RrdFond.etat(); }).then(function (e) {
+      var n = (e.attente || []).length, mo = Math.round((e.octets || 0) / 104857.6) / 10, quand = e.dernier_ms ? phJourHeure(e.dernier_ms).txt : '';
+      var etats = ['tout est parti', 'réseau ou serveur indisponible, nouvel essai prévu', 'code du téléphone refusé', 'arrêté : l\'application est revenue à l\'écran'];
+      var l = ['Disponible sur ce téléphone.',
+        n ? n + ' élément(s) en attente (' + mo + ' Mo). Ils partiront seuls dès qu\'il y aura du réseau, application fermée ou non.' : 'Rien en attente.',
+        quand ? 'Dernier passage, application fermée : ' + quand + ' — ' + (e.dernier_envoyes || 0) + ' envoyé(s)' + (e.dernier_refuses ? ', ' + e.dernier_refuses + ' refusé(s)' : '') + ' (' + (etats[e.dernier_code] || '') + ').' : 'Pas encore de passage avec l\'application fermée.',
+        'Envoyés application fermée, en tout : ' + (e.total_envoyes || 0) + '.',
+        e.batterie_libre ? 'Batterie : sans restriction pour RRD.' : 'Batterie : le téléphone peut retarder l\'envoi. Pour l\'éviter : Paramètres de RRD > Batterie > « Non restreinte ».'];
+      ttFin(k, true, l.join('\n')); TT.res[k].batt = !e.batterie_libre; if (S.ecran === 'testtel') ecranTestTel();
+    });
   }
   if (faire) faire.catch(function (e) { if (k === 'code') ttScanFin(); ttFin(k, false, ttErr(e)); });
 }

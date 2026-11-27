@@ -1,0 +1,5 @@
+Essai de l'envoi en arrière-plan (EnvoiCoeur.java) sur un ordinateur, sans téléphone :
+  python3 serveur.py 18765 &
+  javac -d /tmp/out ../../android/app/src/main/java/com/redrebel/rrdapp/EnvoiCoeur.java Essai.java
+  java -cp /tmp/out Essai http://127.0.0.1:18765/exec
+serveur.py imite le serveur du bureau (réponse par redirection, refus, serveur occupé, page d'erreur).
