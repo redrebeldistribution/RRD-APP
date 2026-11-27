@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.34';
+var MOBILE_VERSION = 'm1.35';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var STATION_FORMATION = 'TST', MAX_APPAREILS_FORMATION = 50;   // les codes de la station de test servent à la formation : plusieurs téléphones avec le même code (propriétaire, 26/11/2026)
 var MAX_APPAREILS_ROLE = 5;   // un code DIR ou CPT peut servir sur 5 appareils en même temps (demande du propriétaire, 26/11/2026)
@@ -327,6 +327,11 @@ function envoyerMobile_(app, p) {
       var raison = String(p.raison_retard || '').trim().slice(0, 300);
       if (!raison) throw new UserError('Rapport en retard : écrivez la raison du retard.', 'INVALIDE');
       notes = (notes ? notes + ' ' : '') + '[Rapport en retard : ' + raison + ']';
+    }
+    if (p.photo && String(p.photo_source || '') === 'galerie') {   // photo du registre prise dans la galerie (propriétaire, 27/11/2026)
+      var pg = String(p.photo_galerie || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+      if (pg.length < 3) throw new UserError('Photo du registre choisie dans la galerie : écrivez pourquoi.', 'INVALIDE');
+      notes = (notes ? notes + ' ' : '') + '[Photo du registre choisie dans la galerie : ' + pg + ']';
     }
     if (dv.differe) notes = (notes ? notes + ' ' : '') + '[envoyé en différé par l\'application le ' + maintenant_() + ']';
     var photoId = p.photo ? enregistrerPhoto_(p.photo, ref) : '';

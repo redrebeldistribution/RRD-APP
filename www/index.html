@@ -61,6 +61,8 @@
 <div class="sect hidden" id="sect"><a class="on" href="index.html">📋 Rapports</a><a href="transfert.html">💸 Transferts</a><a href="#" id="sPhotos" class="hidden" onclick="ecranPhotos();phActualiser();return false">📷 Photos</a></div>
 <input type="file" id="phInput" accept="image/*" capture="environment" class="hidden" onchange="phPrise(this)">
 <input type="file" id="bdGalInput" accept="image/*" class="hidden" onchange="phPrise(this)">
+<input type="file" id="regInput" accept="image/*" capture="environment" class="hidden" onchange="regFichier(this, '')">
+<input type="file" id="regGalInput" accept="image/*" class="hidden" onchange="regFichier(this, 'galerie')">
 <input type="file" id="cmInput" accept="image/*" capture="environment" class="hidden" onchange="cmPhoto(this)">
 <div class="wrap" id="app"><p class="center mut" style="margin-top:40px">Chargement…</p></div>
 <div class="bar hidden" id="bar"><div class="in" id="barIn"></div></div>
@@ -73,7 +75,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.31.0';
+var VERSION_APP = '1.32.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -539,8 +541,9 @@ function ecranFormulaire(msgErr) {
     if (f.k === 'other_expenses') h += '<label for="f_other_expenses_detail">Détail des autres dépenses</label><input id="f_other_expenses_detail" value="' + esc(V.other_expenses_detail || '') + '">';
   });
   h += '<label for="f_notes">Notes (facultatif)</label><textarea id="f_notes">' + esc(V.notes || '') + '</textarea>' +
-    '<label>Photo de la page du registre (facultatif)</label><input type="file" id="f_photo" accept="image/*" onchange="lirePhoto(this)">' +
-    '<div id="photoEtat" class="mut">' + (PHOTO ? 'Photo prête ✓' : '') + '</div>' +
+    '<label>Photo de la page du registre (facultatif)</label><button type="button" class="sec" style="width:100%" onclick="regPrendre(\'\')">📷 Prendre la page du registre en photo</button>' +
+    '<p class="mut center" style="margin:8px 0 0">Photo déjà dans le téléphone ? <a href="#" onclick="regPrendre(\'PHOTOS\');return false">Choisir dans la galerie</a> (une explication sera demandée)</p>' +
+    '<div id="photoEtat">' + regEtatHtml() + '</div>' +
     '<p class="mut">Tous les montants sont en ' + DEV + '. Un seul montant par case ; pour plusieurs transferts ou dépenses, écrivez-les avec + (ex. 1788+2862).</p>';
   view(h, '<button class="sec" onclick="accueil()">Annuler</button><button onclick="verifier()">Vérifier</button>');
   majGallons();
@@ -550,6 +553,7 @@ function lireChamps() {
   champs().forEach(function (f) { var el = $('f_' + f.k); if (el) V[f.k] = el.value.trim(); });
   V.other_expenses_detail = (($('f_other_expenses_detail') || {}).value || '').trim();
   V.notes = (($('f_notes') || {}).value || '').trim();
+  if ($('f_photo_gal')) V.photo_galerie = $('f_photo_gal').value.replace(/\s+/g, ' ').trim();
   V.employes_service = (($('f_employes_service') || {}).value || '').trim();
   if (argentOn()) { ['caisse_par', 'depot_par', 'remis_bureau', 'remis_bureau_a'].forEach(function (k) { V[k] = (($('f_' + k) || {}).value || '').trim().replace(/\s+/g, ' '); }); V.argent_v = 1; }
   if (J.retard) V.raison_retard = (($('f_raison') || {}).value || '').trim();
@@ -560,18 +564,33 @@ function majGallons() {
   var el = $('gal'); if (!el) return;
   el.textContent = (o === null || c === null) ? '—' : (c < o ? 'compteur de fermeture plus petit !' : fmt(c - o) + ' gal');
 }
-function lirePhoto(input) {
-  var f = input.files && input.files[0]; if (!f) return;
-  $('photoEtat').textContent = 'Préparation de la photo…';
-  var img = new Image(), url = URL.createObjectURL(f);
+/* Photo de la page du registre (propriétaire, 27/11/2026) : comme le bordereau, l'appareil photo d'abord ; la galerie reste possible,
+ * avec une explication obligatoire qui part dans les notes du rapport. */
+function regEtatHtml() {
+  if (!PHOTO) return '';
+  var gal = V.photo_source === 'galerie';
+  return '<img class="prev" style="max-height:200px" src="' + PHOTO + '"><div class="mut">Photo prête ✓</div>' +
+    (gal ? '<div class="wait">Photo choisie dans la galerie, pas prise maintenant.</div><label for="f_photo_gal">Pourquoi la photo vient-elle de la galerie ? (obligatoire)</label>' +
+      '<input id="f_photo_gal" autocomplete="off" maxlength="200" value="' + esc(V.photo_galerie || '') + '" placeholder="exemple : photo prise plus tôt, appareil photo en panne…">' : '');
+}
+function regPrendre(source) {
+  var gal = source === 'PHOTOS';
+  prendrePhoto(gal ? 'regGalInput' : 'regInput', function (url) { regImage(url, gal ? 'galerie' : ''); }, gal ? 'PHOTOS' : '');
+}
+function regFichier(input, source) { var f = input.files && input.files[0]; if (f) regImage(URL.createObjectURL(f), source); }
+function regImage(url, source) {
+  var e = $('photoEtat'); if (e) e.innerHTML = '<div class="mut">Préparation de la photo…</div>';
+  var img = new Image();
   img.onload = function () {
-    var m = 1600, w = img.width, h = img.height, k = Math.min(1, m / Math.max(w, h));
-    var cv = document.createElement('canvas'); cv.width = Math.round(w * k); cv.height = Math.round(h * k);
+    var k = Math.min(1, 1600 / Math.max(img.width, img.height)), cv = document.createElement('canvas');
+    cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
     cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
-    PHOTO = cv.toDataURL('image/jpeg', 0.75); URL.revokeObjectURL(url);
-    $('photoEtat').textContent = 'Photo prête ✓';
+    PHOTO = cv.toDataURL('image/jpeg', 0.75);
+    if (url.indexOf('blob:') === 0) URL.revokeObjectURL(url);
+    V.photo_source = source; if (source !== 'galerie') delete V.photo_galerie;
+    var e2 = $('photoEtat'); if (e2) e2.innerHTML = regEtatHtml();
   };
-  img.onerror = function () { $('photoEtat').textContent = 'Photo illisible, choisissez-en une autre.'; };
+  img.onerror = function () { var e3 = $('photoEtat'); if (e3) e3.innerHTML = '<div class="err">Photo illisible, reprenez-la.</div>'; };
   img.src = url;
 }
 function verifier() {
@@ -590,6 +609,7 @@ function verifier() {
     if (nb(V.bank_deposit) > 0 && !V.depot_par) err.push('Dépôt en banque : écrivez le nom de la personne qui a fait le dépôt.');
     if (nb(V.counted_cash) > 0 && !V.caisse_par) err.push('Caisse comptée : écrivez le nom de la personne qui garde la caisse.');
   }
+  if (PHOTO && V.photo_source === 'galerie' && String(V.photo_galerie || '').length < 3) err.push('Photo du registre choisie dans la galerie : écrivez pourquoi.');
   if (!V.employes_service) err.unshift('Employé(s) de service : obligatoire.');
   if (J.retard && !V.raison_retard) err.unshift('Raison du retard : obligatoire.');
   if (err.length) return ecranFormulaire(err.join('\n'));
@@ -652,7 +672,7 @@ function resume() {
   }
   if (V.notes) h += '<tr><td>Notes</td><td class="n">' + esc(V.notes) + '</td></tr>';
   if (V.explication_controle && (V.confirme_codes || []).length) h += '<tr><td>⚠️ Explication</td><td class="n">' + esc(V.explication_controle) + '</td></tr>';
-  h += '<tr><td>Photo</td><td class="n">' + (PHOTO ? 'oui' : 'non') + '</td></tr></table></div>' +
+  h += '<tr><td>Photo</td><td class="n">' + (PHOTO ? (V.photo_source === 'galerie' ? 'oui (galerie : ' + esc(V.photo_galerie || '') + ')' : 'oui') : 'non') + '</td></tr></table></div>' +
     '<div class="note">Après l\'envoi, le rapport ne peut plus être modifié. Montants en ' + DEV + '.</div>';
   view(h, '<button class="sec" onclick="ecranFormulaire()">Modifier</button><button id="bEnv" onclick="enregistrerRapport()">Envoyer</button>');
 }
