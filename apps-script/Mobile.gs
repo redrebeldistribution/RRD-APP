@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.33';
+var MOBILE_VERSION = 'm1.34';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var STATION_FORMATION = 'TST', MAX_APPAREILS_FORMATION = 50;   // les codes de la station de test servent à la formation : plusieurs téléphones avec le même code (propriétaire, 26/11/2026)
 var MAX_APPAREILS_ROLE = 5;   // un code DIR ou CPT peut servir sur 5 appareils en même temps (demande du propriétaire, 26/11/2026)
@@ -82,6 +82,7 @@ function apiMobile_(action, b) {
       case 'camion': return ok_(String(payload.genre) === 'rapport' ? camRapport_(app, payload) : camEnvoyer_(app, payload));
       case 'camSuggestions': return ok_(sugPourCamion_(app));
       case 'chatEntrer': return ok_(chatEntrer_(app, payload));
+      case 'chatSignal': return ok_(chatSignal_(app, payload));
       case 'dir': return ok_(direction_(app, String(b.sous_action || ''), payload));
       default: throw new UserError('Action inconnue.');
     }
@@ -1121,8 +1122,8 @@ function majColonne_(def, ligne, champ, valeur) {   // comme majCellule_, mais a
   if (j < 0) { j = h.length; sh.getRange(1, j + 1).setValue(champ); }
   sh.getRange(ligne, j + 1).setValue(valeur);
 }
-function pushToken_(app, p) {
-  if (app.role || !app.station) return { garde: false };
+function pushToken_(app, p) {   // m1.34 : aussi camions, direction et comptabilité (notifications du chat) ; pas les agents de transfert
+  if (app.role === 'transferts' || (!app.role && !app.station)) return { garde: false };
   var t = String(p.token || '').trim();
   if (t && (t.length > 1024 || !/^[A-Za-z0-9_:.\-]+$/.test(t))) throw new UserError('Adresse de notification invalide.');
   var lock = LockService.getScriptLock(); lock.waitLock(20000);
@@ -1916,3 +1917,32 @@ function chatReveiller_() {
     if (url) UrlFetchApp.fetch(url, { method: 'post', payload: JSON.stringify({ action: 'chatMembres' }), contentType: 'text/plain', muteHttpExceptions: true });
   } catch (e) { }
 }
+
+/* Notifications du chat (m1.34, propriétaire 27/11/2026) : après un message, le téléphone le signale ici ; on note une ligne dans
+ * « Chat (alertes) » (qui, à qui, quelle conversation — jamais le texte du message) et on réveille le relais, qui pousse la notification
+ * aux téléphones visés, même application fermée. Message privé : l'autre personne. Général : tout le monde, seulement quand la
+ * direction écrit (pour ne pas faire sonner tous les téléphones à chaque message). */
+var CHA_ONGLET = 'Chat (alertes)', CHA_ENTETES = ['id', 'le', 'de', 'de_nom', 'cible', 'conv', 'appareil', 'pousse_le', 'pousse_a'];
+function chatSignal_(app, p) {
+  var moi = chatMoi_(app), conv = String(p.conv || ''), cible;
+  if (conv === 'general') { if (moi.role !== 'direction') return { alerte: false }; cible = 'TOUS'; }
+  else {
+    var parts = conv.split('__');
+    if (parts.length !== 2 || parts.indexOf(moi.code) < 0 || parts[0] === parts[1] || !/^[A-Z0-9-]{2,30}$/.test(parts[0] + parts[1])) throw new UserError('Conversation inconnue.');
+    cible = parts[0] === moi.code ? parts[1] : parts[0];
+  }
+  var lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    var sh = camFeuille_(CHA_ONGLET, CHA_ENTETES), n = sh.getLastRow(), deja = false;
+    if (n >= 2) sh.getRange(Math.max(2, n - 49), 1, Math.min(50, n - 1), CHA_ENTETES.length).getValues().forEach(function (r) {
+      if (String(r[2]) === moi.code && String(r[5]) === conv && !String(r[7] || '').trim()) deja = true;   // une alerte pas encore partie suffit
+    });
+    if (!deja) sh.appendRow(['CA-' + Utilities.formatDate(new Date(), TZ, 'yyMMdd-HHmmss') + '-' + Math.floor(Math.random() * 90 + 10), maintenant_(), moi.code, moi.nom, cible, conv, String(app.ligne.code_activation || ''), '', '']);
+  } finally { lock.releaseLock(); }
+  try {
+    var url = prop_('PUSH_RELAIS_URL');
+    if (url) UrlFetchApp.fetch(url, { method: 'post', payload: JSON.stringify({ action: 'chatAlertes' }), contentType: 'text/plain', muteHttpExceptions: true });
+  } catch (e) { }
+  return { alerte: true };
+}
+

@@ -22,11 +22,12 @@ var ONGLET_MSG = 'Messages (app)', ONGLET_APP = 'Appareils', CANAL = 'rrd-messag
 function doPost(e) {
   var b = {}; try { b = JSON.parse((e && e.postData && e.postData.contents) || '{}') || {}; } catch (x) { }
   if (b.action === 'chatMembres') return sortie_(chatMembres_());
+  if (b.action === 'chatAlertes') return sortie_(chatAlertes_());
   return sortie_(traiter_());
 }
 function doGet() { return sortie_({ ok: true, service: 'RRD Notifications' }); }
 function sortie_(o) { return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON); }
-function toutesLes5Minutes() { traiter_(); try { chatMembres_(); } catch (e) { console.error(e && e.stack || e); } }
+function toutesLes5Minutes() { traiter_(); try { chatMembres_(); chatAlertes_(); } catch (e) { console.error(e && e.stack || e); } }
 
 /** À lancer une fois : installe le passage toutes les 5 minutes. */
 function installer() {
@@ -107,7 +108,7 @@ function traiter_() {
       if (hA.push !== undefined && hA.station !== undefined) {
         shA.getRange(2, 1, shA.getLastRow() - 1, shA.getLastColumn()).getValues().forEach(function (r, i) {
           var st = String(r[hA.station]).trim().toUpperCase(), jeton = String(r[hA.push] || '').trim();
-          if (!jeton || !st || st === 'DIRECTION' || st === 'COMPTA' || st.indexOf('TR:') === 0) return;
+          if (!jeton || !st || st === 'DIRECTION' || st === 'COMPTA' || st.indexOf('TR:') === 0 || st.indexOf('CAM:') === 0) return;   // conseils et messages : stations seulement
           if (hA.actif !== undefined && !/^(oui|true|yes|1)$/i.test(String(r[hA.actif]).trim())) return;
           if (hA.jeton !== undefined && !String(r[hA.jeton] || '').trim()) return;   // code libéré
           tel.push({ ligne: i + 2, station: st, push: jeton, vu: hA.msg_vu_le === undefined ? '' : txt(r[hA.msg_vu_le], 'yyyy-MM-dd HH:mm:ss'), col: hA.push + 1 });
@@ -197,5 +198,63 @@ function verifierChat() {
   var t = 'Accès à la base du chat : ' + (r.getResponseCode() === 200 ? 'OK' : 'REFUSÉ') + ' (réponse ' + r.getResponseCode() + ')';
   Logger.log(t + ' — ' + JSON.stringify(chatMembres_()));
   return t;
+}
+
+/* Notifications du chat (27/11/2026). Le serveur du rapport note une ligne par message signalé dans « Chat (alertes) » (qui, à qui,
+ * quelle conversation — jamais le texte). Ici : on pousse « <nom> vous a écrit » aux téléphones visés qui ont une adresse de notification,
+ * puis on note « pousse_le » et « pousse_a ». Une alerte de plus d'une heure n'est plus envoyée (seulement notée). */
+var ONGLET_CHA = 'Chat (alertes)', CANAL_CHAT = 'rrd-chat';
+function codeChat_(station, activation) {   // le nom de chat d'un téléphone, comme le serveur le donne
+  var s = String(station || '').trim().toUpperCase();
+  if (s === 'DIRECTION' || s === 'COMPTA') return String(activation || '').toUpperCase().replace(/[^A-Z0-9-]/g, '');
+  if (s.indexOf('TR:') === 0) return '';
+  if (s.indexOf('CAM:') === 0) return 'CAM-' + s.slice(4);
+  return s.replace(/[^A-Z0-9-]/g, '');
+}
+function chatAlertes_() {
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(8000)) return { ok: true, occupe: true };
+  try {
+    var ss = SpreadsheetApp.openById(SHEET_ID), sh = ss.getSheetByName(ONGLET_CHA);
+    if (!sh || sh.getLastRow() < 2) return { ok: true, alertes: 0 };
+    var h = entetes_(sh, ['pousse_le', 'pousse_a']), n = sh.getLastRow(), de = Math.max(2, n - 199);
+    var lignes = sh.getRange(de, 1, n - de + 1, sh.getLastColumn()).getValues(), fz = ss.getSpreadsheetTimeZone();
+    var dus = [];
+    lignes.forEach(function (r, i) { if (!String(r[h.pousse_le] == null ? '' : r[h.pousse_le]).trim()) dus.push({ ligne: de + i, r: r }); });
+    if (!dus.length) return { ok: true, alertes: 0 };
+    var tel = [], shA = ss.getSheetByName(ONGLET_APP);
+    if (shA && shA.getLastRow() >= 2) {
+      var hA = entetes_(shA, []);
+      shA.getRange(2, 1, shA.getLastRow() - 1, shA.getLastColumn()).getValues().forEach(function (r, i) {
+        var push = hA.push === undefined ? '' : String(r[hA.push] || '').trim(), act = String(r[hA.code_activation] || '').trim();
+        if (!push || (hA.actif !== undefined && !/^(oui|true|yes|1)$/i.test(String(r[hA.actif]).trim())) || (hA.jeton !== undefined && !String(r[hA.jeton] || '').trim())) return;
+        var code = codeChat_(r[hA.station], act); if (code) tel.push({ ligne: i + 2, code: code, act: act, push: push, col: hA.push + 1 });
+      });
+    }
+    var maint = new Date(), envoyes = 0, stop = '';
+    for (var k = 0; k < dus.length && !stop; k++) {
+      var r = dus[k].r, conv = String(r[h.conv]), cible = String(r[h.cible]), deAct = String(r[h.appareil]), nom = String(r[h.de_nom]), recus = [];
+      var le = r[h.le] instanceof Date ? r[h.le] : new Date(String(r[h.le]).replace(' ', 'T') + '-05:00');
+      var vieux = !(le instanceof Date) || isNaN(le) || maint - le > 3600e3;
+      if (!vieux) {
+        var cibles = tel.filter(function (x) { return x.act !== deAct && (cible === 'TOUS' || x.code === cible); });
+        for (var j = 0; j < cibles.length; j++) {
+          var x = cibles[j], rep = fcm_({ message: { token: x.push,
+            notification: { title: '💬 ' + nom, body: conv === 'general' ? 'Nouveau message dans « Général »' : 'Vous a écrit un message' },
+            data: { chat: conv },
+            android: { priority: 'HIGH', ttl: '3600s', notification: { channel_id: CANAL_CHAT, tag: 'chat-' + conv, default_sound: true, notification_priority: 'PRIORITY_HIGH' } } } });
+          if (rep.code === 200) { envoyes++; if (recus.indexOf(x.code) < 0) recus.push(x.code); }
+          else if (rep.code === 401 || rep.code === 403) { stop = 'Firebase refuse l\'accès (' + rep.code + ')'; break; }
+          else if (/UNREGISTERED/.test(rep.texte) || (rep.code === 400 && /not a valid FCM registration token/.test(rep.texte))) { shA.getRange(x.ligne, x.col).setValue(''); x.push = ''; }
+        }
+        tel = tel.filter(function (y) { return y.push; });
+      }
+      if (stop) break;
+      sh.getRange(dus[k].ligne, h.pousse_le + 1).setValue(Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd HH:mm:ss'));
+      sh.getRange(dus[k].ligne, h.pousse_a + 1).setValue(vieux ? '(trop ancien, pas envoyé)' : recus.join(', '));
+    }
+    if (stop) console.error(stop);
+    return { ok: !stop, alertes: dus.length, envoyes: envoyes };
+  } finally { lock.releaseLock(); }
 }
 

@@ -73,7 +73,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.30.0';
+var VERSION_APP = '1.31.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -951,24 +951,25 @@ function pushVu(n) {   // un message arrivé par notification poussée ne doit p
   var vus = CFG.get('msgVus', []);
   if (vus.indexOf(id) < 0) { vus.push(id); CFG.set('msgVus', vus.slice(-200)); }
 }
-function pushDemarrer() {
+function pushDemarrer() {   // m1.34 : aussi camions et direction, pour les notifications du chat
   var jeton = CFG.get('jeton', '');
-  if (!PN || CFG.get('role', '') || !jeton || PUSH.pret === jeton) return;
+  if (!PN || CFG.get('role', '') === 'transferts' || !jeton || PUSH.pret === jeton) return;
   PUSH.pret = jeton;   // après « Changer de code », l'adresse est redonnée au bureau pour le nouveau code
   if (!PUSH.ecoute) {
     PUSH.ecoute = true;
     PN.addListener('registration', function (t) {
       var v = String((t && t.value) || '');
-      if (v && CFG.get('jeton', '') && !CFG.get('role', '')) api('pushToken', { payload: { token: v } }).catch(function () { PUSH.pret = ''; });
+      if (v && CFG.get('jeton', '') && CFG.get('role', '') !== 'transferts') api('pushToken', { payload: { token: v } }).catch(function () { PUSH.pret = ''; });
     });
     PN.addListener('pushNotificationReceived', function (n) { pushVu(n); msgCharger(true); });
-    PN.addListener('pushNotificationActionPerformed', function (a) { pushVu(a && a.notification); msgCharger(true); });
+    PN.addListener('pushNotificationActionPerformed', function (a) { var c = a && a.notification && a.notification.data && a.notification.data.chat; if (c) return chOuvrirDepuisNotif(String(c)); pushVu(a && a.notification); msgCharger(true); });
   }
   PN.checkPermissions().then(function (p) { return p.receive === 'granted' ? p : PN.requestPermissions(); })
     .then(function (p) {
       if (p.receive !== 'granted') { PUSH.pret = ''; PUSH.refus = true; return; }
       PUSH.refus = false;
       PN.createChannel({ id: 'rrd-messages', name: 'Messages de la direction', description: 'Conseils du jour et messages de la direction', importance: 4, visibility: 1 }).catch(function () { });
+      PN.createChannel({ id: 'rrd-chat', name: 'Chat', description: 'Nouveaux messages du chat', importance: 4, visibility: 1 }).catch(function () { });
       return PN.register();
     }).catch(function () { PUSH.pret = ''; });
 }
@@ -2405,7 +2406,7 @@ function chDemarrer() {
   CH.etat = 'depart'; CH.err = ''; chMaj();
   chJeton().then(function () { return api('chatEntrer', { payload: { uid: CH.auth.uid } }); }).then(function (m) {
     CH.moi = m; CFG.set('chatMoi', m); return chAttendre(0);
-  }).then(function () { CH.etat = 'marche'; CH.att = 0; chEcouter(); chMaj(); }).catch(function (e) {
+  }).then(function () { CH.etat = 'marche'; CH.att = 0; chEcouter(); chMaj(); if (CFG.get('role', '')) pushDemarrer(); if (CH.apres) { var c = CH.apres; CH.apres = ''; chOuvrirDepuisNotif(c); } }).catch(function (e) {
     CH.etat = 'arret';
     CH.err = e && e.attente ? 'Le chat n\'est pas encore ouvert pour ce téléphone. Il le sera dès que le bureau aura fini de le préparer.' : (e && e.erreur) || 'Pas de connexion au chat.';
     chMaj(); clearTimeout(CH.minuterie); CH.minuterie = setTimeout(chDemarrer, e && e.attente ? 300000 : 60000);
@@ -2545,6 +2546,11 @@ function chAfficherConv(conv, maj) {
   if (x.n || conv === 'general') chMarquerLu(conv);
   Array.prototype.forEach.call(document.querySelectorAll('.chBadge'), function (e) { e.innerHTML = chBadgeTxt(); });
 }
+function chOuvrirDepuisNotif(conv) {   // toucher la notification d'un message : ouvrir la conversation
+  if (CH.etat !== 'marche') { CH.apres = conv; return chDemarrer(); }
+  if (conv !== 'general' && conv.split('__').indexOf(CH.moi.code) < 0 && !chDirection()) return ecranChat();
+  chAfficherConv(conv);
+}
 function chRetourListe() { CH.ouvert = ''; chFermer('conv'); ecranChat(); }
 function chEnvoyer(conv) {
   var t = ($('chTxt').value || '').trim();
@@ -2560,7 +2566,7 @@ function chEnvoyer(conv) {
       var c = CFG.get('chatConvs', {}) || {}; c[conv] = Date.now(); CFG.set('chatConvs', c);
       return fetch(FB_URL + 'fils/' + chAutre(conv) + '/' + moi + q, { method: 'PUT', body: JSON.stringify({ le: ts }) });
     });
-  }).then(function () { $('chTxt').value = ''; chMarquerLu(conv); }).catch(function (e) {
+  }).then(function () { $('chTxt').value = ''; chMarquerLu(conv); api('chatSignal', { payload: { conv: conv } }).catch(function () { }); }).catch(function (e) {
     alerte(e && e.statut ? 'Message refusé par le chat (' + e.statut + '). Votre texte est gardé.' : 'Pas envoyé : pas de connexion. Votre texte est gardé ; réessayez quand il y a du signal.');
   }).then(function () { if ($('chBtn')) $('chBtn').disabled = false; });
 }
