@@ -50,6 +50,7 @@ jobs:
           BASE="https://github.com/${{ github.repository }}/releases/download/build-$N"
           mkdir -p out
           cp android/app/build/outputs/apk/release/app-release.apk "out/RRD-Rapport-build-$N.apk"
+          cp "out/RRD-Rapport-build-$N.apk" out/RRD-Rapport.apk   # nom fixe : lien de téléchargement stable depuis redrebel.us/app (releases/latest/download/RRD-Rapport.apk)
           (cd www && zip -qr "../out/web-$N.zip" .)
           NATIVE_MIN=$(tr -dc '0-9' < native_min.txt)
           SUM=$(sha256sum "out/web-$N.zip" | cut -d' ' -f1)   # obligatoire : l'application refuse une mise à jour sans empreinte
