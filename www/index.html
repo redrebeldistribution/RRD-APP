@@ -60,6 +60,7 @@
 <div class="top"><img src="emblem.png" alt="" style="width:28px;height:28px;border-radius:50%"><b>RRD</b><span class="pill" id="net">…</span></div>
 <div class="sect hidden" id="sect"><a class="on" href="index.html">📋 Rapports</a><a href="transfert.html">💸 Transferts</a><a href="#" id="sPhotos" class="hidden" onclick="ecranPhotos();phActualiser();return false">📷 Photos</a></div>
 <input type="file" id="phInput" accept="image/*" capture="environment" class="hidden" onchange="phPrise(this)">
+<input type="file" id="bdGalInput" accept="image/*" class="hidden" onchange="phPrise(this)">
 <input type="file" id="cmInput" accept="image/*" capture="environment" class="hidden" onchange="cmPhoto(this)">
 <div class="wrap" id="app"><p class="center mut" style="margin-top:40px">Chargement…</p></div>
 <div class="bar hidden" id="bar"><div class="in" id="barIn"></div></div>
@@ -72,7 +73,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.22.0';
+var VERSION_APP = '1.23.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -225,9 +226,9 @@ function toast(t) {   // petit mot en bas de l'écran : montre que le bouton a b
   if (!d) { d = document.createElement('div'); d.id = 'toast'; d.style.cssText = 'position:fixed;left:50%;bottom:96px;transform:translateX(-50%);background:rgba(0,0,0,.82);color:#fff;padding:9px 16px;border-radius:20px;font-size:14px;z-index:60;white-space:nowrap'; document.body.appendChild(d); }
   d.textContent = t; d.style.display = 'block'; clearTimeout(S.toastT); S.toastT = setTimeout(function () { d.style.display = 'none'; }, 2500);
 }
-function prendrePhoto(inputId, suite) {
-  var C = NAT.Camera, repli = function () { var i = $(inputId); i.value = ''; i.click(); };
-  toast('Ouverture de l\'appareil photo…');
+function prendrePhoto(inputId, suite, source) {   // source 'PHOTOS' = galerie du téléphone (bordereaux seulement) ; sinon l'appareil photo
+  var gal = source === 'PHOTOS', C = NAT.Camera, repli = function () { var i = $(inputId); i.value = ''; i.click(); };
+  toast(gal ? 'Ouverture de la galerie…' : 'Ouverture de l\'appareil photo…');
   if (!C || S.photoRepli) return repli();
   if (S.photoEnCours && Date.now() - S.photoEnCours < 2500) return;   // deux touchers de suite : un seul appareil photo
   S.photoEnCours = Date.now();
@@ -236,16 +237,17 @@ function prendrePhoto(inputId, suite) {
   var regle = false, parti = false, vu = function () { parti = true; };
   document.addEventListener('pause', vu); window.addEventListener('blur', vu); document.addEventListener('visibilitychange', vu);
   var fin = function () { regle = true; S.photoEnCours = 0; document.removeEventListener('pause', vu); window.removeEventListener('blur', vu); document.removeEventListener('visibilitychange', vu); };
-  setTimeout(function () { if (regle || parti || document.hidden) return; fin(); S.photoRepli = true; toast('Nouvel essai…'); repli(); }, 4000);
+  setTimeout(function () { if (regle || parti || document.hidden) return; fin(); if (!gal) S.photoRepli = true; toast('Nouvel essai…'); repli(); }, 4000);
   var appel;
-  try { appel = C.getPhoto({ source: 'CAMERA', resultType: 'dataUrl', quality: 80, width: 1600, correctOrientation: true, saveToGallery: false }); }
-  catch (e) { fin(); S.photoRepli = true; return repli(); }
+  try { appel = C.getPhoto({ source: gal ? 'PHOTOS' : 'CAMERA', resultType: 'dataUrl', quality: 80, width: 1600, correctOrientation: true, saveToGallery: false }); }
+  catch (e) { fin(); if (!gal) S.photoRepli = true; return repli(); }
   appel.then(function (ph) {
     if (regle) return; fin(); if (ph && ph.dataUrl) suite(ph.dataUrl);
   }, function (e) {
     if (regle) return; fin();
     var m = String((e && (e.message || e.errorMessage)) || e || '');
     if (/cancel/i.test(m)) return;
+    if (gal) return repli();   // galerie refusée ou en panne : le sélecteur de fichiers du téléphone fait le même travail, sans autorisation
     if (/denied|permission/i.test(m)) return alerte('L\'appareil photo est bloqué pour RRD. Ouvrez Paramètres du téléphone > Applications > RRD > Autorisations > Appareil photo, puis choisissez « Autoriser ».');
     S.photoRepli = true; repli();   // autre panne : l'ancien chemin sert pour le reste de la session
   });
@@ -710,8 +712,9 @@ function ecranPhotos(msg) {
         (e === 'ok' ? '✓ reçue' : e === 'att' ? '⏳ en attente' : 'à prendre') + '</span></button>';
     }).join('') + '</div>';
     var bds = l.filter(function (r) { return r.genre === 'bordereau' && r.date === now.date && r.statut !== 'rejete'; });
-    h += '<h2>Bordereau de dépôt</h2><button class="sec" style="width:100%" onclick="phPrendre(\'BORDEREAU\')">🧾 Envoyer un bordereau</button>';
-    if (bds.length) h += '<div class="note">' + bds.map(function (r) { return (r.statut === 'envoye' ? '✓ ' : '⏳ ') + fmt(Number(r.montant)) + ' ' + esc(r.devise) + ' — ' + esc(r.beneficiaire) + (r.statut === 'envoye' ? ' (reçu par le bureau)' : ' (en attente de signal)'); }).join('<br>') + '</div>';
+    h += '<h2>Bordereau de dépôt</h2><button style="width:100%" onclick="phPrendre(\'BORDEREAU\')">📷 Prendre le bordereau en photo</button>' +
+      '<p class="mut center" style="margin:10px 0 0">Photo déjà dans le téléphone ? <a href="#" onclick="phPrendre(\'BORDEREAU\',\'PHOTOS\');return false">Choisir dans la galerie</a> (une explication sera demandée)</p>';
+    if (bds.length) h += '<div class="note">' + bds.map(function (r) { return (r.statut === 'envoye' ? '✓ ' : '⏳ ') + fmt(Number(r.montant)) + ' ' + esc(r.devise) + ' — ' + esc(r.beneficiaire) + (r.galerie ? ' · galerie' : '') + (r.statut === 'envoye' ? ' (reçu par le bureau)' : ' (en attente de signal)'); }).join('<br>') + '</div>';
     h += '<h2>Aujourd\'hui</h2><table><tr><th>Heure</th>' + PH_TYPES.map(function (t) { return '<th class="center">' + t[2] + '</th>'; }).join('') + '</tr>' + vues.map(function (hh) {
       var e = etat[hh] || {}, passee = now.heure > hh && comptees.indexOf(hh) >= 0;
       return '<tr' + (hh === now.heure ? ' style="font-weight:700"' : '') + '><td>' + hh + ' h</td>' + PH_TYPES.map(function (t) {
@@ -722,11 +725,16 @@ function ecranPhotos(msg) {
     view(h, '<button class="sec" onclick="phActualiser()">🔄 Envoyer / actualiser</button>', 'photos');
   });
 }
-function phPrendre(type) { PH.type = type; CFG.set('phEnCours', { type: type, ms: Date.now() }); prendrePhoto('phInput', phImage); }
+/* Bordereau : l'appareil photo d'abord ; la galerie reste possible (source 'PHOTOS'), avec une explication obligatoire. Les autres photos : appareil photo seulement. */
+function phPrendre(type, source) {
+  var gal = type === 'BORDEREAU' && source === 'PHOTOS';
+  PH.type = type; PH.source = gal ? 'galerie' : ''; CFG.set('phEnCours', { type: type, ms: Date.now(), source: PH.source });
+  prendrePhoto(gal ? 'bdGalInput' : 'phInput', phImage, gal ? 'PHOTOS' : '');
+}
 function phPrise(input) { var f = input.files && input.files[0]; if (f) phImage(URL.createObjectURL(f)); }
 function phImage(url) {
-  var type = PH.type, ms = Date.now(), jh = phJourHeure(ms), st = CFG.get('station', {});
-  CFG.del('phEnCours');
+  var type = PH.type, ms = Date.now(), jh = phJourHeure(ms), st = CFG.get('station', {}), gal = type === 'BORDEREAU' && PH.source === 'galerie';
+  CFG.del('phEnCours'); PH.source = '';
   var img = new Image();
   img.onload = function () {
     var k = Math.min(1, (type === 'BORDEREAU' ? 1600 : 1280) / Math.max(img.width, img.height));
@@ -743,7 +751,7 @@ function phImage(url) {
       c.fillStyle = '#fff'; c.font = 'bold ' + fs2 + 'px sans-serif'; c.fillText(l2, fs / 2, cv.height - fs2 * 0.55);
     }
     var r = { cid: (bord ? 'B' : 'P') + ms.toString(36) + Math.random().toString(36).slice(2, 8), station: st.code || '', type: type, pris_ms: ms, date: jh.date, heure: jh.heure, statut: 'attente', compteur: '', photo: cv.toDataURL('image/jpeg', bord ? 0.7 : 0.6) };
-    if (bord) { r.genre = 'bordereau'; PH.attente = r; phEcranBordereau(); }
+    if (bord) { r.genre = 'bordereau'; if (gal) r.galerie = true; PH.attente = r; phEcranBordereau(); }
     else if (type === 'COMPTEUR' || type.indexOf('JAUGE') === 0) { PH.attente = r; phEcranCompteur(); } else phGarder(r);
   };
   img.onerror = function () { URL.revokeObjectURL(url); alerte('Photo illisible. Reprenez-la.'); };
@@ -763,23 +771,28 @@ function phValiderCompteur() {
   if (v && (n === null || (r.type.indexOf('JAUGE') === 0 && n > 100))) return alerte('Chiffres illisibles. Écrivez seulement les chiffres, ou laissez vide.');
   r.compteur = v ? String(n) : ''; PH.attente = null; phGarder(r);
 }
+var BD_GALERIE = 'GALERIE : ';   // début de la note d'un bordereau dont la photo vient de la galerie
 function phEcranBordereau() {
   var r = PH.attente; if (!r) return ecranPhotos();
   view('<h1>Bordereau de dépôt</h1><img class="prev" src="' + r.photo + '">' +
+    (r.galerie ? '<div class="wait">Photo choisie dans la galerie, pas prise maintenant.</div><label>Pourquoi la photo vient-elle de la galerie ? (obligatoire)</label><input id="bdGal" autocomplete="off" maxlength="120" placeholder="expliquez en quelques mots">' : '') +
     '<label>Montant écrit sur le bordereau</label><input id="bdMt" inputmode="decimal" autocomplete="off" placeholder="seulement les chiffres">' +
     '<label>Monnaie</label><select id="bdDev"><option value="HTG">Gourdes (HTG)</option><option value="USD">Dollars US (USD)</option></select>' +
     '<label>Dépôt fait pour</label><select id="bdBen">' + BD_BENEF.map(function (b) { return '<option>' + esc(b) + '</option>'; }).join('') + '</select>' +
     '<label>Date du dépôt</label><input type="date" id="bdDate" value="' + r.date + '" max="' + r.date + '">' +
     '<label>N° du bordereau (facultatif)</label><input id="bdNum" autocomplete="off">' +
-    '<label>Note (facultatif)</label><input id="bdNote" autocomplete="off">',
+    '<label>Note (facultatif)</label><input id="bdNote" autocomplete="off"' + (r.galerie ? ' maxlength="60"' : '') + '>',
     '<button class="sec" onclick="PH.attente=null;ecranPhotos()">Annuler</button><button onclick="phValiderBordereau()">Envoyer</button>', 'photoBordereau');
 }
 function phValiderBordereau() {
   var r = PH.attente; if (!r) return;
   var mt = nb($('bdMt').value);   // même règle que les rapports : « 125 000 » ou « 125,000 » = cent vingt-cinq mille
+  var ex = r.galerie ? String($('bdGal').value || '').replace(/\s+/g, ' ').trim() : '';
+  if (r.galerie && ex.length < 5) return alerte('Expliquez pourquoi la photo vient de la galerie et n\'a pas été prise maintenant.');
   if (mt === null || !(mt > 0)) return alerte('Écrivez le montant du bordereau, seulement les chiffres (ex. 125000).');
   r.montant = String(mt); r.devise = $('bdDev').value; r.beneficiaire = $('bdBen').value; r.date_depot = $('bdDate').value || r.date;
   r.numero = String($('bdNum').value || '').trim(); r.note = String($('bdNote').value || '').trim();
+  if (r.galerie) r.note = (BD_GALERIE + ex + (r.note ? ' — ' + r.note : '')).slice(0, 200);   // l'explication voyage dans la note : le bureau la voit dans la feuille et dans l'onglet Bordereaux
   PH.attente = null; phGarder(r);
 }
 function phGarder(r) {
@@ -1837,7 +1850,8 @@ function ongletBordereaux() {
     h += '<div class="card">' + d.bordereaux.length + ' bordereau(x)' + (tot ? ' — total ' + tot : '') + '<div class="mut">Montants tels que la station les a écrits ; vérifiez avec la photo.</div></div>';
     if (!d.bordereaux.length) h += '<p class="mut">Aucun bordereau pour ces dates.</p>';
     else h += '<table><tr><th>Dépôt</th><th>Station</th><th class="n">Montant</th><th></th></tr>' + d.bordereaux.map(function (b, i) {
-      return '<tr><td>' + dfr(b.date).slice(0, 5) + '</td><td>' + esc(b.nom) + '<div class="mut">' + esc(b.beneficiaire) + (b.numero ? ' · n° ' + esc(b.numero) : '') + (b.note ? ' · ' + esc(b.note) : '') + '</div></td>' +
+      return '<tr><td>' + dfr(b.date).slice(0, 5) + '</td><td>' + esc(b.nom) + '<div class="mut">' + esc(b.beneficiaire) + (b.numero ? ' · n° ' + esc(b.numero) : '') + (b.note && b.note.indexOf(BD_GALERIE) !== 0 ? ' · ' + esc(b.note) : '') + '</div>' +
+        (String(b.note || '').indexOf(BD_GALERIE) === 0 ? '<div style="color:var(--warn);font-weight:700;font-size:13px">🖼️ Photo de la galerie : <span style="font-weight:400">' + esc(b.note.slice(BD_GALERIE.length)) + '</span></div>' : '') + '</td>' +
         '<td class="n">' + fmt(b.montant) + ' ' + esc(b.devise) + '</td><td class="n"><button class="sec" style="padding:6px 10px" onclick="phVoir(\'' + esc(b.id) + '\',' + i + ')">Voir</button></td></tr>' +
         '<tr><td colspan="4" id="phv' + i + '" style="border:0;padding:0"></td></tr>';
     }).join('') + '</table>';
@@ -2005,7 +2019,7 @@ setTimeout(verifierMaj, 4000); setInterval(verifierMaj, 3 * 3600 * 1000);
 try { NAT.App && NAT.App.addListener && NAT.App.addListener('appRestoredResult', function (r) {
   var d = r && r.pluginId === 'Camera' && r.methodName === 'getPhoto' && r.success && r.data && r.data.dataUrl, enc = CFG.get('phEnCours', null);
   if (!d || !enc || Date.now() - enc.ms > 10 * 60000) return;
-  setTimeout(function () { if (CFG.get('jeton', '') && !CFG.get('role', '')) { PH.type = enc.type; phImage(d); } }, 1500);
+  setTimeout(function () { if (CFG.get('jeton', '') && !CFG.get('role', '')) { PH.type = enc.type; PH.source = enc.source || ''; phImage(d); } }, 1500);
 }); } catch (e) { }
 restaurer().then(function () {
   if (!CFG.get('jeton', '')) ecranEnregistrer();
