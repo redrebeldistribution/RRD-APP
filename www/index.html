@@ -73,7 +73,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.28.0';
+var VERSION_APP = '1.28.1';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -1714,6 +1714,7 @@ function entete() {
   var tabs = [['rapports', 'Rapports'], ['analyse', '📊 Analyse'], ['resume', 'Résumé du jour'], ['photos', '📷 Photos'], ['bordereaux', '🧾 Bordereaux'], ['stock', IC_CITERNE + ' Stock'], ['camion', '🚚 Camion'], ['livrer', '🧭 À livrer'], ['argent', '💵 Argent'], ['messages', '✉️ Messages'], ['prix', 'Prix']];
   if (D.utilisateur.role === 'management') tabs.push(['appareils', 'Téléphones']);
   return '<h1>Tableau de bord</h1><div class="sub">' + esc(D.utilisateur.nom) + ' · ' + (D.utilisateur.role === 'management' ? 'Direction' : 'Comptabilité') + ' · montants en ' + DEV + ' · <a href="#" onclick="changerCode();return false">Changer de code</a></div>' +
+    '<div class="mut">Version ' + VERSION_APP + ' (build ' + (window.RRD_BUILD || 0) + ')' + (S.majPrete ? ' — <b>mise à jour ' + esc(S.majPrete) + ' prête : fermez l\'application puis rouvrez-la</b>' : S.majErreur ? ' — mise à jour impossible : ' + esc(S.majErreur) : '') + '</div>' +
     '<div class="tabs">' + tabs.map(function (t) { return '<button class="' + (T.onglet === t[0] ? '' : 'sec') + '" onclick="tableau(\'' + t[0] + '\')">' + t[1] + '</button>'; }).join('') + '</div>';
 }
 function charge() { view(entete() + '<p class="mut center">Chargement…</p>'); }
