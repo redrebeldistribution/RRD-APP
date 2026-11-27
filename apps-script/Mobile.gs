@@ -2011,3 +2011,29 @@ function demandeStatut_(ctx, p) {
   return demandesListe_();
 }
 
+
+/* ============================ Inventaire des photos Telegram dans Drive (27/11/2026, lecture seule) ============================
+ * Demande du propriétaire : faire de la place dans Drive (87 %) en retirant les photos Telegram déjà utilisées et rangées ailleurs.
+ * Cette fonction NE SUPPRIME RIEN : elle compte, pèse et repère les doublons (même nom et même taille), puis écrit le résultat
+ * dans l'onglet « Inventaire Drive (Telegram) » de la feuille privée. À lancer depuis l'éditeur ; elle reprend où elle s'était arrêtée. */
+var INV_RACINES = { 'Telegram Desktop': '15aaDHT_86Fh7zFQL16E2nTJ6MdYbepFb', '11 Photos Telegram 2026': '1fAW8U-no5_BqEk-YOvm8b3pw_pK7tMQX',
+  '09 Photos Telegram 2023': '1i_iqLHLu89Iwja99iLjEgC1pVDRqrG-N', '10 Exports WhatsApp & Telegram': '1pU6LF5CKXw6In9GtZ6ExGStRdmeOBZPs' };
+function inventaireTelegram() {
+  var debut = Date.now(), props = PropertiesService.getScriptProperties(), etat = JSON.parse(props.getProperty('INV_ETAT') || 'null');
+  if (!etat) { etat = { pile: [], fichiers: 0 }; Object.keys(INV_RACINES).forEach(function (n) { etat.pile.push({ id: INV_RACINES[n], chemin: n, racine: n }); }); }
+  var sh = camFeuille_('Inventaire Drive (Telegram)', ['racine', 'dossier', 'fichier', 'id', 'type', 'taille_ko', 'cree_le', 'proprietaire']);
+  var lot = [];
+  while (etat.pile.length && Date.now() - debut < 300000) {
+    var d = etat.pile.pop(), dos = DriveApp.getFolderById(d.id), sous = dos.getFolders(), f = dos.getFiles();
+    while (sous.hasNext()) { var s = sous.next(); etat.pile.push({ id: s.getId(), chemin: d.chemin + ' / ' + s.getName(), racine: d.racine }); }
+    while (f.hasNext()) {
+      var x = f.next(), prop = '';
+      try { prop = x.getOwner() ? x.getOwner().getEmail() : ''; } catch (e) { }
+      lot.push([d.racine, d.chemin, x.getName(), x.getId(), x.getMimeType(), Math.round(x.getSize() / 1024), Utilities.formatDate(x.getDateCreated(), TZ, 'yyyy-MM-dd'), prop]);
+      if (lot.length >= 500) { sh.getRange(sh.getLastRow() + 1, 1, lot.length, 8).setValues(lot); etat.fichiers += lot.length; lot = []; }
+    }
+  }
+  if (lot.length) { sh.getRange(sh.getLastRow() + 1, 1, lot.length, 8).setValues(lot); etat.fichiers += lot.length; }
+  if (etat.pile.length) { props.setProperty('INV_ETAT', JSON.stringify(etat)); Logger.log('À SUIVRE — ' + etat.fichiers + ' fichiers notés, ' + etat.pile.length + ' dossiers restants : relancer inventaireTelegram'); }
+  else { props.deleteProperty('INV_ETAT'); Logger.log('FINI — ' + etat.fichiers + ' fichiers notés. Drive utilisé : ' + Math.round(DriveApp.getStorageUsed() / 1048576) + ' Mo sur ' + Math.round(DriveApp.getStorageLimit() / 1048576) + ' Mo'); }
+}
