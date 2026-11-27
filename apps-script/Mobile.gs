@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.36';
+var MOBILE_VERSION = 'm1.37';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var STATION_FORMATION = 'TST', MAX_APPAREILS_FORMATION = 50;   // les codes de la station de test servent à la formation : plusieurs téléphones avec le même code (propriétaire, 26/11/2026)
 var MAX_APPAREILS_ROLE = 5;   // un code DIR ou CPT peut servir sur 5 appareils en même temps (demande du propriétaire, 26/11/2026)
@@ -1975,7 +1975,8 @@ function demandeStation_(p) {
   if (nom.length < 2) throw new UserError('nom', 'INVALIDE');
   if (String(tel).replace(/[^0-9]/g, '').length < 8) throw new UserError('telephone', 'INVALIDE');
   if (ville.length < 2) throw new UserError('ville', 'INVALIDE');
-  if (mail && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(mail.replace(/^’/, ''))) throw new UserError('email', 'INVALIDE');
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(mail.replace(/^’/, ''))) throw new UserError('email', 'INVALIDE');   // obligatoire (direction, 27/11/2026)
+  if (msg.length < 10) throw new UserError('message', 'INVALIDE');
   var cache = CacheService.getScriptCache(), cle = 'dms_' + Utilities.formatDate(new Date(), TZ, 'yyyyMMddHH'), n = Number(cache.get(cle) || 0);
   if (n >= 30) throw new UserError('trop', 'TROP');
   cache.put(cle, String(n + 1), 3700);
