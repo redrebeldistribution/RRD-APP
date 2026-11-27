@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Red Rebel Distribution — Propane en Haïti</title>
+<meta name="description" content="Red Rebel Distribution : stations de remplissage de propane et livraison en vrac en Haïti.">
+<link rel="icon" href="icon.png">
+<meta name="theme-color" content="#C21C34">
+<style>
+  :root { --red:#C21C34; --red2:#9d1529; --gold:#E0B21A; --gold2:#D49A15; --ink:#1f1a1a; --mut:#6b6260; --bg:#fbf7f2; --card:#fff; --line:#eadfd3; }
+  * { box-sizing:border-box; } html { scroll-behavior:smooth; }
+  body { margin:0; font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif; color:var(--ink); background:var(--bg); line-height:1.55; font-size:17px; }
+  a { color:inherit; } img { max-width:100%; }
+  .wrap { max-width:1040px; margin:0 auto; padding:0 20px; }
+  header { background:var(--red); color:#fff; position:sticky; top:0; z-index:10; box-shadow:0 2px 10px rgba(0,0,0,.18); }
+  .bar { display:flex; align-items:center; gap:12px; padding:10px 0; }
+  .brand { display:flex; align-items:center; gap:10px; font-weight:800; font-size:18px; text-decoration:none; letter-spacing:.2px; }
+  .brand img { width:38px; height:38px; border-radius:50%; } .brand span b { color:var(--gold); }
+  .sp { flex:1; }
+  .lang { display:flex; border:1px solid rgba(255,255,255,.45); border-radius:999px; overflow:hidden; }
+  .lang button { background:none; border:0; color:#fff; font:inherit; font-size:13px; font-weight:700; padding:6px 10px; cursor:pointer; }
+  .lang button.on { background:#fff; color:var(--red); }
+  .staff { font-size:14px; font-weight:700; text-decoration:none; padding:7px 12px; border-radius:999px; background:rgba(0,0,0,.22); white-space:nowrap; }
+  .hero { background:linear-gradient(160deg,var(--red) 0%,var(--red2) 100%); color:#fff; padding:44px 0 56px; }
+  .heroIn { display:grid; gap:28px; align-items:center; }
+  .hero h1 { font-size:clamp(32px,6.2vw,54px); line-height:1.08; margin:0 0 14px; letter-spacing:-.5px; }
+  .hero h1 em { font-style:normal; color:var(--gold); }
+  .hero p { font-size:19px; margin:0 0 22px; max-width:34em; opacity:.95; }
+  .cta { display:flex; flex-wrap:wrap; gap:12px; }
+  .btn { display:inline-block; text-decoration:none; font-weight:800; padding:14px 20px; border-radius:12px; font-size:17px; }
+  .btn.gold { background:linear-gradient(90deg,var(--gold2),var(--gold)); color:#2a1d00; }
+  .btn.line { border:2px solid rgba(255,255,255,.7); color:#fff; }
+  .badge { justify-self:center; width:min(250px,60vw); aspect-ratio:1; border-radius:50%; background:#fff; display:grid; place-items:center; box-shadow:0 14px 40px rgba(0,0,0,.28); }
+  .badge img { width:100%; height:100%; border-radius:50%; }
+  section { padding:52px 0; } section.alt { background:#fff; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+  h2 { font-size:clamp(26px,4.4vw,36px); margin:0 0 6px; letter-spacing:-.3px; }
+  h2::after { content:""; display:block; width:64px; height:6px; border-radius:3px; margin-top:10px; background:linear-gradient(90deg,var(--gold2),var(--gold)); }
+  .lead { color:var(--mut); margin:14px 0 26px; max-width:40em; }
+  .grid { display:grid; gap:14px; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); }
+  .card { background:var(--card); border:1px solid var(--line); border-top:5px solid var(--gold); border-radius:14px; padding:16px 18px; }
+  .card h3 { margin:0 0 4px; font-size:19px; } .card p { margin:0; color:var(--mut); font-size:15px; }
+  .two { display:grid; gap:26px; }
+  ul.ok { list-style:none; padding:0; margin:0; display:grid; gap:10px; }
+  ul.ok li { padding-left:34px; position:relative; }
+  ul.ok li::before { content:"✓"; position:absolute; left:0; top:0; width:24px; height:24px; border-radius:50%; background:var(--red); color:#fff; font-weight:800; font-size:14px; display:grid; place-items:center; }
+  .panel { background:var(--red); color:#fff; border-radius:18px; padding:26px; }
+  .panel h3 { margin:0 0 8px; font-size:22px; } .panel p { margin:0 0 16px; opacity:.95; }
+  .contact { display:grid; gap:14px; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); }
+  .contact .card b { display:block; font-size:13px; text-transform:uppercase; letter-spacing:.8px; color:var(--mut); margin-bottom:4px; }
+  .contact .card span { font-size:19px; font-weight:700; }
+  .todo { display:inline-block; background:#fff3bf; color:#7a5b00; border:1px dashed #d9a400; border-radius:6px; padding:1px 7px; font-size:13px; font-weight:700; }
+  footer { background:#1f1a1a; color:#d8cfc9; padding:26px 0; font-size:14px; }
+  footer .bar { flex-wrap:wrap; } footer a { color:#fff; }
+  @media (min-width:820px) { .heroIn { grid-template-columns:1.25fr .75fr; } .hero { padding:70px 0 80px; } .two { grid-template-columns:1.1fr .9fr; align-items:start; } }
+  @media (max-width:520px) { .brand span { font-size:16px; } .staff { padding:7px 10px; font-size:13px; } }
+</style>
+</head>
+<body>
+<header><div class="wrap bar">
+  <a class="brand" href="#top"><img src="emblem.png" alt=""><span><b>Red</b>Rebel</span></a>
+  <div class="sp"></div>
+  <div class="lang" role="group" aria-label="Langue"><button data-l="fr" class="on">FR</button><button data-l="ht">KR</button><button data-l="en">EN</button></div>
+  <a class="staff" href="https://app.redrebel.us" data-t="staff">Espace employés</a>
+</div></header>
+
+<div class="hero" id="top"><div class="wrap heroIn">
+  <div>
+    <h1 data-t="h1">Le propane, <em>près de chez vous</em>.</h1>
+    <p data-t="hsub">Red Rebel Distribution remplit vos bonbonnes dans ses stations et livre le propane en vrac par camion-citerne, en Haïti.</p>
+    <div class="cta"><a class="btn gold" href="#stations" data-t="cta1">Trouver une station</a><a class="btn line" href="#vrac" data-t="cta2">Commander en vrac</a></div>
+  </div>
+  <div class="badge"><img src="emblem.png" alt="Red Rebel Distribution"></div>
+</div></div>
+
+<section id="stations"><div class="wrap">
+  <h2 data-t="st_h">Nos stations</h2>
+  <p class="lead" data-t="st_p">Venez avec votre bonbonne : elle est remplie devant vous, au compteur.</p>
+  <div class="grid" id="stGrid"></div>
+  <p class="lead" style="margin-bottom:0"><span data-t="st_hours">Heures d'ouverture :</span> <span class="todo" data-t="todo">à compléter</span></p>
+</div></section>
+
+<section class="alt" id="vrac"><div class="wrap two">
+  <div>
+    <h2 data-t="v_h">Livraison en vrac</h2>
+    <p class="lead" data-t="v_p">Pour les stations de remplissage, les entreprises et les gros consommateurs : notre camion-citerne livre chez vous.</p>
+    <ul class="ok"><li data-t="v1">Livraison par camion-citerne, au gallon.</li><li data-t="v2">Un bon de livraison à chaque passage.</li><li data-t="v3">Un seul interlocuteur pour vos commandes.</li></ul>
+  </div>
+  <div class="panel"><h3 data-t="v_box_h">Passer une commande</h3><p data-t="v_box_p">Appelez-nous ou écrivez-nous : nous fixons ensemble le jour de la livraison.</p><a class="btn gold" href="#contact" data-t="v_box_b">Nous contacter</a></div>
+</div></section>
+
+<section id="securite"><div class="wrap">
+  <h2 data-t="s_h">Le propane en sécurité</h2>
+  <p class="lead" data-t="s_p">Quelques gestes simples à la maison.</p>
+  <ul class="ok"><li data-t="s1">Gardez toujours la bonbonne debout, dans un endroit aéré.</li><li data-t="s2">Fermez le robinet après chaque utilisation.</li><li data-t="s3">Pour chercher une fuite, utilisez de l'eau savonneuse, jamais une flamme.</li><li data-t="s4">Si vous sentez le gaz : fermez le robinet, ouvrez portes et fenêtres, n'allumez rien.</li></ul>
+</div></section>
+
+<section class="alt" id="contact"><div class="wrap">
+  <h2 data-t="c_h">Nous contacter</h2>
+  <p class="lead" data-t="c_p">Une question, une commande en vrac, une réclamation : nous répondons.</p>
+  <div class="contact">
+    <div class="card"><b data-t="c_tel">Téléphone</b><span class="todo" data-t="todo">à compléter</span></div>
+    <div class="card"><b>WhatsApp</b><span class="todo" data-t="todo">à compléter</span></div>
+    <div class="card"><b data-t="c_mail">Courriel</b><span class="todo" data-t="todo">à compléter</span></div>
+  </div>
+</div></section>
+
+<footer><div class="wrap bar"><span>© <span id="yr"></span> Red Rebel Distribution</span><div class="sp"></div><a href="https://app.redrebel.us" data-t="staff">Espace employés</a></div></footer>
+
+<script>
+var STATIONS = ['Brochette', 'Arcachon 32', 'DED', 'Diquini', 'Mahotière 83', 'Esansyèl', 'Léogâne'];
+var T = {
+  fr: { staff:'Espace employés', h1:'Le propane, <em>près de chez vous</em>.', hsub:'Red Rebel Distribution remplit vos bonbonnes dans ses stations et livre le propane en vrac par camion-citerne, en Haïti.', cta1:'Trouver une station', cta2:'Commander en vrac',
+    st_h:'Nos stations', st_p:'Venez avec votre bonbonne : elle est remplie devant vous, au compteur.', st_addr:'Adresse :', st_hours:'Heures d\'ouverture :', todo:'à compléter',
+    v_h:'Livraison en vrac', v_p:'Pour les stations de remplissage, les entreprises et les gros consommateurs : notre camion-citerne livre chez vous.', v1:'Livraison par camion-citerne, au gallon.', v2:'Un bon de livraison à chaque passage.', v3:'Un seul interlocuteur pour vos commandes.',
+    v_box_h:'Passer une commande', v_box_p:'Appelez-nous ou écrivez-nous : nous fixons ensemble le jour de la livraison.', v_box_b:'Nous contacter',
+    s_h:'Le propane en sécurité', s_p:'Quelques gestes simples à la maison.', s1:'Gardez toujours la bonbonne debout, dans un endroit aéré.', s2:'Fermez le robinet après chaque utilisation.', s3:'Pour chercher une fuite, utilisez de l\'eau savonneuse, jamais une flamme.', s4:'Si vous sentez le gaz : fermez le robinet, ouvrez portes et fenêtres, n\'allumez rien.',
+    c_h:'Nous contacter', c_p:'Une question, une commande en vrac, une réclamation : nous répondons.', c_tel:'Téléphone', c_mail:'Courriel' },
+  ht: { staff:'Espas anplwaye', h1:'Gaz pwopàn, <em>toupre lakay ou</em>.', hsub:'Red Rebel Distribution plen bonbòn ou nan estasyon li yo, epi li livre gaz pwopàn an gwo ak kamyon sitèn, ann Ayiti.', cta1:'Jwenn yon estasyon', cta2:'Kòmande an gwo',
+    st_h:'Estasyon nou yo', st_p:'Vini ak bonbòn ou : nou plen li devan ou, sou konntè a.', st_addr:'Adrès :', st_hours:'Lè nou louvri :', todo:'pou konplete',
+    v_h:'Livrezon an gwo', v_p:'Pou estasyon ranplisaj, antrepriz ak gwo konsomatè : kamyon sitèn nou an livre lakay ou.', v1:'Livrezon ak kamyon sitèn, pa galon.', v2:'Yon bon livrezon chak fwa nou pase.', v3:'Yon sèl moun pou tout kòmand ou yo.',
+    v_box_h:'Pase yon kòmand', v_box_p:'Rele nou oswa ekri nou : n ap fikse jou livrezon an ansanm.', v_box_b:'Kontakte nou',
+    s_h:'Sèvi ak gaz pwopàn an sekirite', s_p:'Kèk ti jès senp lakay ou.', s1:'Toujou kenbe bonbòn nan kanpe, yon kote ki gen bon van.', s2:'Fèmen wobinè a chak fwa ou fin sèvi.', s3:'Pou chèche yon fuit, sèvi ak dlo savon, pa janm sèvi ak flanm.', s4:'Si ou pran sant gaz : fèmen wobinè a, louvri pòt ak fenèt, pa limen anyen.',
+    c_h:'Kontakte nou', c_p:'Yon kesyon, yon kòmand an gwo, yon reklamasyon : n ap reponn ou.', c_tel:'Telefòn', c_mail:'Imèl' },
+  en: { staff:'Staff area', h1:'Propane, <em>close to home</em>.', hsub:'Red Rebel Distribution fills your cylinders at its stations and delivers bulk propane by tanker truck in Haiti.', cta1:'Find a station', cta2:'Order in bulk',
+    st_h:'Our stations', st_p:'Bring your cylinder: it is filled in front of you, on the meter.', st_addr:'Address:', st_hours:'Opening hours:', todo:'to be completed',
+    v_h:'Bulk delivery', v_p:'For filling stations, businesses and large users: our tanker truck delivers to your site.', v1:'Delivery by tanker truck, by the gallon.', v2:'A delivery slip on every visit.', v3:'One contact for all your orders.',
+    v_box_h:'Place an order', v_box_p:'Call or write to us and we will set the delivery day together.', v_box_b:'Contact us',
+    s_h:'Using propane safely', s_p:'A few simple habits at home.', s1:'Always keep the cylinder upright, in a ventilated place.', s2:'Close the valve after every use.', s3:'To look for a leak, use soapy water, never a flame.', s4:'If you smell gas: close the valve, open doors and windows, and light nothing.',
+    c_h:'Contact us', c_p:'A question, a bulk order, a complaint: we answer.', c_tel:'Phone', c_mail:'Email' }
+};
+function lang(l) {
+  if (!T[l]) l = 'fr';
+  document.documentElement.lang = l === 'ht' ? 'ht' : l;
+  document.querySelectorAll('[data-t]').forEach(function (e) { var v = T[l][e.getAttribute('data-t')]; if (v !== undefined) e.innerHTML = v; });
+  document.getElementById('stGrid').innerHTML = STATIONS.map(function (s) { return '<div class="card"><h3>' + s + '</h3><p>' + T[l].st_addr + ' <span class="todo">' + T[l].todo + '</span></p></div>'; }).join('');
+  document.querySelectorAll('.lang button').forEach(function (b) { b.classList.toggle('on', b.getAttribute('data-l') === l); });
+  try { localStorage.setItem('rr_lang', l); } catch (e) { }
+}
+document.querySelectorAll('.lang button').forEach(function (b) { b.onclick = function () { lang(b.getAttribute('data-l')); }; });
+document.getElementById('yr').textContent = new Date().getFullYear();
+var l0 = 'fr'; try { l0 = localStorage.getItem('rr_lang') || (/^en/i.test(navigator.language) ? 'en' : 'fr'); } catch (e) { }
+if (/[?&]l=(fr|ht|en)/.test(location.search)) l0 = RegExp.$1;
+lang(l0);
+</script>
+</body>
+</html>
