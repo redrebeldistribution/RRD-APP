@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.24';
+var MOBILE_VERSION = 'm1.25';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var STATION_FORMATION = 'TST', MAX_APPAREILS_FORMATION = 50;   // les codes de la station de test servent à la formation : plusieurs téléphones avec le même code (propriétaire, 26/11/2026)
 var MAX_APPAREILS_ROLE = 5;   // un code DIR ou CPT peut servir sur 5 appareils en même temps (demande du propriétaire, 26/11/2026)
@@ -1321,10 +1321,10 @@ function camRapports_(max) {
       note: String(r[17] || ''), fait_le: phTexte_(r[18]), fichier_id: String(r[20] || ''), cid: String(r[22] || ''), annule: estVrai_(r[23]) };
   });
 }
-/** Pour le téléphone du camion : rapports d'aujourd'hui et d'hier (faits ou non). */
+/** Pour le téléphone du camion : rapports d'aujourd'hui et des 7 jours d'avant (faits ou non), pour envoyer ceux qui manquent (propriétaire, 26/11/2026). */
 function camRapportsTel_(code, ops) {
   var raps = camRapports_(3000).filter(function (r) { return r.camion === code && !r.annule; });
-  return [msgJour_(0), msgJour_(-1)].map(function (d) {
+  return [0, -1, -2, -3, -4, -5, -6, -7].map(function (n) { return msgJour_(n); }).map(function (d) {
     var r = raps.filter(function (x) { return x.date === d; })[0], t = camTotauxJour_(ops, code, d);
     return { date: d, fait: !!r, employes: r ? r.employes : '', remis: r ? r.remis : '', fait_le: r ? r.fait_le : '', ops: t.nb + (t.charge > 0 ? 1 : 0) + (t.paiements > 0 ? 1 : 0) + (t.achats > 0 ? 1 : 0), totaux: t };
   });

@@ -72,7 +72,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.21.2';
+var VERSION_APP = '1.22.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -933,8 +933,10 @@ function camAccueil(msg, err) {
       var srv = ((d.rapports || []).filter(function (x) { return x.date === date; })[0]) || {};
       return srv.fait ? 'ok' : '';
     };
-    var hier = jourPlus(auj, -1), rh = ((d.rapports || []).filter(function (x) { return x.date === hier; })[0]) || {}, ra = rap(auj);
-    if (rh.ops > 0 && !rap(hier)) h += '<div class="wait">📋 Le rapport d\'hier (' + dfr(hier).slice(0, 5) + ') n\'est pas fait.<br><button style="margin-top:8px" onclick="cmRapport(\'' + hier + '\')">Faire le rapport d\'hier</button></div>';
+    var ra = rap(auj), passes = (d.rapports || []).filter(function (x) { return x.date < auj; }).map(function (x) { return { date: x.date, ops: x.ops, remis: x.remis, etat: rap(x.date) }; });
+    var manq = passes.filter(function (x) { return !x.etat && x.ops > 0; });   // jours travaillés dont le bureau n'a pas le rapport
+    if (manq.length) h += '<div class="wait">📋 ' + (manq.length === 1 ? 'Le rapport du ' + dfr(manq[0].date).slice(0, 5) + ' n\'est pas fait.' : manq.length + ' rapports des jours passés ne sont pas faits.') +
+      manq.map(function (x) { return '<br><button style="margin-top:8px" onclick="cmRapport(\'' + x.date + '\')">Faire le rapport du ' + dfr(x.date).slice(0, 5) + '</button>'; }).join('') + '</div>';
     h += ra ? '<div class="okb">📋 Rapport du jour ' + (ra === 'ok' ? 'reçu par le bureau ✓' : 'enregistré, en attente de signal ⏳') + '</div>' : '<button class="bigbtn" style="background:var(--ok)" onclick="cmRapport(\'' + auj + '\')">📋 Rapport du jour (fin de journée)</button>';
     var vus = {}, jour = [];
     l.forEach(function (r) { if (r.date === auj && r.statut !== 'rejete' && r.op !== 'rapport') { vus[r.cid] = 1; jour.push(cmLocal(r)); } });
@@ -948,6 +950,10 @@ function camAccueil(msg, err) {
       h += '<div class="card"><div class="row"><div><b>' + esc(o.client || o.fournisseur || o.detail || '') + '</b><div class="mut">' + esc(o.heure || '') + ' · ' + (CM_NOMS[o.genre] || esc(o.genre)) + (o.bon_no ? ' · bon n° ' + esc(o.bon_no) : '') + '</div><div>' + cmLigne(o) + '</div></div>' +
         '<div style="text-align:right">' + (o.statut === 'envoye' ? '<span style="color:var(--ok)">✅ reçu</span>' : '<span style="color:var(--warn)">⏳ en attente</span>') + '</div></div></div>';
     });
+    if (passes.length) h += '<h2>Rapports des 7 derniers jours</h2><table><tr><th>Jour</th><th>Rapport</th><th></th></tr>' + passes.map(function (x) {
+      return '<tr><td>' + dfr(x.date).slice(0, 5) + '</td><td>' + (x.etat === 'ok' ? '<span style="color:var(--ok)">✅ reçu par le bureau</span>' : x.etat === 'att' ? '<span style="color:var(--warn)">⏳ en attente de signal</span>' : x.ops > 0 ? '<b style="color:var(--bad)">pas fait</b>' : '<span class="mut">pas fait · aucune opération</span>') + '</td>' +
+        '<td class="n">' + (x.etat ? '' : '<button class="sec" style="padding:6px 10px" onclick="cmRapport(\'' + x.date + '\')">Faire</button>') + '</td></tr>';
+    }).join('') + '</table>';
     h += '<p class="mut center" style="margin-top:24px">Version ' + VERSION_APP + ' (build ' + (window.RRD_BUILD || 0) + ') · <a href="#" onclick="changerCode();return false">Changer de code</a>' + (WEB ? '' : ' · <a href="#" onclick="ecranTestTel();return false">Tester ce téléphone</a>') + '</p>';
     view(h, '<button class="sec" onclick="cmActualiser(true)">🔄 Envoyer / actualiser</button>', 'camion');
   });
