@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.28';
+var MOBILE_VERSION = 'm1.29';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var STATION_FORMATION = 'TST', MAX_APPAREILS_FORMATION = 50;   // les codes de la station de test servent à la formation : plusieurs téléphones avec le même code (propriétaire, 26/11/2026)
 var MAX_APPAREILS_ROLE = 5;   // un code DIR ou CPT peut servir sur 5 appareils en même temps (demande du propriétaire, 26/11/2026)
@@ -423,7 +423,7 @@ function controles_(st, date, periode, v) {
  */
 var ARG_ONGLET = 'Argent (app)';
 var ARG_ENTETES = ['id', 'genre', 'origine', 'origine_nom', 'date', 'rapport', 'lieu', 'montant', 'devise', 'tenu_par', 'pour', 'fichier_id', 'parent', 'mode', 'par', 'le', 'note', 'cid', 'annule'];
-var ARG_STATIONS = false;   // les stations : seulement après l'accord du propriétaire sur les écrans (27/11/2026)
+var ARG_STATIONS = true;    // stations activées le 27/11/2026 à la demande du propriétaire (« turn on cash box today »)
 var ARG_MODES = { depot: ['depot_verifie'], bureau: ['recu_bureau'], main: ['recu_bureau', 'depot_verifie'] };
 function argFeuille_() { var sh = camFeuille_(ARG_ONGLET, ARG_ENTETES); camEntetes_(sh, ARG_ENTETES); return sh; }
 function argLire_(max) {
