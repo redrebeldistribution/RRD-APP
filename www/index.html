@@ -73,7 +73,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.23.0';
+var VERSION_APP = '1.23.1';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -731,6 +731,7 @@ function phPrendre(type, source) {
   PH.type = type; PH.source = gal ? 'galerie' : ''; CFG.set('phEnCours', { type: type, ms: Date.now(), source: PH.source });
   prendrePhoto(gal ? 'bdGalInput' : 'phInput', phImage, gal ? 'PHOTOS' : '');
 }
+function phTaille(cv) { return Math.max(16, Math.round(Math.max(cv.width, cv.height) / 44)); }   // taille des lettres écrites dans une photo : environ 2 % du grand côté
 function phPrise(input) { var f = input.files && input.files[0]; if (f) phImage(URL.createObjectURL(f)); }
 function phImage(url) {
   var type = PH.type, ms = Date.now(), jh = phJourHeure(ms), st = CFG.get('station', {}), gal = type === 'BORDEREAU' && PH.source === 'galerie';
@@ -742,11 +743,11 @@ function phImage(url) {
     var c = cv.getContext('2d'); c.drawImage(img, 0, 0, cv.width, cv.height); URL.revokeObjectURL(url);
     // Station, date, heure et type écrits dans l'image (comme l'appareil photo horodateur d'avant).
     var bord = type === 'BORDEREAU';
-    if (!bord) {   // date et heure en gros (jaune), station et type dessous ; le bordereau n'est pas marqué pour rester lisible en entier
-      var fs = Math.max(20, Math.round(cv.width / 16)), fs2 = Math.round(fs * 0.55), l2 = (st.nom || st.code || '') + ' · ' + (PH_NOMS[type] || type).toUpperCase();
+    if (!bord) {   // date et heure (jaune), station et type dessous, en petit dans le coin pour cacher le moins possible ; le bordereau n'est pas marqué pour rester lisible en entier
+      var fs = phTaille(cv), fs2 = Math.round(fs * 0.7), l2 = (st.nom || st.code || '') + ' · ' + (PH_NOMS[type] || type).toUpperCase();
       c.font = 'bold ' + fs + 'px sans-serif'; var w1 = c.measureText(jh.txt).width;
       c.font = 'bold ' + fs2 + 'px sans-serif'; var w2 = c.measureText(l2).width, ht = fs * 1.25 + fs2 * 1.7;
-      c.fillStyle = 'rgba(0,0,0,.65)'; c.fillRect(0, cv.height - ht, Math.min(cv.width, Math.max(w1, w2) + fs), ht);
+      c.fillStyle = 'rgba(0,0,0,.5)'; c.fillRect(0, cv.height - ht, Math.min(cv.width, Math.max(w1, w2) + fs), ht);
       c.fillStyle = '#ffd400'; c.font = 'bold ' + fs + 'px sans-serif'; c.fillText(jh.txt, fs / 2, cv.height - fs2 * 1.7 - fs * 0.2);
       c.fillStyle = '#fff'; c.font = 'bold ' + fs2 + 'px sans-serif'; c.fillText(l2, fs / 2, cv.height - fs2 * 0.55);
     }
@@ -995,8 +996,8 @@ function cmTampon(photo, texte) {   // écrit la position dans une photo de preu
     var img = new Image();
     img.onload = function () {
       var cv = document.createElement('canvas'); cv.width = img.width; cv.height = img.height; var c = cv.getContext('2d'); c.drawImage(img, 0, 0);
-      var fs = Math.max(16, Math.round(cv.width / 26)); c.font = 'bold ' + fs + 'px sans-serif'; var w = c.measureText(texte).width;
-      c.fillStyle = 'rgba(0,0,0,.55)'; c.fillRect(0, 0, w + fs, fs * 1.6); c.fillStyle = '#fff'; c.fillText(texte, fs / 2, fs * 1.15);
+      var fs = Math.round(phTaille(cv) * 0.85); c.font = 'bold ' + fs + 'px sans-serif'; var w = c.measureText(texte).width;
+      c.fillStyle = 'rgba(0,0,0,.5)'; c.fillRect(0, 0, w + fs, fs * 1.6); c.fillStyle = '#fff'; c.fillText(texte, fs / 2, fs * 1.15);
       res(cv.toDataURL('image/jpeg', 0.7));
     };
     img.onerror = function () { res(photo); };
@@ -1097,9 +1098,9 @@ function cmImage(url) {
     var c2 = cv.getContext('2d'); c2.drawImage(img, 0, 0, cv.width, cv.height); URL.revokeObjectURL(url);
     if (!CM.f) return;
     if (CM.f.genre === 'photo') {   // date, heure et camion écrits dans l'image
-      var jh = phJourHeure(Date.now()), fs = Math.max(20, Math.round(cv.width / 18)), l2 = (CFG.get('camion', {}) || {}).nom || 'Camion';
+      var jh = phJourHeure(Date.now()), fs = phTaille(cv), l2 = (CFG.get('camion', {}) || {}).nom || 'Camion';
       c2.font = 'bold ' + fs + 'px sans-serif'; var w1 = Math.max(c2.measureText(jh.txt).width, c2.measureText(l2).width);
-      c2.fillStyle = 'rgba(0,0,0,.55)'; c2.fillRect(0, cv.height - fs * 2.7, w1 + fs, fs * 2.7);
+      c2.fillStyle = 'rgba(0,0,0,.5)'; c2.fillRect(0, cv.height - fs * 2.7, w1 + fs, fs * 2.7);
       c2.fillStyle = '#ffd400'; c2.fillText(jh.txt, fs / 2, cv.height - fs * 1.5); c2.fillStyle = '#fff'; c2.fillText(l2, fs / 2, cv.height - fs * 0.4);
     }
     CM.f.photo = cv.toDataURL('image/jpeg', 0.7);
