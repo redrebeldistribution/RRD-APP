@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.29';
+var MOBILE_VERSION = 'm1.30';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var STATION_FORMATION = 'TST', MAX_APPAREILS_FORMATION = 50;   // les codes de la station de test servent à la formation : plusieurs téléphones avec le même code (propriétaire, 26/11/2026)
 var MAX_APPAREILS_ROLE = 5;   // un code DIR ou CPT peut servir sur 5 appareils en même temps (demande du propriétaire, 26/11/2026)
@@ -579,6 +579,10 @@ function direction_(app, sous, p) {
     case 'argent': exiger_(ctx, ['management', 'accounting']); return argListe_();
     case 'argentConfirmer': exiger_(ctx, ['management', 'accounting']); return argConfirmer_(ctx, p);
     case 'argentAnnuler': exiger_(ctx, ['management']); return argAnnuler_(ctx, p);
+    case 'livrer': exiger_(ctx, ['management', 'accounting']); return sugListe_(p);
+    case 'tourneeAjouter': exiger_(ctx, ['management', 'accounting']); return trnAjouter_(ctx, p);
+    case 'tourneeRetirer': exiger_(ctx, ['management', 'accounting']); return trnRetirer_(ctx, p);
+    case 'vracRelier': exiger_(ctx, ['management', 'accounting']); return vracRelier_(ctx, p);
     case 'camAnnuler': exiger_(ctx, ['management']); return camAnnuler_(ctx, p);
     case 'camRapportAnnuler': exiger_(ctx, ['management']); return camRapportAnnuler_(ctx, p);
     default: throw new UserError('Action inconnue.');
@@ -1051,8 +1055,9 @@ function stockEstime_() {
     var alerte = '';
     if (mx > g.capacite + 50) alerte = 'Le calcul dépasse la taille de la citerne : une livraison est peut-être comptée deux fois, ou des ventes manquent.';
     else if (mn < -50) alerte = 'Le calcul passe sous zéro : des livraisons manquent dans les rapports, ou la date « à sec » est à revoir.';
-    var j = jauges[code];
-    return { code: code, nom: noms[code] || code, capacite: g.capacite, methode: methode, depuis: depuis, source: g.source, recu: Math.round(recu), vendu: Math.round(vendu),
+    var j = jauges[code], av = serie.filter(function (x) { return x.vendu > 0; }).slice(-7), vj = 0;   // ventes moyennes des 7 derniers jours avec ventes
+    av.forEach(function (x) { vj += x.vendu; });
+    return { code: code, nom: noms[code] || code, vente_jour: av.length ? Math.round(vj / av.length) : 0, jours_vente: av.length, capacite: g.capacite, methode: methode, depuis: depuis, source: g.source, recu: Math.round(recu), vendu: Math.round(vendu),
       stock: Math.round(cum), pct: Math.round(100 * cum / g.capacite), alerte: alerte, dernier: ds.length ? ds[ds.length - 1] : '',
       jauge: j ? { le: j.pris_le, pct: j.pct, gal: Math.round(j.pct * g.capacite / 100) } : null };
   });
@@ -1366,7 +1371,8 @@ function camInit_(app) {
     })
       .sort(function (a, b) { return a.nom.toLowerCase() < b.nom.toLowerCase() ? -1 : 1; }),
     prix_defaut: defaut ? defaut.prix : 0, historique: hist, fournisseurs: CAM_FOURNISSEURS, types_photo: CAM_PHOTOS, devises: camDevises_(),
-    jour: ops.filter(function (o) { return o.camion === cam.code && o.date === auj; }).map(camPourTel_), rapports: camRapportsTel_(cam.code, ops) };
+    jour: ops.filter(function (o) { return o.camion === cam.code && o.date === auj; }).map(camPourTel_), rapports: camRapportsTel_(cam.code, ops),
+    tournee: trnPourCamion_(cam.code, auj, ops) };
 }
 /** Une opération envoyée par le téléphone d'un camion. Le prix vient toujours du bureau ; le chauffeur ne tape que les gallons. */
 function camEnvoyer_(app, p) {
@@ -1661,4 +1667,236 @@ function camRapportsVue_(du, au, filtre) {
       ou: r && (r.depose !== '' || r.bureau !== '' || r.main !== '') ? { depose: r.depose || 0, depose_pour: r.depose_pour, depose_par: r.depose_par, bureau: r.bureau || 0, bureau_qui: r.bureau_qui, main: r.main || 0, main_qui: r.main_qui } : null });
   });
   return out;
+}
+
+/* ============================ Livraisons à proposer + tournée du jour (m1.30, 27/11/2026) ============================
+ * Demande du propriétaire (27/11/2026) : proposer dans l'application les livraisons des camions, pour le bureau et pour le chauffeur.
+ * - L'historique vient du classeur « VRAC 2025 » (lecture seule, autorisée par le propriétaire le 27/11/2026) et des livraisons tapées
+ *   dans l'application. Une même journée de livraison écrite aux deux endroits n'est comptée qu'une fois.
+ * - Un nom écrit dans le classeur n'est relié à un client que s'il est écrit pareil, ou si l'onglet « Noms VRAC 2025 » le dit (avec sa
+ *   source). Tout autre nom reste « à relier » : l'application ne devine jamais.
+ * - Proposition = dernière livraison + rythme habituel (médiane des écarts entre les 9 derniers jours de livraison). Il faut au moins
+ *   3 jours de livraison. C'est une estimation d'après le passé, jamais une commande : rien n'est créé ni envoyé tout seul.
+ * - Nos stations : le stock estimé (onglet Stock) sert aussi, quand il est récent et sans alerte.
+ * - Tournée : le bureau choisit les arrêts d'un jour ; le téléphone du camion les montre. */
+var VRAC_ID = '1QVbTKGJvmli42yVcrurSZ22nazxweBBYvjLOalmYsMs';
+var VRAC_JOURS = 200;        // on lit les mois qui touchent les 200 derniers jours
+var VNM_ONGLET = 'Noms VRAC 2025', VNM_ENTETES = ['nom_ecrit', 'client_id', 'source', 'ajoute_le', 'ajoute_par'];
+var VNM_PROP = 'liste du propriétaire (noms confirmés pour le rappel d\'encaissement, 11/2026)', VNM_NOTE = 'note du client dans « Clients camion » (26/11/2026)';
+var VNM_DEFAUT = [   // seulement des noms déjà confirmés ; le reste est montré « à relier »
+  ['Red Rebel Brochette', 'K1', VNM_PROP], ['Red Rebel 32', 'K2', VNM_PROP], ['RRDDED', 'K3', VNM_NOTE], ['Red Rebel 83', 'K5', VNM_PROP],
+  ['Jules Daves', 'K8', VNM_NOTE], ['Jules 38', 'K9', VNM_NOTE], ['Esmatech 61', 'K11', VNM_PROP],
+  ['Esmatech 65', 'K12', VNM_PROP], ['Esmatech 63', 'K12', VNM_PROP], ['Esmatech Diquini', 'K12', VNM_PROP],
+  ['Esmatech 75', 'K13', VNM_PROP], ['Esmatech 79', 'K13', VNM_PROP], ['Esmatech Mahotière 75', 'K13', 'même nom, autre orthographe de Mahotier'],
+  ['Esmatech 93', 'K14', VNM_PROP], ['Esmatech 91', 'K14', VNM_PROP], ['Esmatech 53', 'K38', VNM_NOTE],
+  ['Supremo', 'K16', VNM_NOTE], ['Louco', 'K17', VNM_PROP], ['Louco Sapoti', 'K17', VNM_PROP], ['Louko Sapoti', 'K17', VNM_PROP],
+  ['Jeanty', 'K19', VNM_NOTE], ['Jeanty Propane', 'K19', VNM_PROP], ['Black', 'K20', VNM_NOTE], ['Tipa Tipa', 'K21', VNM_NOTE],
+  ['Ti pa ti pa', 'K21', 'même nom, écrit avec des espaces'], ['Saloto', 'K39', VNM_NOTE]];
+var TRN_ONGLET = 'Tournée (app)', TRN_ENTETES = ['id', 'date', 'camion', 'client_id', 'client', 'gallons', 'note', 'origine', 'cree_par', 'cree_le', 'annule'];
+var TRN_JOURS = 14;          // on prépare une tournée au plus 14 jours à l'avance
+var SUG_MIN = 3;             // jours de livraison qu'il faut pour parler d'un rythme
+var SUG_AVANT = 2;           // « bientôt » : prévu dans 2 jours ou moins
+var SUG_ARRET = 3;           // plus de 3 fois le rythme (et plus de 30 jours) sans livraison : le client ne commande plus
+var SUG_STOCK = 2;           // nos stations : à livrer quand il reste 2 jours de gaz ou moins (estimation)
+
+function vracNorm_(s) {   // « Suprême  » = « supreme », « C. Jean » = « c jean »
+  var t = String(s || '').toLowerCase().replace(/[̀-ͯ]/g, ''), de = 'àâäáãéèêëíìîïóòôöõúùûüçñ', vers = 'aaaaaeeeeiiiiooooouuuucn', o = '';
+  for (var i = 0; i < t.length; i++) { var k = de.indexOf(t.charAt(i)); o += k < 0 ? t.charAt(i) : vers.charAt(k); }
+  return o.replace(/[^a-z0-9]+/g, ' ').replace(/^ +| +$/g, '');
+}
+function vracNb_(v) {
+  if (typeof v === 'number') return isFinite(v) ? v : 0;
+  var n = Number(String(v === null || v === undefined ? '' : v).replace(/[\s  ]/g, '').replace(',', '.'));
+  return isFinite(n) ? n : 0;
+}
+function vracMois_(texte) {   // « Pour le mois de novembre2026 » → « 2026-11 » ; '' si illisible
+  var m = /(janvier|fevrier|mars|avril|mai|juin|juillet|aout|septembre|octobre|novembre|decembre) ?(\d{4})/.exec(vracNorm_(texte));
+  if (!m) return '';
+  var k = ['janvier', 'fevrier', 'mars', 'avril', 'mai', 'juin', 'juillet', 'aout', 'septembre', 'octobre', 'novembre', 'decembre'].indexOf(m[1]) + 1;
+  return m[2] + '-' + (k < 10 ? '0' : '') + k;
+}
+function sugMs_(d) { return Date.UTC(Number(d.slice(0, 4)), Number(d.slice(5, 7)) - 1, Number(d.slice(8, 10))); }
+function sugJours_(a, b) { return Math.round((sugMs_(b) - sugMs_(a)) / 864e5); }   // nombre de jours de a à b
+function sugPlus_(d, n) { return new Date(sugMs_(d) + n * 864e5).toISOString().slice(0, 10); }
+function sugMediane_(l) { var t = l.slice().sort(function (a, b) { return a - b; }), n = t.length; return n % 2 ? t[(n - 1) / 2] : (t[n / 2 - 1] + t[n / 2]) / 2; }
+
+/** Livraisons écrites dans le classeur VRAC 2025 : { noms: { nom normalisé: { ecrit, j: { date: gallons du jour } } }, onglets, lu_le, erreur } (gardé 3 h). */
+function vracLire_(force) {
+  var cache = CacheService.getScriptCache(), c = force ? null : cache.get('vrac_hist_v1');
+  if (c) return JSON.parse(c);
+  var out = { lu_le: maintenant_(), onglets: [], noms: {}, erreur: '' };
+  try {
+    var auj = msgJour_(0), limite = msgJour_(-VRAC_JOURS).slice(0, 7);
+    SpreadsheetApp.openById(VRAC_ID).getSheets().forEach(function (sh) {
+      if (sh.isSheetHidden()) return;
+      var n = sh.getLastRow(); if (n < 8) return;
+      var m = vracMois_(sh.getRange(3, 1).getDisplayValue());
+      if (!m || m < limite || m > auj.slice(0, 7)) return;
+      var fin = Number(sugPlus_(sugPlus_(m + '-28', 4).slice(0, 8) + '01', -1).slice(8, 10));   // dernier jour du mois
+      var jour = 0, nb = 0, dernier = '';
+      sh.getRange(7, 1, n - 6, 6).getValues().forEach(function (r) {
+        var j = r[0] instanceof Date ? r[0].getDate() : vracNb_(r[0]);
+        if (j >= 1 && j <= 31 && j === Math.floor(j)) jour = j;
+        var cli = String(r[2] || '').replace(/\s+/g, ' ').replace(/^ | $/g, ''), gal = vracNb_(r[5]) || (vracNb_(r[3]) + vracNb_(r[4])), k = vracNorm_(cli);
+        if (!k || !(gal > 0) || !jour || jour > fin || /^total/.test(k)) return;
+        var d = m + '-' + (jour < 10 ? '0' : '') + jour;
+        if (d > auj) return;
+        var f = out.noms[k] = out.noms[k] || { ecrit: cli, j: {} };
+        f.j[d] = Math.round(((f.j[d] || 0) + gal) * 10) / 10;
+        nb++; if (d > dernier) dernier = d;
+      });
+      out.onglets.push({ nom: String(sh.getName()).replace(/^ +| +$/g, ''), mois: m, livraisons: nb, dernier: dernier });
+    });
+    out.onglets.sort(function (a, b) { return a.mois < b.mois ? -1 : a.mois > b.mois ? 1 : 0; });
+  } catch (e) { out.erreur = String((e && e.message) || e); }
+  if (!out.erreur) try { cache.put('vrac_hist_v1', JSON.stringify(out), 10800); } catch (e2) { }
+  return out;
+}
+function vracFeuille_() {
+  return camFeuille_(VNM_ONGLET, VNM_ENTETES, VNM_DEFAUT.map(function (a) { return [a[0], a[1], a[2], maintenant_(), 'Claude (demande du propriétaire, 27/11/2026)']; }));
+}
+function vracAlias_() {   // { nom normalisé: id du client }
+  var o = {};
+  camLignes_(vracFeuille_(), 2).forEach(function (r) { var k = vracNorm_(r[0]), id = String(r[1] || '').replace(/\s/g, ''); if (k && id) o[k] = id; });
+  return o;
+}
+/** Jours de livraison de chaque client (classeur + application) et noms du classeur qui ne sont reliés à aucun client. */
+function sugHistorique_(clients, ops, force) {
+  var vr = vracLire_(force), alias = vracAlias_(), parNom = {}, existe = {}, par = {}, aRelier = [];
+  clients.forEach(function (c) { if (c.id !== CCL_DEFAUT) { existe[c.id] = 1; parNom[vracNorm_(c.nom)] = c.id; } });
+  Object.keys(vr.noms).forEach(function (k) {
+    var f = vr.noms[k], id = existe[alias[k]] ? alias[k] : parNom[k], ds = Object.keys(f.j).sort();
+    if (!id) { var g = 0; ds.forEach(function (d) { g += f.j[d]; }); aRelier.push({ ecrit: f.ecrit, n: ds.length, gallons: Math.round(g), dernier: ds[ds.length - 1] }); return; }
+    var p = par[id] = par[id] || {};
+    ds.forEach(function (d) { p[d] = Math.round(((p[d] || 0) + f.j[d]) * 10) / 10; });
+  });
+  var app = {};
+  ops.forEach(function (o) {
+    if (o.annule || o.genre !== 'livraison' || o.camion === CAM_TEST || !existe[o.client_id] || !(Number(o.gallons) > 0)) return;
+    var a = app[o.client_id] = app[o.client_id] || {}; a[o.date] = Math.round(((a[o.date] || 0) + Number(o.gallons)) * 10) / 10;
+  });
+  Object.keys(app).forEach(function (id) { var p = par[id] = par[id] || {}; Object.keys(app[id]).forEach(function (d) { p[d] = Math.max(p[d] || 0, app[id][d]); }); });
+  aRelier.sort(function (a, b) { return a.dernier < b.dernier ? 1 : a.dernier > b.dernier ? -1 : b.n - a.n; });
+  return { par: par, a_relier: aRelier, source: { lu_le: vr.lu_le, onglets: vr.onglets, erreur: vr.erreur } };
+}
+/** Le rythme d'un client d'après ses jours de livraison { date: gallons }. statut : peu | arret | retard | bientot | plus_tard. */
+function sugCalcul_(jours, auj) {
+  var ds = Object.keys(jours || {}).sort(), rec = ds.slice(-9), n = rec.length, dernier = n ? rec[n - 1] : '';
+  if (n < SUG_MIN) return { n: ds.length, dernier: dernier, statut: 'peu' };
+  var ecarts = [], i; for (i = 1; i < n; i++) ecarts.push(sugJours_(rec[i - 1], rec[i]));
+  var rythme = Math.max(1, sugMediane_(ecarts)), gal = sugMediane_(rec.map(function (d) { return jours[d]; }));
+  var prochaine = sugPlus_(dernier, Math.round(rythme)), retard = sugJours_(prochaine, auj), depuis = sugJours_(dernier, auj);
+  return { n: ds.length, utilises: n, du: rec[0], dernier: dernier, depuis: depuis, rythme: Math.round(rythme * 10) / 10, gallons: Math.round(gal), prochaine: prochaine, retard: retard,
+    statut: depuis > Math.max(30, SUG_ARRET * rythme) ? 'arret' : retard >= 0 ? 'retard' : retard >= -SUG_AVANT ? 'bientot' : 'plus_tard' };
+}
+function trnLire_() {
+  var sh = camFeuille_(TRN_ONGLET, TRN_ENTETES);
+  return camLignes_(sh, TRN_ENTETES.length).map(function (r, i) {
+    return { ligne: i + 2, id: String(r[0]), date: phJour_(r[1]), camion: String(r[2] || '').replace(/\s/g, '').toUpperCase(), client_id: String(r[3] || ''), client: String(r[4] || ''),
+      gallons: r[5] === '' || r[5] === null ? '' : Number(r[5]), note: String(r[6] || ''), origine: String(r[7] || ''), cree_par: String(r[8] || ''), cree_le: phTexte_(r[9]), annule: estVrai_(r[10]) };
+  }).filter(function (t) { return t.id; });
+}
+/** Arrêts prévus à partir d'une date, avec « fait » quand une livraison a été reçue ce jour-là pour ce client (hors camion de test). */
+function trnVue_(du, ops, test) {
+  var fait = {};
+  ops.forEach(function (o) { if (!o.annule && o.genre === 'livraison' && o.client_id && (test ? o.camion === CAM_TEST : o.camion !== CAM_TEST)) fait[o.date + '|' + o.client_id] = 1; });
+  return trnLire_().filter(function (t) { return !t.annule && t.date >= du; }).sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : a.ligne - b.ligne; })
+    .map(function (t) { return { id: t.id, date: t.date, camion: t.camion, client_id: t.client_id, client: t.client, gallons: t.gallons, note: t.note, origine: t.origine, cree_par: t.cree_par, fait: !!fait[t.date + '|' + t.client_id] }; });
+}
+/** Ce que le téléphone d'un camion reçoit : les arrêts d'aujourd'hui pour lui (ou pour n'importe quel camion). */
+function trnPourCamion_(code, auj, ops) {
+  var test = code === CAM_TEST;
+  return trnVue_(auj, ops, test).filter(function (t) { return t.date === auj && (test ? t.camion === CAM_TEST : (!t.camion || t.camion === code)); })
+    .map(function (t) { return { id: t.id, client_id: t.client_id, client: t.client, gallons: t.gallons, note: t.note, fait: t.fait }; });
+}
+/** Tableau de bord : clients à livrer maintenant ou bientôt, avec ce que le calcul a utilisé, et la tournée déjà choisie. */
+function sugListe_(p) {
+  var auj = msgJour_(0), clients = camClients_(), ops = camOps_(8000), h = sugHistorique_(clients, ops, !!(p && p.actualiser));
+  var soldes = camSoldes_(clients, ops), stock = {}, noms = {};
+  try { stockEstime_().stations.forEach(function (s) { stock[s.code] = s; }); } catch (e) { }
+  camions_().forEach(function (c) { noms[c.code] = c.nom; });
+  var tournee = trnVue_(auj, ops, false).filter(function (t) { return t.camion !== CAM_TEST; }), prevus = {};
+  tournee.forEach(function (t) { t.camion_nom = t.camion ? (noms[t.camion] || t.camion) : ''; (prevus[t.client_id] = prevus[t.client_id] || []).push(t.date); });
+  var liste = [], peu = [], arret = [], plusTard = 0, total = 0;
+  clients.forEach(function (c) {
+    if (c.id === CCL_DEFAUT || !c.actif) return;
+    var s = sugCalcul_(h.par[c.id], auj), f = soldes[c.id];
+    total += s.n;
+    s.id = c.id; s.nom = c.nom; s.groupe = c.groupe; s.station = c.station; s.motif = 'rythme'; s.prevus = prevus[c.id] || [];
+    s.solde = f && (f.depart !== null || f.credit || f.paye) ? f.solde : null;
+    var st = c.station ? stock[c.station] : null;
+    if (st) {
+      if (st.alerte) s.stock = { fiable: false, raison: 'le calcul du stock a une alerte (onglet Stock)' };
+      else if (!(st.vente_jour > 0)) s.stock = { fiable: false, raison: 'pas de ventes récentes dans les rapports' };
+      else if (!st.dernier || st.dernier < msgJour_(-2)) s.stock = { fiable: false, raison: 'dernier rapport de la station : ' + (st.dernier ? st.dernier.split('-').reverse().join('/') : 'aucun') };
+      else {
+        var jr = Math.max(0, Math.floor(st.stock / st.vente_jour));
+        s.stock = { fiable: true, gallons: st.stock, pct: st.pct, vente_jour: st.vente_jour, jours: jr, au: st.dernier };
+        if (jr <= SUG_STOCK) { s.statut = 'retard'; s.motif = 'stock'; }
+        else if (jr <= SUG_STOCK + 2 && s.statut !== 'retard') { s.statut = 'bientot'; s.motif = 'stock'; }
+      }
+    }
+    if (s.statut === 'retard' || s.statut === 'bientot') liste.push(s);
+    else if (s.statut === 'peu') peu.push({ id: c.id, nom: c.nom, n: s.n, dernier: s.dernier });
+    else if (s.statut === 'arret') arret.push({ id: c.id, nom: c.nom, dernier: s.dernier, depuis: s.depuis, rythme: s.rythme });
+    else plusTard++;
+  });
+  var rang = function (s) { return s.statut === 'retard' ? 0 : 1; };
+  liste.sort(function (a, b) { return rang(a) - rang(b) || (b.retard === undefined ? -999 : b.retard) - (a.retard === undefined ? -999 : a.retard) || (a.nom.toLowerCase() < b.nom.toLowerCase() ? -1 : 1); });
+  return { aujourdhui: auj, calcule_le: maintenant_(), devise: CURRENCY, liste: liste, plus_tard: plusTard, peu: peu, arret: arret, a_relier: h.a_relier, source: h.source, livraisons: total,
+    reglages: { min: SUG_MIN, avant: SUG_AVANT, stock_jours: SUG_STOCK, jours_max: TRN_JOURS },
+    camions: camions_().filter(function (c) { return c.actif && c.code !== CAM_TEST; }),
+    clients: clients.filter(function (c) { return c.actif && c.id !== CCL_DEFAUT; }).map(function (c) { return { id: c.id, nom: c.nom }; }).sort(function (a, b) { return a.nom.toLowerCase() < b.nom.toLowerCase() ? -1 : 1; }),
+    tournee: tournee };
+}
+/** Le bureau met un client dans la tournée d'un jour. */
+function trnAjouter_(ctx, p) {
+  var auj = msgJour_(0), date = String(p.date || ''), id = String(p.client_id || ''), cam = String(p.camion || '').replace(/\s/g, '').toUpperCase();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date < auj) throw new UserError('Choisissez une date à partir d\'aujourd\'hui.');
+  if (date > msgJour_(TRN_JOURS)) throw new UserError('Date trop lointaine : ' + TRN_JOURS + ' jours à l\'avance au plus.');
+  var c = camClients_().filter(function (x) { return x.id === id && x.id !== CCL_DEFAUT; })[0];
+  if (!c || !c.actif) throw new UserError('Client inconnu ou retiré.');
+  if (cam && !camions_().filter(function (x) { return x.code === cam && x.actif; }).length) throw new UserError('Camion inconnu.');
+  var gal = String(p.gallons === undefined || p.gallons === null ? '' : p.gallons).replace(/\s/g, ''), g = gal === '' ? '' : vracNb_(gal);
+  if (g !== '' && !(g > 0 && g <= 20000)) throw new UserError('Gallons prévus : écrivez seulement les chiffres.');
+  var note = String(p.note || '').replace(/\s+/g, ' ').replace(/^ | $/g, '').slice(0, 200), origine = 'bureau';
+  if (String(p.origine) === 'suggestion') {
+    var s = sugCalcul_(sugHistorique_(camClients_(), camOps_(8000)).par[id], auj);
+    origine = s.statut === 'peu' ? 'bureau' : 'proposition : rythme ' + s.rythme + ' j d\'après ' + s.utilises + ' jours de livraison du ' + s.du + ' au ' + s.dernier + ' (classeur VRAC 2025 + application)';
+  }
+  var lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    if (trnLire_().filter(function (t) { return !t.annule && t.client_id === id && t.date === date; }).length) throw new UserError(c.nom + ' est déjà dans la tournée du ' + date.split('-').reverse().join('/') + '.');
+    var tid = 'TR-' + Utilities.formatDate(new Date(), TZ, 'yyMMdd') + '-' + Utilities.formatDate(new Date(), TZ, 'HHmmss') + '-' + Math.floor(Math.random() * 90 + 10);
+    camFeuille_(TRN_ONGLET, TRN_ENTETES).appendRow([tid, date, cam, c.id, c.nom, g, note, origine, ctx.nom, maintenant_(), '']);
+    journal_(ctx, 'tournee-ajout', tid + ' ' + c.nom + ' le ' + date + (cam ? ' camion ' + cam : ''));
+  } finally { lock.releaseLock(); }
+  return sugListe_({});
+}
+function trnRetirer_(ctx, p) {
+  var lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    var t = trnLire_().filter(function (x) { return x.id === String(p.id || ''); })[0];
+    if (!t) throw new UserError('Arrêt introuvable. Actualisez la page.');
+    if (t.annule) throw new UserError('Déjà retiré.');
+    var sh = camFeuille_(TRN_ONGLET, TRN_ENTETES);
+    sh.getRange(t.ligne, 11).setValue('oui');
+    sh.getRange(t.ligne, 7).setValue((t.note ? t.note + ' ; ' : '') + 'Retiré le ' + maintenant_() + ' par ' + ctx.nom);
+    journal_(ctx, 'tournee-retrait', t.id + ' ' + t.client + ' le ' + t.date);
+  } finally { lock.releaseLock(); }
+  return sugListe_({});
+}
+/** Le bureau relie un nom écrit dans le classeur VRAC 2025 à un client de l'application. */
+function vracRelier_(ctx, p) {
+  var k = vracNorm_(p.ecrit), id = String(p.client_id || '');
+  var c = camClients_().filter(function (x) { return x.id === id && x.id !== CCL_DEFAUT; })[0], vr = vracLire_();
+  if (!k || !vr.noms[k]) throw new UserError('Ce nom n\'est pas dans le classeur VRAC 2025. Actualisez la page.');
+  if (!c) throw new UserError('Choisissez le client.');
+  var lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    if (vracAlias_()[k]) throw new UserError('Ce nom est déjà relié. Pour le changer, corrigez l\'onglet « ' + VNM_ONGLET + ' ».');
+    vracFeuille_().appendRow([vr.noms[k].ecrit, c.id, 'Bureau, tableau de bord : ' + ctx.nom, maintenant_(), ctx.nom]);
+    journal_(ctx, 'vrac-nom-relie', vr.noms[k].ecrit + ' → ' + c.id + ' ' + c.nom);
+  } finally { lock.releaseLock(); }
+  return sugListe_({});
 }
