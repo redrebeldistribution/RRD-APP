@@ -75,7 +75,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.32.0';
+var VERSION_APP = '1.33.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -1759,7 +1759,7 @@ function exporterCsv() {
 }
 
 function entete() {
-  var tabs = [['rapports', 'Rapports'], ['analyse', '📊 Analyse'], ['resume', 'Résumé du jour'], ['photos', '📷 Photos'], ['bordereaux', '🧾 Bordereaux'], ['stock', IC_CITERNE + ' Stock'], ['camion', '🚚 Camion'], ['livrer', '🧭 À livrer'], ['argent', '💵 Argent'], ['messages', '✉️ Messages'], ['chat', '💬 Chat'], ['prix', 'Prix']];
+  var tabs = [['rapports', 'Rapports'], ['analyse', '📊 Analyse'], ['resume', 'Résumé du jour'], ['photos', '📷 Photos'], ['bordereaux', '🧾 Bordereaux'], ['stock', IC_CITERNE + ' Stock'], ['camion', '🚚 Camion'], ['livrer', '🧭 À livrer'], ['argent', '💵 Argent'], ['messages', '✉️ Messages'], ['chat', '💬 Chat'], ['demandes', '📝 Demandes'], ['prix', 'Prix']];
   if (D.utilisateur.role === 'management') tabs.push(['appareils', 'Téléphones']);
   return '<h1>Tableau de bord</h1><div class="sub">' + esc(D.utilisateur.nom) + ' · ' + (D.utilisateur.role === 'management' ? 'Direction' : 'Comptabilité') + ' · montants en ' + DEV + ' · <a href="#" onclick="changerCode();return false">Changer de code</a></div>' +
     '<div class="mut">Version ' + VERSION_APP + ' (build ' + (window.RRD_BUILD || 0) + ')' + (S.majPrete ? ' — <b>mise à jour ' + esc(S.majPrete) + ' prête : fermez l\'application puis rouvrez-la</b>' : S.majErreur ? ' — mise à jour impossible : ' + esc(S.majErreur) : '') + '</div>' +
@@ -1767,7 +1767,7 @@ function entete() {
 }
 function charge() { view(entete() + '<p class="mut center">Chargement…</p>'); }
 function errTab(e) { view(entete() + '<div class="err">' + esc(e.reseau ? 'Pas de connexion. Réessayez.' : e.erreur) + '</div>', '<button class="sec" onclick="tableau(T.onglet)">Réessayer</button>'); }
-function tableau(o) { T.retour = ''; T.onglet = o; charge(); ({ rapports: ongletRapports, analyse: function () { ongletAnalyse(); }, resume: ongletResume, photos: ongletPhotos, bordereaux: ongletBordereaux, stock: function () { ongletStock(); }, camion: function () { ongletCamion(); }, livrer: function () { ongletLivrer(); }, chat: function () { ecranChat(); }, argent: function () { ongletArgent(); }, messages: function () { ongletMessages(); }, prix: ongletPrix, appareils: ongletAppareils })[o](); }
+function tableau(o) { T.retour = ''; T.onglet = o; charge(); ({ rapports: ongletRapports, analyse: function () { ongletAnalyse(); }, resume: ongletResume, photos: ongletPhotos, bordereaux: ongletBordereaux, stock: function () { ongletStock(); }, camion: function () { ongletCamion(); }, livrer: function () { ongletLivrer(); }, chat: function () { ecranChat(); }, demandes: function () { ongletDemandes(); }, argent: function () { ongletArgent(); }, messages: function () { ongletMessages(); }, prix: ongletPrix, appareils: ongletAppareils })[o](); }
 function badgeEcart(e) {
   if (e === null || e === undefined) return '<span class="badge b-warn">prix manquant</span>';
   if (Math.abs(e) < 1) return '<span class="badge b-ok">écart 0</span>';
@@ -2144,6 +2144,33 @@ function ongletLivrer(data, msg, relire) {
   if (data) return rendre(data);
   if (relire) charge();
   call('livrer', relire ? { actualiser: 1 } : {}).then(function (d) { if (relire) msg = 'Classeur relu.'; rendre(d); }).catch(errTab);
+}
+/* Demandes « ouvrir une station » venues du formulaire du site redrebel.us (m1.36, 27/11/2026). */
+function ongletDemandes(data, msg) {
+  var rendre = function (d) {
+    var dir = D && D.utilisateur && D.utilisateur.role === 'management', h = entete() + (msg ? '<div class="okb">' + esc(msg) + '</div>' : '');
+    h += '<div class="card"><b>Demandes pour ouvrir une station</b><div class="mut">Formulaire du site redrebel.us (partie « Ouvrir une station »). Une ligne par demande dans l\'onglet « Demandes station (site) » de la feuille privée.</div></div>';
+    if (!d.demandes.length) h += '<p class="mut">Aucune demande pour l\'instant.</p>';
+    var coul = { 'nouvelle': 'var(--bad)', 'contactée': 'var(--warn)', 'classée': 'var(--ok)' };
+    d.demandes.forEach(function (x) {
+      var num = String(x.telephone).replace(/[^0-9+]/g, ''), wa = num.replace(/[^0-9]/g, '');
+      if (wa.length === 8) wa = '509' + wa;
+      h += '<div class="card"><div class="row"><div><b>' + esc(x.nom) + '</b> — ' + esc(x.ville) + '<div class="mut">Reçue le ' + esc(dfr(x.recu_le.slice(0, 10)).slice(0, 5) + ' à ' + x.recu_le.slice(11, 16)) + (x.langue && x.langue !== 'fr' ? ' · page en ' + ({ ht: 'créole', en: 'anglais' }[x.langue] || x.langue) : '') + '</div></div>' +
+        '<div style="text-align:right"><b style="color:' + (coul[x.statut] || 'inherit') + '">' + esc(x.statut) + '</b>' + (x.suivi_par ? '<div class="mut">' + esc(x.suivi_par) + ', ' + esc(x.suivi_le.slice(8, 10) + '/' + x.suivi_le.slice(5, 7)) + '</div>' : '') + '</div></div>' +
+        '<div>📞 <a href="tel:' + esc(num) + '">' + esc(x.telephone) + '</a>' + (wa.length >= 10 ? ' · <a href="https://wa.me/' + esc(wa) + '" target="_blank" rel="noopener">WhatsApp</a>' : '') + (x.email ? ' · ✉️ <a href="mailto:' + esc(x.email) + '">' + esc(x.email) + '</a>' : '') + '</div>' +
+        (x.terrain ? '<div class="mut">Terrain ou local : ' + esc(x.terrain) + '</div>' : '') + (x.delai ? '<div class="mut">Ouverture : ' + esc(x.delai) + '</div>' : '') +
+        (x.message ? '<div style="white-space:pre-wrap;margin-top:6px">' + esc(x.message) + '</div>' : '') + (x.note ? '<div class="mut" style="margin-top:4px">Note : ' + esc(x.note) + '</div>' : '') +
+        (dir ? '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">' + d.statuts.filter(function (s) { return s !== x.statut; }).map(function (s) { return '<button class="sec" style="padding:6px 10px" onclick="demandeStatut(\'' + esc(x.id) + '\',\'' + esc(s) + '\')">Marquer « ' + esc(s) + ' »</button>'; }).join('') + '</div>' : '') + '</div>';
+    });
+    view(h);
+  };
+  if (data) return rendre(data);
+  call('demandes').then(function (d) { rendre(d); }).catch(errTab);
+}
+function demandeStatut(id, statut) {
+  var note = prompt('Note (facultatif) : ce qui a été dit ou décidé') ;
+  if (note === null) return;
+  call('demandeStatut', { id: id, statut: statut, note: note }).then(function (d) { ongletDemandes(d, 'Demande marquée « ' + statut + ' ».'); }).catch(function (e) { alerte(e.erreur || 'Pas de connexion.'); });
 }
 function ongletArgent(data, msg) {
   var rendre = function (d) {

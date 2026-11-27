@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.35';
+var MOBILE_VERSION = 'm1.36';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var STATION_FORMATION = 'TST', MAX_APPAREILS_FORMATION = 50;   // les codes de la station de test servent à la formation : plusieurs téléphones avec le même code (propriétaire, 26/11/2026)
 var MAX_APPAREILS_ROLE = 5;   // un code DIR ou CPT peut servir sur 5 appareils en même temps (demande du propriétaire, 26/11/2026)
@@ -68,6 +68,7 @@ function apiMobile_(action, b) {
   try {
     if (action === 'ping') return ok_({ version: MOBILE_VERSION, heure: maintenant_() });
     if (action === 'enregistrer') return ok_(enregistrerAppareil_(b));
+    if (action === 'demandeStation') return ok_(demandeStation_(b.payload || {}));   // formulaire public du site redrebel.us (pas de code)
     var app = appareil_(b.jeton);
     var payload = b.payload || {};
     switch (action) {
@@ -591,6 +592,8 @@ function direction_(app, sous, p) {
     case 'vracRelier': exiger_(ctx, ['management', 'accounting']); return vracRelier_(ctx, p);
     case 'camAnnuler': exiger_(ctx, ['management']); return camAnnuler_(ctx, p);
     case 'camRapportAnnuler': exiger_(ctx, ['management']); return camRapportAnnuler_(ctx, p);
+    case 'demandes': exiger_(ctx, ['management', 'accounting']); return demandesListe_();
+    case 'demandeStatut': exiger_(ctx, ['management']); return demandeStatut_(ctx, p);
     default: throw new UserError('Action inconnue.');
   }
 }
@@ -1949,5 +1952,61 @@ function chatSignal_(app, p) {
     if (url) UrlFetchApp.fetch(url, { method: 'post', payload: JSON.stringify({ action: 'chatAlertes' }), contentType: 'text/plain', muteHttpExceptions: true });
   } catch (e) { }
   return { alerte: true };
+}
+
+/* ============================ Demandes « ouvrir une station » (site redrebel.us, m1.36, 27/11/2026) ============================
+ * Demande de la direction (27/11/2026) : au lieu d'appeler, les personnes qui veulent ouvrir une station de remplissage remplissent
+ * un formulaire sur le site. Chaque demande devient une ligne de l'onglet « Demandes station (site) » ; la direction les voit dans
+ * l'onglet « 📝 Demandes » du tableau de bord. Le formulaire est public : textes coupés, pas de formule possible dans la feuille,
+ * piège à robots, et au plus 30 demandes par heure en tout. */
+var DMS_ONGLET = 'Demandes station (site)';
+var DMS_ENTETES = ['id', 'recu_le', 'nom', 'telephone', 'email', 'ville', 'terrain', 'delai', 'message', 'langue', 'statut', 'suivi_par', 'suivi_le', 'note'];
+var DMS_TERRAIN = { oui: 'oui, terrain ou local trouvé', cherche: 'je cherche encore', non: 'pas encore' };
+var DMS_DELAI = { vite: 'dans les 3 mois', annee: 'dans l\'année', plus: 'plus tard / je me renseigne' };
+var DMS_STATUTS = ['nouvelle', 'contactée', 'classée'];
+function dmsTexte_(v, max) {
+  var s = String(v === undefined || v === null ? '' : v).replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').replace(/^ | $/g, '').slice(0, max);
+  return /^[=+\-@]/.test(s) ? '’' + s : s;   // jamais de formule dans la feuille
+}
+function demandeStation_(p) {
+  if (String(p.site || '').trim()) return { recu: true };   // champ caché rempli : robot, on ne garde rien
+  var nom = dmsTexte_(p.nom, 80), tel = dmsTexte_(p.telephone, 30), mail = dmsTexte_(p.email, 80), ville = dmsTexte_(p.ville, 80), msg = dmsTexte_(p.message, 1000);
+  var terrain = DMS_TERRAIN[String(p.terrain || '')] || '', delai = DMS_DELAI[String(p.delai || '')] || '', langue = ['fr', 'ht', 'en'].indexOf(String(p.langue)) >= 0 ? String(p.langue) : 'fr';
+  if (nom.length < 2) throw new UserError('nom', 'INVALIDE');
+  if (String(tel).replace(/[^0-9]/g, '').length < 8) throw new UserError('telephone', 'INVALIDE');
+  if (ville.length < 2) throw new UserError('ville', 'INVALIDE');
+  if (mail && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(mail.replace(/^’/, ''))) throw new UserError('email', 'INVALIDE');
+  var cache = CacheService.getScriptCache(), cle = 'dms_' + Utilities.formatDate(new Date(), TZ, 'yyyyMMddHH'), n = Number(cache.get(cle) || 0);
+  if (n >= 30) throw new UserError('trop', 'TROP');
+  cache.put(cle, String(n + 1), 3700);
+  var lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    var sh = camFeuille_(DMS_ONGLET, DMS_ENTETES), der = sh.getLastRow(), deja = false;
+    if (der >= 2) sh.getRange(Math.max(2, der - 19), 1, Math.min(20, der - 1), 6).getValues().forEach(function (r) {   // même personne, même ville, à l'instant : double envoi
+      var le = r[1] instanceof Date ? Utilities.formatDate(r[1], TZ, 'yyyy-MM-dd HH:mm:ss') : String(r[1]);
+      if (String(r[3]) === tel && String(r[5]) === ville && le.slice(0, 13) === maintenant_().slice(0, 13)) deja = true;
+    });
+    if (!deja) sh.appendRow(['DS-' + Utilities.formatDate(new Date(), TZ, 'yyMMdd-HHmmss') + '-' + Math.floor(Math.random() * 90 + 10), maintenant_(), nom, tel, mail, ville, terrain, delai, msg, langue, 'nouvelle', '', '', '']);
+  } finally { lock.releaseLock(); }
+  return { recu: true };
+}
+function demandesListe_() {
+  var sh = camFeuille_(DMS_ONGLET, DMS_ENTETES);
+  var l = camLignes_(sh, DMS_ENTETES.length).map(function (r, i) {
+    var o = { ligne: i + 2 }; DMS_ENTETES.forEach(function (k, j) { o[k] = r[j] instanceof Date ? Utilities.formatDate(r[j], TZ, 'yyyy-MM-dd HH:mm:ss') : String(r[j] === null ? '' : r[j]); }); return o;
+  }).filter(function (o) { return o.id; }).reverse();
+  return { demandes: l, statuts: DMS_STATUTS, nouvelles: l.filter(function (o) { return o.statut === 'nouvelle'; }).length };
+}
+function demandeStatut_(ctx, p) {
+  var st = String(p.statut || ''), note = dmsTexte_(p.note, 300);
+  if (DMS_STATUTS.indexOf(st) < 0) throw new UserError('Statut inconnu.');
+  var lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    var sh = camFeuille_(DMS_ONGLET, DMS_ENTETES), d = demandesListe_().demandes.filter(function (x) { return x.id === String(p.id || ''); })[0];
+    if (!d) throw new UserError('Demande introuvable. Actualisez la page.');
+    sh.getRange(d.ligne, 11, 1, 4).setValues([[st, ctx.nom, maintenant_(), note ? (d.note ? d.note + ' ; ' : '') + note : d.note]]);
+    journal_(ctx, 'demande-station', d.id + ' → ' + st);
+  } finally { lock.releaseLock(); }
+  return demandesListe_();
 }
 
