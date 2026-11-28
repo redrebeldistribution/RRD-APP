@@ -77,9 +77,11 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 <script src="vente.js?v=4"></script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.38.1';
+var VERSION_APP = '1.38.2';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
-var DEV = 'dollars haïtiens';
+var DEV = 'HTD';   // propriétaire 28/11/2026 : partout l'abréviation, jamais « dollars haïtiens » en toutes lettres
+var DEV_SERVEUR = 'dollars haïtiens';   // nom gardé dans les feuilles (anciennes lignes, soldes des camions) : ne pas changer
+function devA(x) { x = String(x === undefined || x === null ? '' : x); return /^dollars? ha[iï]tiens?$/i.test(x.trim()) ? 'HTD' : x; }   // affichage seulement
 var CHAMPS_DEFAUT = [
   { k: 'opening_meter', label: 'Compteur ouverture', req: true },
   { k: 'closing_meter', label: 'Compteur fermeture', req: true },
@@ -664,12 +666,12 @@ function resume() {
     '<tr><td>Employé(s) de service</td><td class="n"><b>' + esc(V.employes_service) + '</b></td></tr>';
   champs().forEach(function (f) {
     if (V[f.k] === '' && !f.req) return;
-    h += '<tr><td>' + esc(f.label) + '</td><td class="n"><b>' + fmt(nb(V[f.k])) + '</b>' + (f.money ? ' <span class="unit">$ HT</span>' : '') + '</td></tr>';
+    h += '<tr><td>' + esc(f.label) + '</td><td class="n"><b>' + fmt(nb(V[f.k])) + '</b>' + (f.money ? ' <span class="unit">' + DEV + '</span>' : '') + '</td></tr>';
     if (f.k === 'closing_meter') h += '<tr><td>Gallons vendus</td><td class="n"><b>' + fmt(nb(V.closing_meter) - nb(V.opening_meter)) + '</b></td></tr>';
   });
   if (V.other_expenses_detail) h += '<tr><td>Détail dépenses</td><td class="n">' + esc(V.other_expenses_detail) + '</td></tr>';
   if (argentOn()) {
-    if (nb(V.remis_bureau) > 0) h += '<tr><td>Remis au bureau</td><td class="n"><b>' + fmt(nb(V.remis_bureau)) + '</b> <span class="unit">$ HT</span><br>reçu par ' + esc(V.remis_bureau_a) + '</td></tr>';
+    if (nb(V.remis_bureau) > 0) h += '<tr><td>Remis au bureau</td><td class="n"><b>' + fmt(nb(V.remis_bureau)) + '</b> <span class="unit">' + DEV + '</span><br>reçu par ' + esc(V.remis_bureau_a) + '</td></tr>';
     if (nb(V.bank_deposit) > 0) h += '<tr><td>Dépôt fait par</td><td class="n">' + esc(V.depot_par) + '</td></tr>';
     if (nb(V.counted_cash) > 0) h += '<tr><td>Caisse gardée par</td><td class="n">' + esc(V.caisse_par) + '</td></tr>';
   }
@@ -704,8 +706,8 @@ function ecranRecu(r, nouveau) {
     '<div class="card center"><div class="mut">Référence</div><div class="big">' + esc(r.ref_serveur || r.ref) + '</div><div class="mut">Fait le ' + esc(r.cree_le) + '</div></div><div class="card"><table>' +
     '<tr><td>Employé(s) de service</td><td class="n">' + esc(r.employes_service) + '</td></tr>' +
     '<tr><td>Gallons vendus</td><td class="n"><b>' + fmt(nb(r.closing_meter) - nb(r.opening_meter)) + '</b></td></tr>';
-  champs().forEach(function (f) { if (r[f.k] !== '' && r[f.k] !== undefined) h += '<tr><td>' + esc(f.label) + '</td><td class="n">' + fmt(nb(r[f.k])) + (f.money ? ' <span class="unit">$ HT</span>' : '') + '</td></tr>'; });
-  if (r.argent_v) h += (nb(r.remis_bureau) > 0 ? '<tr><td>Remis au bureau</td><td class="n">' + fmt(nb(r.remis_bureau)) + ' <span class="unit">$ HT</span><br>reçu par ' + esc(r.remis_bureau_a || '') + '</td></tr>' : '') +
+  champs().forEach(function (f) { if (r[f.k] !== '' && r[f.k] !== undefined) h += '<tr><td>' + esc(f.label) + '</td><td class="n">' + fmt(nb(r[f.k])) + (f.money ? ' <span class="unit">' + DEV + '</span>' : '') + '</td></tr>'; });
+  if (r.argent_v) h += (nb(r.remis_bureau) > 0 ? '<tr><td>Remis au bureau</td><td class="n">' + fmt(nb(r.remis_bureau)) + ' <span class="unit">' + DEV + '</span><br>reçu par ' + esc(r.remis_bureau_a || '') + '</td></tr>' : '') +
     (r.depot_par ? '<tr><td>Dépôt fait par</td><td class="n">' + esc(r.depot_par) + '</td></tr>' : '') + (r.caisse_par ? '<tr><td>Caisse gardée par</td><td class="n">' + esc(r.caisse_par) + '</td></tr>' : '');
   h += '</table></div><p class="mut">Une erreur ? Prévenez le bureau : il peut annuler le rapport pour que vous puissiez le refaire.</p>';
   view(h, '<button onclick="accueil()">Retour</button>');
@@ -829,7 +831,7 @@ function ecranPhotos(msg) {
     var bds = l.filter(function (r) { return r.genre === 'bordereau' && r.date === now.date && r.statut !== 'rejete'; });
     h += '<h2>Bordereau de dépôt</h2><button style="width:100%" onclick="phPrendre(\'BORDEREAU\')">📷 Prendre le bordereau en photo</button>' +
       '<p class="mut center" style="margin:10px 0 0">Photo déjà dans le téléphone ? <a href="#" onclick="phPrendre(\'BORDEREAU\',\'PHOTOS\');return false">Choisir dans la galerie</a> (une explication sera demandée)</p>';
-    if (bds.length) h += '<div class="note">' + bds.map(function (r) { return (r.statut === 'envoye' ? '✓ ' : '⏳ ') + fmt(Number(r.montant)) + ' ' + esc(r.devise) + ' — ' + esc(r.beneficiaire) + (r.galerie ? ' · galerie' : '') + (r.statut === 'envoye' ? ' (reçu par le bureau)' : ' (en attente de signal)'); }).join('<br>') + '</div>';
+    if (bds.length) h += '<div class="note">' + bds.map(function (r) { return (r.statut === 'envoye' ? '✓ ' : '⏳ ') + fmt(Number(r.montant)) + ' ' + esc(devA(r.devise)) + ' — ' + esc(r.beneficiaire) + (r.galerie ? ' · galerie' : '') + (r.statut === 'envoye' ? ' (reçu par le bureau)' : ' (en attente de signal)'); }).join('<br>') + '</div>';
     h += '<h2>Aujourd\'hui</h2><table><tr><th>Heure</th>' + PH_TYPES.map(function (t) { return '<th class="center">' + t[2] + '</th>'; }).join('') + '</tr>' + vues.map(function (hh) {
       var e = etat[hh] || {}, passee = now.heure > hh && comptees.indexOf(hh) >= 0;
       return '<tr' + (hh === now.heure ? ' style="font-weight:700"' : '') + '><td>' + hh + ' h</td>' + PH_TYPES.map(function (t) {
@@ -912,7 +914,7 @@ function phValiderBordereau() {
   PH.attente = null; phGarder(r);
 }
 function phGarder(r) {
-  ptx('readwrite', function (s) { s.put(r); }).then(function () { ntBientot(); ecranPhotos(r.genre === 'bordereau' ? 'Bordereau enregistré (' + r.montant + ' ' + r.devise + ').' : 'Photo enregistrée (' + r.heure + ' h, ' + (PH_NOMS[r.type] || r.type) + ').'); phEnvoyer(); },
+  ptx('readwrite', function (s) { s.put(r); }).then(function () { ntBientot(); ecranPhotos(r.genre === 'bordereau' ? 'Bordereau enregistré (' + r.montant + ' ' + devA(r.devise) + ').' : 'Photo enregistrée (' + r.heure + ' h, ' + (PH_NOMS[r.type] || r.type) + ').'); phEnvoyer(); },
     function () { ecranPhotos(); alerte('Impossible de garder la photo sur le téléphone (mémoire pleine ?). Reprenez-la.'); });
 }
 function phVu(cid) { phTous().then(function (l) { var r = l.filter(function (x) { return x.cid === cid; })[0]; if (!r) return; r.vu = true; return ptx('readwrite', function (s) { s.put(r); }); }).then(function () { ecranPhotos(); }); }
@@ -1005,7 +1007,7 @@ function pushRepli() { if (!PUSH.refus) pushDemarrer(); }   // au retour dans l'
 var CM = { d: null, f: null, gps: null, envoi: false, sug: null };
 var CM_NOMS = { livraison: '🚚 Livraison', paiement: '💵 Paiement reçu', chargement: '⛽ Chargement de propane', achat: '🧾 Achat', photo: '📷 Photo', rapport: '📋 Rapport du jour' };
 function cmCode() { return 'CAM:' + ((CFG.get('camion', {}) || {}).code || ''); }
-function cmDev() { return (CM.d && CM.d.devise) || DEV; }
+function cmDev() { return (CM.d && CM.d.devise) || DEV_SERVEUR; }   // valeur envoyée au serveur ; à l'écran : devA(cmDev())
 function cmMiens() { var c = cmCode(); return phTous().then(function (l) { return l.filter(function (r) { return r.genre === 'cam' && r.station === c; }); }); }
 function demarrerCamion() { CM.d = CFG.get('camInit', null); CM.sug = CFG.get('camSug', null); camAccueil(); cmActualiser(); chDemarrer(); ntDemarrer(); }
 function cmActualiser(manuel) {
@@ -1024,7 +1026,7 @@ function cmActualiser(manuel) {
   });
 }
 function cmLigne(o) {   // une opération en une ligne (historique d'un client, liste du jour)
-  var dv = o.devise || cmDev(), t = '';
+  var dv = devA(o.devise || cmDev()), t = '';
   if (o.genre === 'livraison') {
     t = fmt(Number(o.gallons)) + ' gal';
     if (o.montant === '' || o.montant === undefined || o.montant === null) t += ' · prix à fixer par le bureau';
@@ -1076,7 +1078,7 @@ function camAccueil(msg, err) {
     jour.sort(function (a, b) { return String(a.heure) < String(b.heure) ? 1 : -1; });
     var tot = { charge: 0, livre: 0, paye: 0 };
     jour.forEach(function (o) { if (o.genre === 'chargement') tot.charge += Number(o.gallons) || 0; if (o.genre === 'livraison') { tot.livre += Number(o.gallons) || 0; tot.paye += Number(o.paye) || 0; } if (o.genre === 'paiement' && o.devise === cmDev()) tot.paye += Number(o.montant) || 0; });
-    h += '<h2>Aujourd\'hui</h2><div class="note">Chargé : <b>' + fmt(tot.charge) + ' gal</b> · livré : <b>' + fmt(tot.livre) + ' gal</b> · argent reçu : <b>' + fmt(tot.paye) + ' ' + esc(cmDev()) + '</b></div>';
+    h += '<h2>Aujourd\'hui</h2><div class="note">Chargé : <b>' + fmt(tot.charge) + ' gal</b> · livré : <b>' + fmt(tot.livre) + ' gal</b> · argent reçu : <b>' + fmt(tot.paye) + ' ' + esc(devA(cmDev())) + '</b></div>';
     if (!jour.length) h += '<p class="mut">Aucune opération aujourd\'hui.</p>';
     jour.forEach(function (o) {
       h += '<div class="card"><div class="row"><div><b>' + esc(o.client || o.fournisseur || o.detail || '') + '</b><div class="mut">' + esc(o.heure || '') + ' · ' + (CM_NOMS[o.genre] || esc(o.genre)) + (o.bon_no ? ' · bon n° ' + esc(o.bon_no) : '') + '</div><div>' + cmLigne(o) + '</div></div>' +
@@ -1125,7 +1127,7 @@ function cmTampon(photo, texte) {   // écrit la position dans une photo de preu
 function cmOptClients() {
   return '<option value="">— choisir —</option>' + ((CM.d && CM.d.clients) || []).map(function (c) { return '<option value="' + esc(c.id) + '">' + esc(c.nom) + '</option>'; }).join('') + '<option value="__autre">➕ Autre client (pas dans la liste)</option>';
 }
-function cmOptDev() { return ((CM.d && CM.d.devises) || [cmDev(), 'HTG', 'USD']).map(function (x) { return '<option value="' + esc(x) + '">' + esc(x === 'HTG' ? 'gourdes (HTG)' : x === 'USD' ? 'dollars US (USD)' : x) + '</option>'; }).join(''); }
+function cmOptDev() { return ((CM.d && CM.d.devises) || [cmDev(), 'HTG', 'USD']).map(function (x) { return '<option value="' + esc(x) + '">' + esc(x === 'HTG' ? 'gourdes (HTG)' : x === 'USD' ? 'dollars US (USD)' : devA(x)) + '</option>'; }).join(''); }
 function cmForm(genre) {
   CM.f = { genre: genre, photo: '' }; cmGps();
   var h, photoTxt = genre === 'livraison' ? 'Photo du bon de livraison' : genre === 'paiement' ? 'Photo du reçu (facultatif)' : genre === 'photo' ? 'Photo' : 'Photo du bon ou du reçu';
@@ -1139,7 +1141,7 @@ function cmForm(genre) {
       '<label for="cmGal">Gallons livrés</label><input id="cmGal" inputmode="decimal" autocomplete="off" placeholder="seulement les chiffres" oninput="cmMontant()"><div class="note" id="cmMt">Choisissez le client et écrivez les gallons.</div>' +
       '<label>Paiement</label>' + [['comptant', 'Payé comptant (tout)'], ['credit', 'À crédit (rien payé)'], ['partie', 'Une partie payée']].map(function (m) {
         return '<label style="display:flex;gap:10px;align-items:center;color:var(--txt);font-size:16px;margin:6px 0"><input type="radio" name="cmMode" style="width:auto" value="' + m[0] + '" onchange="cmMontant()">' + m[1] + '</label>';
-      }).join('') + '<div id="cmPayeB" class="hidden"><label for="cmPaye">Montant reçu (' + esc(cmDev()) + ')</label><input id="cmPaye" inputmode="decimal" autocomplete="off"></div>' +
+      }).join('') + '<div id="cmPayeB" class="hidden"><label for="cmPaye">Montant reçu (' + esc(devA(cmDev())) + ')</label><input id="cmPaye" inputmode="decimal" autocomplete="off"></div>' +
       '<label for="cmBon">N° du bon (facultatif)</label><input id="cmBon" autocomplete="off">';
   } else if (genre === 'paiement') {
     h = '<h1>Paiement reçu d\'un client</h1><div class="sub">Pour l\'argent d\'une ancienne livraison à crédit.</div><label for="cmCli">Client</label><select id="cmCli" onchange="cmCliChange()">' + cmOptClients() + '</select>' +
@@ -1163,11 +1165,11 @@ function cmRapport(date) {
     CM.f = { genre: 'rapport', photo: '', date: date };
     var h = '<h1>Rapport du jour</h1><div class="sub">' + esc((CFG.get('camion', {}) || {}).nom || '') + ' · ' + dfr(date) + '</div>';
     if (att) h += '<div class="wait">⏳ ' + att + ' opération(s) pas encore envoyée(s). Elles seront comptées par le bureau quand elles partiront.</div>';
-    if (t && !(att && date === auj)) h += '<div class="note"><b>Résumé reçu par le bureau</b><div>Chargé : <b>' + fmt(t.charge) + ' gal</b> · livré : <b>' + fmt(t.livre) + ' gal</b> (' + t.nb + ' livraison(s))</div><div>Argent reçu : <b>' + fmt(Math.round((t.recu + t.paiements) * 100) / 100) + ' ' + esc(cmDev()) + '</b> · crédit : <b>' + fmt(t.credit) + '</b></div><div>Achats payés : <b>' + fmt(t.achats) + ' ' + esc(cmDev()) + '</b>' +
+    if (t && !(att && date === auj)) h += '<div class="note"><b>Résumé reçu par le bureau</b><div>Chargé : <b>' + fmt(t.charge) + ' gal</b> · livré : <b>' + fmt(t.livre) + ' gal</b> (' + t.nb + ' livraison(s))</div><div>Argent reçu : <b>' + fmt(Math.round((t.recu + t.paiements) * 100) / 100) + ' ' + esc(devA(cmDev())) + '</b> · crédit : <b>' + fmt(t.credit) + '</b></div><div>Achats payés : <b>' + fmt(t.achats) + ' ' + esc(devA(cmDev())) + '</b>' +
       Object.keys(t.autres || {}).map(function (k) { return ' · ' + esc(k) + ' : ' + fmt(t.autres[k]); }).join('') + '</div>' + (t.sans_prix ? '<div class="mut">' + t.sans_prix + ' livraison(s) sans prix : le bureau calculera.</div>' : '') + '</div>';
     else h += '<div class="note">Le résumé de la journée sera calculé par le bureau avec les opérations envoyées.</div>';
     h += '<label for="crEmp">Employés du camion (chauffeur et aides) *</label><input id="crEmp" autocomplete="off" value="' + esc(CFG.get('camEmp', '')) + '" placeholder="ex. Paul Michel, Jean Rose">' +
-      '<h2>Où est l\'argent de la journée ? *</h2><p class="mut">Remplissez chaque case où il y a de l\'argent (' + esc(cmDev()) + '), avec le nom de la personne qui l\'a. Aucun argent aujourd\'hui : écrivez 0 dans « Gardé en main ».</p>' +
+      '<h2>Où est l\'argent de la journée ? *</h2><p class="mut">Remplissez chaque case où il y a de l\'argent (' + esc(devA(cmDev())) + '), avec le nom de la personne qui l\'a. Aucun argent aujourd\'hui : écrivez 0 dans « Gardé en main ».</p>' +
       '<div class="card"><b>🏦 Déposé à la banque</b><label for="crDep">Montant déposé</label><input id="crDep" inputmode="decimal" autocomplete="off" placeholder="seulement les chiffres" oninput="crTotal()">' +
         '<label for="crDepPour">Dépôt fait pour</label><select id="crDepPour">' + BD_BENEF.map(function (b) { return '<option>' + esc(b) + '</option>'; }).join('') + '</select>' +
         '<label for="crDepPar">Déposé par (nom)</label><input id="crDepPar" autocomplete="off" maxlength="60"></div>' +
@@ -1184,7 +1186,7 @@ function crTotal() {   // total des trois cases, à côté de ce que le bureau a
   var el = $('crTot'); if (!el) return;
   var tot = 0, bon = true; ['crDep', 'crBur', 'crMain'].forEach(function (id) { var v = String(($(id) || {}).value || '').trim(); if (!v) return; var n = nb(v); if (n === null || n < 0) bon = false; else tot += n; });
   var att = el.getAttribute('data-att');
-  el.innerHTML = bon ? 'Total : <b>' + fmt(Math.round(tot * 100) / 100) + ' ' + esc(cmDev()) + '</b>' + (att !== '' && att !== null ? ' · attendu d\'après le bureau : <b>' + fmt(Number(att)) + '</b>' : '') : 'Total : écrivez seulement les chiffres.';
+  el.innerHTML = bon ? 'Total : <b>' + fmt(Math.round(tot * 100) / 100) + ' ' + esc(devA(cmDev())) + '</b>' + (att !== '' && att !== null ? ' · attendu d\'après le bureau : <b>' + fmt(Number(att)) + '</b>' : '') : 'Total : écrivez seulement les chiffres.';
 }
 function cmTypeChange() { var ch = $('cmType').value === 'chargement'; $('cmChB').classList.toggle('hidden', !ch); $('cmAcB').classList.toggle('hidden', ch); }
 var JOURS_FR = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
@@ -1242,7 +1244,7 @@ function cmCliChange() {
       hist.sort(function (a, b) { return (a.date + a.heure) < (b.date + b.heure) ? 1 : -1; });
       ((d.historique || {})[v] || []).forEach(function (o) { if (!vus[o.cid]) hist.push(o); });
       hist = hist.slice(0, 5);
-      var c0 = (d.clients || []).filter(function (x) { return x.id === v; })[0], dv0 = esc(cmDev()), sol = '';
+      var c0 = (d.clients || []).filter(function (x) { return x.id === v; })[0], dv0 = esc(devA(cmDev())), sol = '';
       var du = function (x) { return x > 0 ? '<b style="color:var(--bad)">' + fmt(x) + ' ' + dv0 + '</b>' : x < 0 ? '<b style="color:var(--ok)">avance de ' + fmt(-x) + ' ' + dv0 + '</b>' : '<b style="color:var(--ok)">rien</b>'; };
       if (c0 && typeof c0.solde === 'number') sol = '<div class="note"><div>Ce client doit : ' + du(c0.solde) + '</div>' +
         (c0.groupe ? '<div>Tout le client ' + esc(c0.groupe) + ' (' + c0.nb_groupe + ' points de livraison) : ' + du(c0.solde_groupe) + '</div>' : '') +
@@ -1259,7 +1261,7 @@ function cmMontant() {
   if (!el) return;
   if (!c) { el.textContent = 'Choisissez le client et écrivez les gallons.'; return; }
   if (!(c.prix > 0)) { el.textContent = 'Prix pas encore fixé par le bureau pour ce client : le montant sera calculé au bureau.'; return; }
-  el.innerHTML = 'Prix du bureau : <b>' + fmt(c.prix) + ' ' + esc(cmDev()) + '</b> le gallon' + (g > 0 ? ' → montant : <b style="font-size:18px">' + fmt(Math.round(g * c.prix * 100) / 100) + ' ' + esc(cmDev()) + '</b>' : '');
+  el.innerHTML = 'Prix du bureau : <b>' + fmt(c.prix) + ' ' + esc(devA(cmDev())) + '</b> le gallon' + (g > 0 ? ' → montant : <b style="font-size:18px">' + fmt(Math.round(g * c.prix * 100) / 100) + ' ' + esc(devA(cmDev())) + '</b>' : '');
 }
 function cmPrendre() { prendrePhoto('cmInput', cmImage); }
 function cmPhoto(input) { var f = input.files && input.files[0]; if (f) cmImage(URL.createObjectURL(f)); }
@@ -2111,7 +2113,7 @@ function ongletPhotos() {
 function ongletCamion(data, msg) {
   var rendre = function (d) {
     CAMD = d; T.cdu = d.du; T.cau = d.au; T.ccam = d.camion;
-    var dv = d.devise || DEV, t = d.totaux, dir = D.utilisateur.role === 'management';
+    var dv = devA(d.devise || DEV), t = d.totaux, dir = D.utilisateur.role === 'management';
     var h = entete() + (msg ? '<div class="okb">' + esc(msg) + '</div>' : '') + '<div class="row"><div><label>Du</label><input type="date" id="cDu" value="' + d.du + '" max="' + d.aujourdhui + '"></div><div><label>au</label><input type="date" id="cAu" value="' + d.au + '" max="' + d.aujourdhui + '"></div></div>' +
       '<label>Camion</label><select id="cCam"><option value="">Tous les camions (sans le camion de test)</option>' + d.camions.map(function (c) { return '<option value="' + esc(c.code) + '"' + (c.code === d.camion ? ' selected' : '') + '>' + esc(c.nom) + '</option>'; }).join('') + '</select>' +
       '<div style="margin-top:8px"><button class="sec" onclick="T.cdu=$(\'cDu\').value;T.cau=$(\'cAu\').value;T.ccam=$(\'cCam\').value;tableau(\'camion\')">Afficher</button></div>';
@@ -2190,7 +2192,7 @@ var CAMD = null;
 function camVue() { return { du: T.cdu || '', au: T.cau || '', camion: T.ccam || '' }; }
 function camPrix(id) {
   var c = CAMD.clients.filter(function (x) { return x.id === id; })[0]; if (!c) return;
-  var v = prompt('Prix au gallon pour ' + (id === 'DEFAUT' ? 'un client sans prix' : c.nom) + ' (' + (CAMD.devise || DEV) + ') :', c.prix > 0 ? String(c.prix) : '');
+  var v = prompt('Prix au gallon pour ' + (id === 'DEFAUT' ? 'un client sans prix' : c.nom) + ' (' + (devA(CAMD.devise || DEV)) + ') :', c.prix > 0 ? String(c.prix) : '');
   if (v === null || !String(v).trim()) return;
   call('camClient', { id: id, prix: String(v).trim(), vue: camVue() }).then(function (d) { ongletCamion(d, 'Prix enregistré.'); }).catch(function (e) { alerte(e.erreur || 'Pas de connexion.'); });
 }
@@ -2208,7 +2210,7 @@ function camDepart(id) {
   var a = c.depart !== null && c.depart !== undefined, hier = jourPlus(CAMD.aujourdhui, -1);
   view('<h1>Solde de départ</h1><div class="sub">' + esc(c.nom) + '</div>' +
     '<p class="mut">Ce que ce client devait avant l\'application, à la fin du jour choisi. Les livraisons et paiements de l\'application jusqu\'à ce jour ne sont pas recomptés ; ceux d\'après s\'ajoutent.</p>' +
-    '<label>Montant dû (' + esc(CAMD.devise || DEV) + ') — avec un signe moins si le client a une avance</label><input id="sdMt" autocomplete="off" value="' + (a ? esc(String(c.depart)) : '') + '" placeholder="seulement les chiffres">' +
+    '<label>Montant dû (' + esc(devA(CAMD.devise || DEV)) + ') — avec un signe moins si le client a une avance</label><input id="sdMt" autocomplete="off" value="' + (a ? esc(String(c.depart)) : '') + '" placeholder="seulement les chiffres">' +
     '<label>À la fin du</label><input type="date" id="sdLe" value="' + esc(a && c.depart_le ? c.depart_le : hier) + '" max="' + CAMD.aujourdhui + '">' +
     '<label>D\'où vient ce chiffre ? (obligatoire)</label><input id="sdSrc" autocomplete="off" maxlength="150" placeholder="cahier des crédits, relevé, feuille…">' +
     (a ? '<div class="note">Aujourd\'hui : ' + fmt(c.depart) + ' au ' + dfr(c.depart_le) + '<div class="mut">' + esc(c.depart_source || '') + '</div></div><div style="margin-top:10px"><a href="#" onclick="camDepartOk(\'' + esc(id) + '\',1);return false">Retirer le solde de départ</a></div>' : ''),
@@ -2226,7 +2228,7 @@ function camDepartOk(id, retirer) {
 function camReleve(cle, seul) {
   if (seul) { var g = ((CAMD && CAMD.soldes) || []).filter(function (x) { return x.membres.some(function (m) { return m.cle === cle; }); })[0]; if (g && !g.groupe) cle = g.cle; }
   call('camReleve', { cle: cle }).then(function (r) {
-    var dv = esc(r.devise || DEV), plus = r.membres.length > 1, aut = Object.keys(r.autres || {});
+    var dv = esc(devA(r.devise || DEV)), plus = r.membres.length > 1, aut = Object.keys(r.autres || {});
     var h = '<h1>Relevé — ' + esc(r.nom) + '</h1><div class="sub">' + (plus ? r.membres.length + ' points de livraison · ' : '') + 'calculé le ' + esc(r.calcule_le) + '</div>' +
       '<div class="card center"><div class="mut">' + (r.solde < 0 ? 'Avance du client' : 'Le client doit') + '</div><div class="big" style="color:' + (r.solde > 0 ? 'var(--bad)' : 'var(--ok)') + '">' + fmt(Math.abs(r.solde)) + ' ' + dv + '</div></div>' +
       '<div class="card">' + r.membres.map(function (m) {
@@ -2289,7 +2291,7 @@ function livRelier(i) {
 function ongletLivrer(data, msg, relire) {
   var rendre = function (d) {
     LIVD = d;
-    var auj = d.aujourdhui, dv = esc(d.devise || DEV), src = d.source || {}, og = src.onglets || [], jusqu = '';
+    var auj = d.aujourdhui, dv = esc(devA(d.devise || DEV)), src = d.source || {}, og = src.onglets || [], jusqu = '';
     og.forEach(function (o) { if (o.dernier > jusqu) jusqu = o.dernier; });
     var h = entete() + (msg ? '<div class="okb">' + esc(msg) + '</div>' : '') +
       '<div class="card"><b>Livraisons suggérées</b><div class="mut">Estimation d\'après le passé de chaque client : sa dernière livraison + l\'écart habituel entre ses livraisons. Ce n\'est pas une commande et rien n\'est envoyé au client. Les chauffeurs voient la même liste sur leur téléphone, sans les montants, comme une suggestion qu\'ils ne sont pas obligés de suivre ; celle du lendemain à partir de 18 h ou dès leur rapport du jour.</div>' +
@@ -2361,7 +2363,7 @@ function demandeStatut(id, statut) {
 function ongletArgent(data, msg) {
   var rendre = function (d) {
     ARGD = d;
-    var dv = esc(d.devise || DEV), dir = D.utilisateur.role === 'management', t = d.totaux || {}, tot = Math.round(((t.depot || 0) + (t.bureau || 0) + (t.main || 0)) * 100) / 100;
+    var dv = esc(devA(d.devise || DEV)), dir = D.utilisateur.role === 'management', t = d.totaux || {}, tot = Math.round(((t.depot || 0) + (t.bureau || 0) + (t.main || 0)) * 100) / 100;
     var h = entete() + (msg ? '<div class="okb">' + esc(msg) + '</div>' : '') +
       '<div class="card"><div class="mut">Argent des rapports pas encore confirmé</div><div class="big" style="color:' + (tot > 0 ? 'var(--bad)' : 'var(--ok)') + '">' + fmt(tot) + ' ' + dv + '</div>' +
       '<div>🏦 Dépôts à vérifier : <b>' + fmt(t.depot || 0) + '</b></div><div>🏢 Remis au bureau, à confirmer : <b>' + fmt(t.bureau || 0) + '</b></div><div>👤 Gardé en main : <b>' + fmt(t.main || 0) + '</b></div>' +
@@ -2396,9 +2398,9 @@ function argConfirmer(id) {
   ARG.doc = '';
   var modes = x.lieu === 'depot' ? [['depot_verifie', 'Le dépôt est bien à la banque']] : x.lieu === 'bureau' ? [['recu_bureau', 'L\'argent est bien arrivé au bureau']] : [['recu_bureau', 'Remis au bureau'], ['depot_verifie', 'Déposé à la banque']];
   view('<h1>Confirmer</h1><div class="sub">' + ARG_LIEU[x.lieu] + ' · ' + esc(x.nom) + ' · rapport du ' + dfr(x.date) + '</div>' +
-    '<div class="card">Au nom de <b>' + esc(x.tenu_par) + '</b>' + (x.pour ? ' · pour ' + esc(x.pour) : '') + '<div class="big">' + fmt(x.ouvert) + ' ' + esc(x.devise) + '</div>' + (x.regle > 0 ? '<div class="mut">Déjà confirmé : ' + fmt(x.regle) + ' sur ' + fmt(x.montant) + '</div>' : '') + '</div>' +
+    '<div class="card">Au nom de <b>' + esc(x.tenu_par) + '</b>' + (x.pour ? ' · pour ' + esc(x.pour) : '') + '<div class="big">' + fmt(x.ouvert) + ' ' + esc(devA(x.devise)) + '</div>' + (x.regle > 0 ? '<div class="mut">Déjà confirmé : ' + fmt(x.regle) + ' sur ' + fmt(x.montant) + '</div>' : '') + '</div>' +
     '<label for="agMode">Ce que vous confirmez</label><select id="agMode">' + modes.map(function (m) { return '<option value="' + m[0] + '">' + m[1] + '</option>'; }).join('') + '</select>' +
-    '<label for="agMt">Montant confirmé (' + esc(x.devise) + ') — moins si une partie seulement est arrivée</label><input id="agMt" inputmode="decimal" autocomplete="off" value="' + esc(String(x.ouvert)) + '">' +
+    '<label for="agMt">Montant confirmé (' + esc(devA(x.devise)) + ') — moins si une partie seulement est arrivée</label><input id="agMt" inputmode="decimal" autocomplete="off" value="' + esc(String(x.ouvert)) + '">' +
     '<label>Pièce justificative * (photo du reçu signé, du bordereau ou du relevé de banque)</label><input type="file" id="agDoc" accept="image/*" onchange="argDoc(this)"><div id="agDocEtat" class="mut"></div>' +
     (x.fichier ? '<label style="display:flex;gap:10px;align-items:center;color:var(--txt);font-size:16px;margin:10px 0"><input type="checkbox" id="agPiece" style="width:auto"> Le bordereau joint au rapport est la pièce</label>' : '') +
     '<label for="agNote">Note (facultatif)</label><input id="agNote" autocomplete="off" maxlength="200" placeholder="n° du reçu, du bordereau…">',
@@ -2475,7 +2477,7 @@ function ongletBordereaux() {
     else h += '<table><tr><th>Dépôt</th><th>Station</th><th class="n">Montant</th><th></th></tr>' + d.bordereaux.map(function (b, i) {
       return '<tr><td>' + dfr(b.date).slice(0, 5) + '</td><td>' + esc(b.nom) + '<div class="mut">' + esc(b.beneficiaire) + (b.numero ? ' · n° ' + esc(b.numero) : '') + (b.note && b.note.indexOf(BD_GALERIE) !== 0 ? ' · ' + esc(b.note) : '') + '</div>' +
         (String(b.note || '').indexOf(BD_GALERIE) === 0 ? '<div style="color:var(--warn);font-weight:700;font-size:13px">🖼️ Photo de la galerie : <span style="font-weight:400">' + esc(b.note.slice(BD_GALERIE.length)) + '</span></div>' : '') + '</td>' +
-        '<td class="n">' + fmt(b.montant) + ' ' + esc(b.devise) + '</td><td class="n"><button class="sec" style="padding:6px 10px" onclick="phVoir(\'' + esc(b.id) + '\',' + i + ')">Voir</button></td></tr>' +
+        '<td class="n">' + fmt(b.montant) + ' ' + esc(devA(b.devise)) + '</td><td class="n"><button class="sec" style="padding:6px 10px" onclick="phVoir(\'' + esc(b.id) + '\',' + i + ')">Voir</button></td></tr>' +
         '<tr><td colspan="4" id="phv' + i + '" style="border:0;padding:0"></td></tr>';
     }).join('') + '</table>';
     view(h);
