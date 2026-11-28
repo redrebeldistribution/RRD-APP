@@ -2346,7 +2346,7 @@ function menageTelegram() {
     var dos = x.id ? DriveApp.getFolderById(x.id) : null;
     if (!dos) { var it = DriveApp.getFolderById(x.racine).getFoldersByName(x.nom), l = []; while (it.hasNext()) l.push(it.next()); if (l.length !== 1) { bilan.push('PAS TOUCHÉ — ' + x.chemin + ' : ' + l.length + ' dossiers de ce nom'); return; } dos = l[0]; }
     var prop = ''; try { prop = dos.getOwner().getEmail(); } catch (e) { }
-    if (prop !== Session.getEffectiveUser().getEmail()) { bilan.push('PAS TOUCHÉ — ' + x.chemin + ' : propriétaire ' + prop); return; }
+    if (prop !== 'redrebeldistribution@gmail.com') { bilan.push('PAS TOUCHÉ — ' + x.chemin + ' : propriétaire ' + prop); return; }
     dos.setTrashed(true);
     bilan.push('À LA CORBEILLE — ' + x.chemin + ' (id ' + dos.getId() + ') : ' + a.length + ' fichiers, ' + mo + ' Mo, tous avec une copie ailleurs, aucun lié');
   });
