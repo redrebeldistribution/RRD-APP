@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.42';
+var MOBILE_VERSION = 'm1.43';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var STATION_FORMATION = 'TST', MAX_APPAREILS_FORMATION = 50;   // les codes de la station de test servent à la formation : plusieurs téléphones avec le même code (propriétaire, 26/11/2026)
 /* Pilote des ventes (écran « Vente » du téléphone, propriétaire 28/11/2026) : seulement la station de formation pour l'essai.
@@ -524,13 +524,13 @@ function argConfirmer_(ctx, p) {
     if (!x) throw new UserError('Ligne introuvable (rapport annulé ?). Actualisez la page.');
     var mode = String(p.mode || '');
     if ((ARG_MODES[x.lieu] || []).indexOf(mode) < 0) throw new UserError('Choisissez où l\'argent est arrivé.');
-    if (montant > x.ouvert) throw new UserError('Il ne reste que ' + x.ouvert + ' ' + x.devise + ' à confirmer sur cette ligne.');
+    if (montant > x.ouvert) throw new UserError('Il ne reste que ' + x.ouvert + ' ' + devA_(x.devise) + ' à confirmer sur cette ligne.');
     var memePiece = !octets && estVrai_(p.piece_du_rapport) && x.fichier;
     if (!octets && !memePiece) throw new UserError('Ajoutez la pièce justificative : une photo du reçu signé, du bordereau ou du relevé.');
     var fid = memePiece ? x.fichier : '', le = maintenant_(), auj = msgJour_(0);
     if (octets) {
       var f = phDossier_({ code: 'ARGENT', nom: 'Pièces justificatives' }, auj, 'ARG', 'RRD – Argent, pièces justificatives (app, privé)').createFile(Utilities.newBlob(octets, 'image/' + m[1], 'ARGENT_' + x.id + '_' + le.replace(/[^0-9]/g, '') + '.' + (m[1] === 'png' ? 'png' : 'jpg')));
-      f.setDescription('Pièce justificative (application RRD) — ' + x.nom + ' — ' + x.date + ' — ' + montant + ' ' + x.devise + ' — confirmé par ' + ctx.nom); fid = f.getId();
+      f.setDescription('Pièce justificative (application RRD) — ' + x.nom + ' — ' + x.date + ' — ' + montant + ' ' + devA_(x.devise) + ' — confirmé par ' + ctx.nom); fid = f.getId();
     }
     var sh = argFeuille_(), id = 'F' + auj.replace(/-/g, '').slice(2) + '-' + sh.getLastRow();
     sh.appendRow([id, 'cloture', x.origine, x.nom, auj, x.rapport, x.lieu, montant, x.devise, x.tenu_par, x.pour, fid, x.id, mode, ctx.nom + ' (' + (ctx.role === 'accounting' ? 'comptabilité' : 'direction') + ')', le, note, id, '']);
@@ -962,7 +962,7 @@ function resumeApp_(date) {
   } catch (e) { console.error(e && e.stack || e); }   // le stock ne doit jamais empêcher le résumé de partir
   try {
     var jr = date, cr = camRapportsVue_(jr, jr, '');
-    if (cr.length) t += '\n\n🚚 Camions (' + jr.split('-').reverse().join('/') + ', ' + CURRENCY + ')\n' + cr.map(function (x) {
+    if (cr.length) t += '\n\n🚚 Camions (' + jr.split('-').reverse().join('/') + ', ' + devA_(CURRENCY) + ')\n' + cr.map(function (x) {
       var k = x.totaux, n = function (v) { return Number(v).toLocaleString('fr-FR'); };
       return '• ' + x.camion_nom + ' : chargé ' + n(k.charge) + ' gal, livré ' + n(k.livre) + ' gal (' + k.nb + ' livraison(s)), reçu ' + n(k.recu + k.paiements) + ', crédit ' + n(k.credit) + ', achats ' + n(k.achats) +
         (k.sans_prix ? ', ' + k.sans_prix + ' livraison(s) sans prix' : '') + (x.fait ? ' — rapport fait : argent ' + n(x.remis) + (x.ou ? ' (' + [x.ou.depose ? 'déposé ' + n(x.ou.depose) + ' par ' + x.ou.depose_par : '', x.ou.bureau ? 'au bureau ' + n(x.ou.bureau) + ' reçu par ' + x.ou.bureau_qui : '', x.ou.main ? 'en main ' + n(x.ou.main) + ' gardé par ' + x.ou.main_qui : ''].filter(String).join(' ; ') + ')' : '') + (x.difference ? ', différence ' + n(x.difference) : '') : ' — ⚠️ rapport du jour pas encore fait');
@@ -1457,7 +1457,7 @@ function camEnvoyer_(app, p) {
       if (prix > 0) {
         l.prix = prix; l.montant = Math.round(l.gallons * prix * 100) / 100;
         l.paye = mode === 'comptant' ? l.montant : mode === 'credit' ? 0 : nombre(p.paye, 'Montant reçu', true);
-        if (l.paye > l.montant) throw new UserError('Le montant reçu dépasse le montant de la livraison (' + l.montant + ' ' + CURRENCY + ').');
+        if (l.paye > l.montant) throw new UserError('Le montant reçu dépasse le montant de la livraison (' + l.montant + ' ' + devA_(CURRENCY) + ').');
         l.credit = Math.round((l.montant - l.paye) * 100) / 100;
       } else {   // pas de prix au bureau : on ne l'invente pas, le montant reste vide
         if (mode === 'partie') l.paye = nombre(p.paye, 'Montant reçu', true); else if (mode === 'credit') l.paye = 0;
@@ -2378,6 +2378,9 @@ function menageTelegram() {
  * Une ligne par vente notée sur le téléphone : gallons et paiement (cash ou crédit + client). Aucun prix ni montant ici :
  * le bureau garde son prix, rien n'est inventé. « erreur » = la station signale qu'une vente déjà envoyée est fausse ;
  * la vente d'origine reste telle quelle et seul le bureau corrige. Renvoyer la même vente (même cid) ne crée jamais de doublon. */
+/* m1.43 (propriétaire 28/11/2026) : à l'écran et dans les messages, toujours « HTD », jamais « dollars haïtiens » en toutes lettres.
+ * La valeur gardée dans les feuilles (CURRENCY) ne change pas : les anciennes lignes et les soldes des camions s'y comparent. */
+function devA_(x) { x = String(x === undefined || x === null ? '' : x); return /^dollars? ha[iï]tiens?$/i.test(x.trim()) ? 'HTD' : x; }
 function resCode_(v) {   // « RRD:T:000123 », « T-000123 », « 123 » → « T-000123 » ; autre chose → ''
   var t = String(v || '').toUpperCase().replace(/\s+/g, ''), m = t.match(/^RRD:T:(\d{1,8})$/) || t.match(/^T-?(\d{1,8})$/) || t.match(/^(\d{1,8})$/);
   return m && Number(m[1]) > 0 ? 'T-' + ('000000' + Number(m[1])).slice(-6) : '';
