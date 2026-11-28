@@ -2267,3 +2267,50 @@ function honneurPublic_() {
   try { cache.put('honneur_public', JSON.stringify(o), 600); } catch (e) { }
   return o;
 }
+
+/** Lecture seule : résumé de l'inventaire (dossiers, tailles, doublons nom + taille, fichiers liés depuis les feuilles) dans l'onglet
+ * « Inventaire Drive (résumé) ». Ne supprime rien. Feuilles lues pour les liens : Activity Log et la feuille privée (jamais 1D0k4…). */
+function analyseTelegram() {
+  var sh = ss_().getSheetByName('Inventaire Drive (Telegram)'), n = sh.getLastRow();
+  var rows = sh.getRange(2, 1, n - 1, 8).getValues();
+  var refs = {}, re = /[-\w]{25,60}/g, lus = [];
+  [[SpreadsheetApp.openById(DSR_ACTIVITY_LOG_ID), 'Activity Log'], [ss_(), 'feuille privée']].forEach(function (x) {
+    x[0].getSheets().forEach(function (s) {
+      var nom = s.getName(); if (/^Inventaire Drive/.test(nom) || s.getLastRow() < 1 || s.getLastColumn() < 1) return;
+      var r = s.getDataRange(), v = r.getValues(), f = r.getFormulas();
+      for (var i = 0; i < v.length; i++) for (var j = 0; j < v[i].length; j++) {
+        var t = String(v[i][j]) + ' ' + f[i][j]; if (t.length < 26) continue;
+        var m = t.match(re); if (m) m.forEach(function (id) { (refs[id] = refs[id] || {})[x[1] + ' › ' + nom] = 1; });
+      }
+      lus.push(x[1] + ' › ' + nom);
+    });
+  });
+  var grp = function (r) { return String(r[1]).split(' / ').slice(0, 3).join(' / '); };
+  var dos = {}, cle = {}, tot = { n: 0, ko: 0 };
+  rows.forEach(function (r) {
+    var g = grp(r), k = String(r[2]).toLowerCase() + '|' + r[5];
+    var d = dos[g] = dos[g] || { n: 0, ko: 0, lies: 0, ko_lies: 0, dbl: 0, ko_dbl: 0, kado: /kado/i.test(r[1]), prop: {} };
+    d.n++; d.ko += Number(r[5]) || 0; d.prop[r[7] || '?'] = 1; tot.n++; tot.ko += Number(r[5]) || 0;
+    if (refs[r[3]]) { d.lies++; d.ko_lies += Number(r[5]) || 0; }
+    if (Number(r[5]) > 0) (cle[k] = cle[k] || []).push(g);
+  });
+  rows.forEach(function (r) {   // doublon = même nom et même taille ailleurs (autre dossier ou même dossier)
+    var k = String(r[2]).toLowerCase() + '|' + r[5]; if (!(Number(r[5]) > 0) || (cle[k] || []).length < 2) return;
+    var d = dos[grp(r)]; d.dbl++; d.ko_dbl += Number(r[5]) || 0;
+  });
+  var paires = {};
+  Object.keys(cle).forEach(function (k) { var l = cle[k]; if (l.length < 2) return; var u = l.filter(function (x, i) { return l.indexOf(x) === i; }).sort(); var p = u.join('  ⟷  '); paires[p] = (paires[p] || 0) + (l.length - 1) * Number(k.split('|')[1]); });
+  var out = [['Inventaire Drive — résumé (lecture seule, rien supprimé) — ' + maintenant_(), '', '', '', '', '', '', ''],
+    ['Total : ' + tot.n + ' fichiers, ' + Math.round(tot.ko / 1024) + ' Mo. Drive : ' + Math.round(DriveApp.getStorageUsed() / 1048576) + ' Mo utilisés sur ' + Math.round(DriveApp.getStorageLimit() / 1048576) + ' Mo.', '', '', '', '', '', '', ''],
+    ['', '', '', '', '', '', '', ''],
+    ['dossier (3 niveaux)', 'fichiers', 'Mo', 'liés depuis une feuille', 'Mo liés', 'en double (nom + taille)', 'Mo en double', 'propriétaire(s) / Kado']];
+  Object.keys(dos).sort(function (a, b) { return dos[b].ko - dos[a].ko; }).forEach(function (g) {
+    var d = dos[g]; out.push([g, d.n, Math.round(d.ko / 1024), d.lies, Math.round(d.ko_lies / 1024), d.dbl, Math.round(d.ko_dbl / 1024), Object.keys(d.prop).join(', ') + (d.kado ? ' — KADO (à part)' : '')]);
+  });
+  out.push(['', '', '', '', '', '', '', '']); out.push(['copies en trop entre dossiers (Mo récupérables si on garde une seule copie)', '', 'Mo', '', '', '', '', '']);
+  Object.keys(paires).sort(function (a, b) { return paires[b] - paires[a]; }).slice(0, 60).forEach(function (p) { out.push([p, '', Math.round(paires[p] / 1024), '', '', '', '', '']); });
+  out.push(['', '', '', '', '', '', '', '']); out.push(['onglets lus pour les liens : ' + lus.length, lus.join(' ; ').slice(0, 45000), '', '', '', '', '', '']);
+  var r = ss_().getSheetByName('Inventaire Drive (résumé)') || ss_().insertSheet('Inventaire Drive (résumé)');
+  r.clear(); r.getRange(1, 1, out.length, 8).setValues(out);
+  Logger.log('Résumé écrit : ' + out.length + ' lignes');
+}
