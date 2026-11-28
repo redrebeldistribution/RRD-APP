@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.38';
+var MOBILE_VERSION = 'm1.39';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var STATION_FORMATION = 'TST', MAX_APPAREILS_FORMATION = 50;   // les codes de la station de test servent à la formation : plusieurs téléphones avec le même code (propriétaire, 26/11/2026)
 var MAX_APPAREILS_ROLE = 5;   // un code DIR ou CPT peut servir sur 5 appareils en même temps (demande du propriétaire, 26/11/2026)
@@ -69,6 +69,7 @@ function apiMobile_(action, b) {
     if (action === 'ping') return ok_({ version: MOBILE_VERSION, heure: maintenant_() });
     if (action === 'enregistrer') return ok_(enregistrerAppareil_(b));
     if (action === 'demandeStation') return ok_(demandeStation_(b.payload || {}));   // formulaire public du site redrebel.us (pas de code)
+    if (action === 'honneur') return ok_(honneurPublic_());   // site redrebel.us : équipe et employé(e) du mois confirmés (pas de code)
     var app = appareil_(b.jeton);
     var payload = b.payload || {};
     switch (action) {
@@ -84,6 +85,9 @@ function apiMobile_(action, b) {
       case 'camSuggestions': return ok_(sugPourCamion_(app));
       case 'chatEntrer': return ok_(chatEntrer_(app, payload));
       case 'chatSignal': return ok_(chatSignal_(app, payload));
+      case 'votes': return ok_(votesTel_(app));
+      case 'vote': return ok_(vote_(app, payload));
+      case 'accordPhoto': return ok_(accordPhoto_(app, payload));
       case 'dir': return ok_(direction_(app, String(b.sous_action || ''), payload));
       default: throw new UserError('Action inconnue.');
     }
@@ -594,6 +598,9 @@ function direction_(app, sous, p) {
     case 'camRapportAnnuler': exiger_(ctx, ['management']); return camRapportAnnuler_(ctx, p);
     case 'demandes': exiger_(ctx, ['management', 'accounting']); return demandesListe_();
     case 'demandeStatut': exiger_(ctx, ['management']); return demandeStatut_(ctx, p);
+    case 'honneur': exiger_(ctx, ['management', 'accounting']); return honneurBureau_(p);
+    case 'honneurConfirmer': exiger_(ctx, ['management']); return honneurConfirmer_(ctx, p);
+    case 'honneurRetirer': exiger_(ctx, ['management']); return honneurRetirer_(ctx, p);
     default: throw new UserError('Action inconnue.');
   }
 }
@@ -2055,4 +2062,199 @@ function inventaireTelegram() {   // lecture seule ; s'arrête avant 5 minutes e
   vider();
   if (etat.cur || etat.pile.length) { props.setProperty('INV_ETAT', JSON.stringify(etat)); Logger.log('À SUIVRE — ' + etat.fichiers + ' fichiers notés, ' + etat.pile.length + ' dossiers restants : relancer inventaireTelegram'); }
   else { props.deleteProperty('INV_ETAT'); Logger.log('FINI — ' + etat.fichiers + ' fichiers notés. Drive utilisé : ' + Math.round(DriveApp.getStorageUsed() / 1048576) + ' Mo sur ' + Math.round(DriveApp.getStorageLimit() / 1048576) + ' Mo'); }
+}
+
+/* ============================ À l'honneur : équipe et employé(e) du mois (m1.39, 27/11/2026) ============================
+ * Propriétaire, 27/11/2026 : une page du site pour que les employés se sentent appréciés.
+ *  - « Équipe du mois » = la 1re station du RRD Challenge du mois (points lus dans l'Activity Log), confirmée par la direction.
+ *  - « Employé(e) du mois » = vote des collègues dans l'application (tout le réseau : stations et camions), du 20 à la fin du mois ;
+ *    une voix par employé et par mois (la dernière compte) ; pas pour soi-même. La direction confirme.
+ *  - Sur le site : prénom + nom de la station ; la photo seulement après le « oui » donné sur le téléphone de la station (ou du camion).
+ *  - Rien n'est publié avant la confirmation de la direction ; jamais de montant ni de prix. */
+var VOT_ONGLET = 'Votes employé du mois', VOT_ENTETES = ['id', 'recu_le', 'mois', 'votant', 'votant_station', 'pour', 'pour_station', 'appareil', 'cid', 'note'];
+var HON_ONGLET = 'À l\'honneur (site)', HON_ENTETES = ['mois', 'genre', 'station', 'station_nom', 'noms', 'pourquoi', 'photo_id', 'accord', 'accord_le', 'accord_appareil', 'confirme_par', 'confirme_le', 'retire'];
+var VOT_JOUR_DEBUT = 20;   // le vote ouvre le 20 du mois et ferme le dernier jour à minuit (heure d'Haïti)
+
+function votNorm_(s) { return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim().toLowerCase(); }
+function votOuvert_() { return Number(msgJour_(0).slice(8, 10)) >= VOT_JOUR_DEBUT; }
+function horsTest_(code) { return code !== STATION_FORMATION && code !== 'CAM:' + CAM_TEST; }
+function votNoms_() {
+  var noms = {};
+  stations_().forEach(function (s) { if (estVrai_(s.actif)) noms[String(s.code)] = String(s.nom); });
+  camions_().forEach(function (c) { if (c.actif) noms['CAM:' + c.code] = c.nom; });
+  return noms;
+}
+/** Les employés des 45 derniers jours, d'après les rapports des stations et des camions (sans doublon), par station / camion. */
+function votCandidats_() {
+  var lim = msgJour_(-45), noms = votNoms_(), par = {}, vus = {};
+  var ajout = function (code, liste) {
+    if (!noms[code] || !horsTest_(code)) return;
+    (liste || []).forEach(function (n) {
+      n = String(n || '').replace(/\s+/g, ' ').trim();
+      if (n.length < 2 || n.length > 60) return;
+      var k = code + '|' + votNorm_(n); if (vus[k]) return; vus[k] = 1;
+      (par[code] = par[code] || []).push(n);
+    });
+  };
+  rapportsEffectifs_().forEach(function (r) { if (!estAnnule(r) && iso(r.date_rapport) >= lim) ajout(String(r.station), decouperNoms(r.employes_service)); });
+  camRapports_(1500).forEach(function (r) { if (!r.annule && r.date >= lim) ajout('CAM:' + r.camion, decouperNoms(r.employes)); });
+  return Object.keys(par).sort(function (a, b) { return noms[a] < noms[b] ? -1 : 1; })
+    .map(function (k) { return { code: k, nom: noms[k], employes: par[k].sort(function (a, b) { return votNorm_(a) < votNorm_(b) ? -1 : 1; }) }; });
+}
+function votLire_(mois) {
+  var sh = camFeuille_(VOT_ONGLET, VOT_ENTETES), n = sh.getLastRow();
+  if (n < 2) return [];
+  return sh.getRange(2, 1, n - 1, VOT_ENTETES.length).getValues().map(function (r) {
+    return { id: Number(r[0]) || 0, recu_le: phTexte_(r[1]), mois: String(r[2]).slice(0, 7), votant: String(r[3]), votant_station: String(r[4]), pour: String(r[5]), pour_station: String(r[6]), cid: String(r[8]) };
+  }).filter(function (v) { return !mois || v.mois === mois; });
+}
+/** Les voix qui comptent : la dernière de chaque votant (même nom, même station) pour le mois. */
+function votCompte_(mois) {
+  var der = {};
+  votLire_(mois).forEach(function (v) { der[v.votant_station + '|' + votNorm_(v.votant)] = v; });
+  var t = {}, noms = votNoms_();
+  Object.keys(der).forEach(function (k) {
+    var v = der[k], c = v.pour_station + '|' + votNorm_(v.pour);
+    (t[c] = t[c] || { nom: v.pour, station: v.pour_station, station_nom: noms[v.pour_station] || v.pour_station, voix: 0 }).voix++;
+  });
+  return { votants: Object.keys(der).length, liste: Object.keys(t).map(function (k) { return t[k]; }).sort(function (a, b) { return b.voix - a.voix || (votNorm_(a.nom) < votNorm_(b.nom) ? -1 : 1); }) };
+}
+function honLire_() {
+  var sh = camFeuille_(HON_ONGLET, HON_ENTETES), n = sh.getLastRow();
+  if (n < 2) return [];
+  return sh.getRange(2, 1, n - 1, HON_ENTETES.length).getValues().map(function (r, i) {
+    return { ligne: i + 2, mois: String(r[0]).slice(0, 7), genre: String(r[1]), station: String(r[2]), station_nom: String(r[3]), noms: String(r[4]), pourquoi: String(r[5]),
+      photo_id: String(r[6] || ''), accord: String(r[7] || ''), accord_le: phTexte_(r[8]), confirme_par: String(r[10] || ''), confirme_le: phTexte_(r[11]), retire: estVrai_(r[12]) };
+  });
+}
+function honCode_(app) {   // le code de la station ou du camion de ce téléphone, ou ''
+  if (app.role === 'camion' && app.camion) return 'CAM:' + app.camion.code;
+  return (!app.role && app.station) ? String(app.station.code) : '';
+}
+
+/** Téléphone d'une station ou d'un camion : le vote du mois et, s'il y en a, la demande d'accord pour la photo sur le site. */
+function votesTel_(app) {
+  var code = honCode_(app);
+  if (!code) throw new UserError('Réservé au téléphone d\'une station ou d\'un camion.', 'FORBIDDEN');
+  var mois = msgJour_(0).slice(0, 7), groupes = horsTest_(code) ? votCandidats_() : [], deja = {};
+  votLire_(mois).forEach(function (v) { if (v.votant_station === code) deja[votNorm_(v.votant)] = v.pour; });
+  var miens = (groupes.filter(function (g) { return g.code === code; })[0] || { employes: [] }).employes;
+  var accords = honLire_().filter(function (h) { return !h.retire && h.station === code && h.photo_id && !h.accord; })
+    .map(function (h) { return { mois: h.mois, genre: h.genre, noms: h.noms, station_nom: h.station_nom }; });
+  return { mois: mois, ouvert: votOuvert_() && horsTest_(code), code: code, miens: miens, groupes: groupes,
+    deja: miens.filter(function (n) { return deja[votNorm_(n)]; }).map(function (n) { return { votant: n, pour: deja[votNorm_(n)] }; }), accords: accords };
+}
+function vote_(app, p) {
+  var code = honCode_(app);
+  if (!code) throw new UserError('Réservé au téléphone d\'une station ou d\'un camion.', 'FORBIDDEN');
+  if (!horsTest_(code)) throw new UserError('Téléphone de test : le vote n\'est pas ouvert.');
+  if (!votOuvert_()) throw new UserError('Le vote ouvre le ' + VOT_JOUR_DEBUT + ' du mois.');
+  var cid = String(p.cid || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40), groupes = votCandidats_();
+  var dans = function (st, nom) { var g = groupes.filter(function (x) { return x.code === st; })[0]; return g ? g.employes.filter(function (n) { return votNorm_(n) === votNorm_(nom); })[0] || '' : ''; };
+  var votant = dans(code, p.votant), pourSt = String(p.pour_station || ''), pour = dans(pourSt, p.pour);
+  if (!votant) throw new UserError('Choisissez votre nom dans la liste.');
+  if (!pour) throw new UserError('Choisissez un(e) collègue dans la liste.');
+  if (pourSt === code && votNorm_(pour) === votNorm_(votant)) throw new UserError('On ne vote pas pour soi-même.');
+  var lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    var l = votLire_(), mois = msgJour_(0).slice(0, 7);
+    if (cid && l.some(function (v) { return v.cid === cid; })) return { recu: true };
+    var id = l.reduce(function (m, v) { return Math.max(m, v.id); }, 0) + 1;
+    camFeuille_(VOT_ONGLET, VOT_ENTETES).appendRow([id, maintenant_(), mois, votant, code, pour, pourSt, app.id, cid, '']);
+  } finally { lock.releaseLock(); }
+  return { recu: true };
+}
+function accordPhoto_(app, p) {
+  var code = honCode_(app);
+  if (!code) throw new UserError('Réservé au téléphone d\'une station ou d\'un camion.', 'FORBIDDEN');
+  var h = honLire_().filter(function (x) { return !x.retire && x.station === code && x.mois === String(p.mois) && x.genre === String(p.genre) && x.photo_id; })[0];
+  if (!h) throw new UserError('Cette demande n\'existe plus.');
+  if (h.accord) return { accord: h.accord };
+  var oui = p.oui === true, sh = camFeuille_(HON_ONGLET, HON_ENTETES);
+  if (oui) { try { DriveApp.getFileById(h.photo_id).setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); } catch (e) { throw new UserError('Photo introuvable. Prévenez la direction.'); } }
+  sh.getRange(h.ligne, 8, 1, 3).setValues([[oui ? 'oui' : 'non', maintenant_(), app.id]]);
+  try { CacheService.getScriptCache().remove('honneur_public'); } catch (e) { }
+  return { accord: oui ? 'oui' : 'non' };
+}
+
+/** Bureau : points du RRD Challenge du mois (Activity Log), voix, et ce qui est déjà confirmé. */
+function honChallenge_(mois) {
+  var log = SpreadsheetApp.openById(DSR_ACTIVITY_LOG_ID), sh = log.getSheetByName('RRD Challenge (points)'), tz = log.getSpreadsheetTimeZone(), t = {};
+  if (!sh || sh.getLastRow() < 2) return [];
+  var noms = votNoms_();
+  sh.getRange(2, 1, sh.getLastRow() - 1, 13).getValues().forEach(function (r) {
+    var d = r[0] instanceof Date ? Utilities.formatDate(r[0], tz, 'yyyy-MM-dd') : String(r[0] || '').slice(0, 10), code = stkCode_(r[1]);
+    if (d.slice(0, 7) !== mois || !code || !noms[code] || !horsTest_(code)) return;
+    var x = t[code] = t[code] || { code: code, nom: noms[code], points: 0, jours: 0 };
+    x.points += Number(r[12]) || 0; x.jours++;
+  });
+  return Object.keys(t).map(function (k) { return t[k]; }).sort(function (a, b) { return b.points - a.points || (a.nom < b.nom ? -1 : 1); });
+}
+function honneurBureau_(p) {
+  var mois = /^\d{4}-\d{2}$/.test(String(p.mois || '')) ? String(p.mois) : msgJour_(0).slice(0, 7), ch = [];
+  var err = '';
+  try { ch = honChallenge_(mois); } catch (e) { err = 'Classement du RRD Challenge illisible : ' + (e.message || e); }
+  var c = votCompte_(mois), noms = votNoms_(), equipes = {};
+  rapportsEffectifs_().forEach(function (r) {   // les noms de l'équipe pendant le mois, pour préremplir « Équipe du mois »
+    if (estAnnule(r) || iso(r.date_rapport).slice(0, 7) !== mois) return;
+    var code = String(r.station), e = equipes[code] = equipes[code] || [];
+    decouperNoms(r.employes_service).forEach(function (n) { n = String(n).trim(); if (n && !e.some(function (x) { return votNorm_(x) === votNorm_(n); })) e.push(n); });
+  });
+  return { mois: mois, aujourdhui: msgJour_(0), ouvert: votOuvert_(), debut: VOT_JOUR_DEBUT, challenge: ch, challenge_erreur: err, votes: c.liste, votants: c.votants,
+    equipes: equipes, stations: Object.keys(noms).filter(horsTest_).map(function (k) { return { code: k, nom: noms[k] }; }),
+    honneur: honLire_().filter(function (h) { return h.mois === mois; }).map(function (h) { return { genre: h.genre, station: h.station, station_nom: h.station_nom, noms: h.noms, pourquoi: h.pourquoi, photo: !!h.photo_id, accord: h.accord, confirme_par: h.confirme_par, confirme_le: h.confirme_le, retire: h.retire }; }) };
+}
+function honneurConfirmer_(ctx, p) {
+  var mois = String(p.mois || ''), genre = p.genre === 'equipe' ? 'equipe' : p.genre === 'employe' ? 'employe' : '';
+  if (!/^\d{4}-\d{2}$/.test(mois) || !genre) throw new UserError('Mois ou genre manquant.');
+  var noms = votNoms_(), station = String(p.station || '');
+  if (!noms[station] || !horsTest_(station)) throw new UserError('Choisissez la station.');
+  var liste = String(p.noms || '').replace(/[\r\n]+/g, ', ').replace(/\s+/g, ' ').trim().slice(0, 300);
+  var pourquoi = String(p.pourquoi || '').replace(/\s+/g, ' ').trim().slice(0, 240);
+  if (!liste) throw new UserError(genre === 'equipe' ? 'Écrivez les prénoms de l\'équipe.' : 'Choisissez l\'employé(e).');
+  if (/^[=+\-@]/.test(liste)) liste = ' ' + liste;
+  if (/^[=+\-@]/.test(pourquoi)) pourquoi = ' ' + pourquoi;
+  var photoId = '';
+  if (p.photo) {
+    var m = /^data:image\/(jpeg|png);base64,(.+)$/.exec(String(p.photo));
+    if (!m) throw new UserError('Photo illisible.');
+    var dossier = phDossier_({ code: 'HON', nom: 'À l\'honneur' }, mois + '-01', 'HON', 'RRD – À l\'honneur (photos du site)');
+    photoId = dossier.createFile(Utilities.newBlob(Utilities.base64Decode(m[2]), 'image/' + m[1], mois + '_' + genre + '_' + station + '.' + (m[1] === 'png' ? 'png' : 'jpg'))).getId();
+  }
+  var lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    var sh = camFeuille_(HON_ONGLET, HON_ENTETES), ex = honLire_().filter(function (h) { return h.mois === mois && h.genre === genre && !h.retire; })[0];
+    var ligne = [mois, genre, station, noms[station], liste, pourquoi, photoId, '', '', '', ctx.nom, maintenant_(), ''];
+    if (ex) {
+      if (!photoId && ex.station === station) { ligne[6] = ex.photo_id; ligne[7] = ex.accord; ligne[8] = ex.accord_le; }   // même station, pas de nouvelle photo : l'accord donné reste
+      sh.getRange(ex.ligne, 1, 1, HON_ENTETES.length).setValues([ligne]);
+    } else sh.appendRow(ligne);
+    journal_(ctx, 'honneur', mois + ' ' + genre + ' ' + station);
+  } finally { lock.releaseLock(); }
+  try { CacheService.getScriptCache().remove('honneur_public'); } catch (e) { }
+  return honneurBureau_({ mois: mois });
+}
+function honneurRetirer_(ctx, p) {
+  var h = honLire_().filter(function (x) { return x.mois === String(p.mois) && x.genre === String(p.genre) && !x.retire; })[0];
+  if (!h) throw new UserError('Rien à retirer.');
+  camFeuille_(HON_ONGLET, HON_ENTETES).getRange(h.ligne, 13).setValue('oui');
+  if (h.photo_id) { try { DriveApp.getFileById(h.photo_id).setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE); } catch (e) { } }
+  journal_(ctx, 'honneur-', h.mois + ' ' + h.genre);
+  try { CacheService.getScriptCache().remove('honneur_public'); } catch (e) { }
+  return honneurBureau_({ mois: h.mois });
+}
+/** Public (site redrebel.us) : la dernière équipe et le (la) dernier(ère) employé(e) du mois confirmés. Prénoms seulement. */
+function honneurPublic_() {
+  var cache = CacheService.getScriptCache(), c = cache.get('honneur_public');
+  if (c) return JSON.parse(c);
+  var prenom = function (n) { return String(n).trim().split(/\s+/)[0] || ''; };
+  var garde = {};
+  honLire_().filter(function (h) { return !h.retire; }).forEach(function (h) { if (!garde[h.genre] || h.mois >= garde[h.genre].mois) garde[h.genre] = h; });
+  var o = { liste: ['equipe', 'employe'].filter(function (g) { return garde[g]; }).map(function (g) {
+    var h = garde[g];
+    return { genre: g, mois: h.mois, station: h.station_nom, prenoms: h.noms.split(/\s*,\s*/).map(prenom).filter(String), pourquoi: h.pourquoi.trim(),
+      photo: h.photo_id && h.accord === 'oui' ? 'https://drive.google.com/thumbnail?id=' + h.photo_id + '&sz=w800' : '' };
+  }) };
+  try { cache.put('honneur_public', JSON.stringify(o), 600); } catch (e) { }
+  return o;
 }
