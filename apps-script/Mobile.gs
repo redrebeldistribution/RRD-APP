@@ -14,14 +14,19 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.41';
+var MOBILE_VERSION = 'm1.42';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var STATION_FORMATION = 'TST', MAX_APPAREILS_FORMATION = 50;   // les codes de la station de test servent à la formation : plusieurs téléphones avec le même code (propriétaire, 26/11/2026)
 /* Pilote des ventes (écran « Vente » du téléphone, propriétaire 28/11/2026) : seulement la station de formation pour l'essai.
  * Brochette s'ajoutera ici, et dans VT_STATIONS_APP de www/vente.js, seulement sur accord séparé du propriétaire. */
 var VENTE_PILOTE = ['TST'];
 var VENTE_ONGLET = 'Ventes (pilote)';
-var VENTE_ENTETES = ['cid', 'station', 'date', 'heure', 'gallons', 'paiement', 'client', 'genre', 'vente_signalee', 'motif', 'appareil', 'recu_le', 'note', 'prix_gal', 'montant', 'prix_telephone', 'recu_no'];   // m1.41 : prix du bureau, montant, prix vu sur le téléphone, n° de reçu
+var VENTE_ENTETES = ['cid', 'station', 'date', 'heure', 'gallons', 'paiement', 'client', 'genre', 'vente_signalee', 'motif', 'appareil', 'recu_le', 'note', 'prix_gal', 'montant', 'prix_telephone', 'recu_no', 'reservoir', 'client_tel'];   // m1.41 : prix du bureau, montant, prix vu sur le téléphone, n° de reçu ; m1.42 : réservoir scanné, téléphone du client
+/* m1.42 (propriétaire 28/11/2026 : « le scan dans la page vente ») : étiquette du réservoir (QR « RRD:T:000123 », numéro T-000123).
+ * Une seule ligne par réservoir : la première vente scannée l'enregistre avec le téléphone du client ; les suivantes ne la changent pas
+ * (sauf dernière vente et nombre de ventes). Un réservoir déjà lié à un autre client n'est jamais réécrit : la vente le note pour le bureau. */
+var RES_ONGLET = 'Réservoirs (pilote)';
+var RES_ENTETES = ['reservoir', 'client_tel', 'client_nom', 'station', 'premier_le', 'derniere_vente', 'ventes', 'source', 'note'];
 var MAX_APPAREILS_ROLE = 5;   // un code DIR ou CPT peut servir sur 5 appareils en même temps (demande du propriétaire, 26/11/2026)
 var ROLES_APPAREIL = { DIRECTION: 'management', COMPTA: 'accounting' };   // station = DIRECTION ou COMPTA → téléphone de la direction / comptabilité
 /* Contrôles avant d'accepter un rapport (chiffres « visiblement faux »). Réglables ici. */
@@ -258,6 +263,7 @@ function initMobile_(app) {
   if (base.vente_pilote) {   // m1.41 (propriétaire 27/11 : c'est une caisse) : le prix du bureau, pour montrer le total au client et rendre la monnaie
     var pv = prixPour(lire_(SHEETS.PRIX), String(st.code), date);
     base.vente_prix = pv && pv.prix > 0 ? { prix: pv.prix, depuis: pv.date } : null;
+    try { base.reservoirs = resListe_().slice(0, 3000).map(function (r) { return { r: r.reservoir, tel: r.tel, nom: r.nom }; }); } catch (e) { base.reservoirs = []; }   // m1.42
   }
   // Rapports de cette station annulés par le bureau (8 derniers jours) : le téléphone l'affiche et propose de le refaire.
   var limite = Utilities.formatDate(new Date(new Date(date + 'T12:00:00Z').getTime() - 8 * 24 * 3600 * 1000), 'UTC', 'yyyy-MM-dd');
@@ -2372,6 +2378,30 @@ function menageTelegram() {
  * Une ligne par vente notée sur le téléphone : gallons et paiement (cash ou crédit + client). Aucun prix ni montant ici :
  * le bureau garde son prix, rien n'est inventé. « erreur » = la station signale qu'une vente déjà envoyée est fausse ;
  * la vente d'origine reste telle quelle et seul le bureau corrige. Renvoyer la même vente (même cid) ne crée jamais de doublon. */
+function resCode_(v) {   // « RRD:T:000123 », « T-000123 », « 123 » → « T-000123 » ; autre chose → ''
+  var t = String(v || '').toUpperCase().replace(/\s+/g, ''), m = t.match(/^RRD:T:(\d{1,8})$/) || t.match(/^T-?(\d{1,8})$/) || t.match(/^(\d{1,8})$/);
+  return m && Number(m[1]) > 0 ? 'T-' + ('000000' + Number(m[1])).slice(-6) : '';
+}
+function resTel_(v) { var d = String(v || '').replace(/\D/g, ''); if (d.length === 8) d = '509' + d; return d.length >= 10 && d.length <= 15 ? d : ''; }
+function resListe_() {
+  var sh = camFeuille_(RES_ONGLET, RES_ENTETES);
+  return camLignes_(sh, RES_ENTETES.length).map(function (r, i) { return { ligne: i + 2, reservoir: String(r[0] || '').trim(), tel: String(r[1] || '').replace(/\D/g, ''), nom: String(r[2] || '').trim(), ventes: Number(r[6]) || 0 }; })
+    .filter(function (r) { return r.reservoir; });
+}
+/* Appelé sous verrou par venteMobile_. Rend une note pour la vente ('' si rien à signaler). */
+function resNoter_(res, tel, nom, st, date, app) {
+  var sh = camFeuille_(RES_ONGLET, RES_ENTETES); camEntetes_(sh, RES_ENTETES);
+  var sur = function (t) { return /^[=+\-@]/.test(t) ? ' ' + t : t; };
+  var x = resListe_().filter(function (r) { return r.reservoir === res; })[0];
+  if (!x) {
+    if (!tel) return 'réservoir ' + res + ' scanné sans téléphone du client : pas enregistré';
+    sh.appendRow([res, "'" + tel, sur(nom), st.code, date, date, 1, 'scan à la vente, appareil ' + app.id, '']);
+    return '';
+  }
+  sh.getRange(x.ligne, 6, 1, 2).setValues([[date, x.ventes + 1]]);
+  if (tel && x.tel && tel !== x.tel) return 'réservoir ' + res + ' déjà lié au ' + x.tel + ' (téléphone donné : ' + tel + ') : à vérifier par le bureau';
+  return '';
+}
 function venteMobile_(app, p) {
   if (app.role || !app.station) throw new UserError('Réservé au téléphone d\'une station.', 'FORBIDDEN');
   var st = app.station;
@@ -2386,7 +2416,7 @@ function venteMobile_(app, p) {
   // journée de la vente : comme sur le téléphone, avant 4 h du matin c'est encore la veille
   var jour = Number(Utilities.formatDate(pris, TZ, 'H')) < 4 ? new Date(pris.getTime() - 864e5) : pris;
   var date = Utilities.formatDate(jour, TZ, 'yyyy-MM-dd'), heure = Utilities.formatDate(pris, TZ, 'HH:mm');
-  var l = { gallons: '', paiement: '', client: '', parent: '', motif: '', prix: '', montant: '', prix_tel: '' };
+  var l = { gallons: '', paiement: '', client: '', parent: '', motif: '', prix: '', montant: '', prix_tel: '', res: '', tel: '', nom: '' };
   if (genre === 'vente') {
     var g = Number(phNombre_(String(p.gallons === undefined || p.gallons === null ? '' : p.gallons)));
     if (!(g > 0)) throw new UserError('Nombre de gallons illisible.');
@@ -2403,6 +2433,12 @@ function venteMobile_(app, p) {
     l.prix_tel = Number(p.prix_vu) > 0 ? Number(p.prix_vu) : '';
     if (l.prix === '') note = (note ? note + ' ; ' : '') + 'prix du bureau manquant : montant à calculer par le bureau';
     else if (l.prix_tel !== '' && l.prix_tel !== l.prix) note = (note ? note + ' ; ' : '') + 'prix montré sur le téléphone ' + l.prix_tel + ', prix du bureau ' + l.prix + ' gardé';
+    if (String(p.reservoir || '').trim()) {   // m1.42 : réservoir scanné (facultatif)
+      l.res = resCode_(p.reservoir);
+      if (!l.res) note = (note ? note + ' ; ' : '') + 'code de réservoir illisible : ' + String(p.reservoir).slice(0, 30);
+      l.tel = resTel_(p.client_tel);
+      l.nom = String(p.client_nom || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+    }
   } else {
     l.parent = String(p.parent || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 60);
     l.motif = String(p.motif || '').trim().slice(0, 200);
@@ -2418,7 +2454,8 @@ function venteMobile_(app, p) {
     }
     var sur = function (t) { return /^[=+\-@]/.test(t) ? ' ' + t : t; };   // jamais une formule dans la feuille
     var recuNo = String(p.recu_no || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40);
-    sh.appendRow([cid, st.code, date, heure, l.gallons, l.paiement, sur(l.client), genre, l.parent, sur(l.motif), app.id, maintenant_(), note, l.prix, l.montant, l.prix_tel, recuNo]);
+    if (l.res) { var nr = resNoter_(l.res, l.tel, l.nom || l.client, st, date, app); if (nr) note = (note ? note + ' ; ' : '') + nr; }
+    sh.appendRow([cid, st.code, date, heure, l.gallons, l.paiement, sur(l.client), genre, l.parent, sur(l.motif), app.id, maintenant_(), note, l.prix, l.montant, l.prix_tel, recuNo, l.res, l.tel ? "'" + l.tel : '']);
     return { recu: true, cid: cid, date: date, prix: l.prix, montant: l.montant };
   } finally { lock.releaseLock(); }
 }
@@ -2443,7 +2480,7 @@ function ventesBureau_(p) {
     var g = groupes[k] = groupes[k] || { station: String(r.station), station_nom: noms[String(r.station)] || String(r.station), date: d, ventes: [], gallons: 0, montant: 0, cash: 0, credit: 0, sans_prix: 0, signalees: 0 };
     var gal = Number(r.gallons) || 0, mt = r.montant === '' || r.montant === null ? null : Number(r.montant), heure = r.heure instanceof Date ? Utilities.formatDate(r.heure, TZ, 'HH:mm') : String(r.heure || '');
     var e = erreurs[String(r.cid)] || [];
-    g.ventes.push({ cid: String(r.cid), recu_no: String(r.recu_no || ''), heure: heure, gallons: gal, prix: r.prix_gal === '' ? null : Number(r.prix_gal), montant: mt, paiement: String(r.paiement), client: String(r.client || '').trim(), erreur: e.join(' ; '), note: String(r.note || '') });
+    g.ventes.push({ cid: String(r.cid), recu_no: String(r.recu_no || ''), heure: heure, gallons: gal, prix: r.prix_gal === '' ? null : Number(r.prix_gal), montant: mt, paiement: String(r.paiement), client: String(r.client || '').trim(), erreur: e.join(' ; '), note: String(r.note || ''), reservoir: String(r.reservoir || ''), client_tel: String(r.client_tel || '').replace(/\D/g, '') });
     g.gallons += gal; if (mt === null) g.sans_prix++; else { g.montant += mt; if (String(r.paiement) === 'credit') g.credit += mt; else g.cash += mt; }
     if (e.length) g.signalees++;
     if (String(r.paiement) === 'credit') { var c = String(r.client || '').trim() || '(sans nom)', ck = String(r.station) + '|' + votNorm_(c);
