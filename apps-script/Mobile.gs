@@ -2060,8 +2060,17 @@ function inventaireTelegram() {   // lecture seule ; s'arrête avant 5 minutes e
     if (it.hasNext()) c.jeton = it.getContinuationToken(); else etat.cur = null;
   }
   vider();
-  if (etat.cur || etat.pile.length) { props.setProperty('INV_ETAT', JSON.stringify(etat)); Logger.log('À SUIVRE — ' + etat.fichiers + ' fichiers notés, ' + etat.pile.length + ' dossiers restants : relancer inventaireTelegram'); }
-  else { props.deleteProperty('INV_ETAT'); Logger.log('FINI — ' + etat.fichiers + ' fichiers notés. Drive utilisé : ' + Math.round(DriveApp.getStorageUsed() / 1048576) + ' Mo sur ' + Math.round(DriveApp.getStorageLimit() / 1048576) + ' Mo'); }
+  ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'inventaireTelegram') ScriptApp.deleteTrigger(t); });
+  var msg;
+  if (etat.cur || etat.pile.length) {
+    props.setProperty('INV_ETAT', JSON.stringify(etat));
+    ScriptApp.newTrigger('inventaireTelegram').timeBased().after(60 * 1000).create();   // se relance tout seul dans 1 minute (lecture seule)
+    msg = 'À SUIVRE — ' + etat.fichiers + ' fichiers notés, ' + etat.pile.length + ' dossiers restants (relance automatique) — ' + maintenant_();
+  } else {
+    props.deleteProperty('INV_ETAT');
+    msg = 'FINI — ' + etat.fichiers + ' fichiers notés. Drive utilisé : ' + Math.round(DriveApp.getStorageUsed() / 1048576) + ' Mo sur ' + Math.round(DriveApp.getStorageLimit() / 1048576) + ' Mo — ' + maintenant_();
+  }
+  sh.getRange(1, 10).setValue(msg); Logger.log(msg);
 }
 
 /* ============================ À l'honneur : équipe et employé(e) du mois (m1.39, 27/11/2026) ============================
