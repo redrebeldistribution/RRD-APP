@@ -73,9 +73,10 @@ document.write('<script src="config.js?' + Date.now() + '"><\/script><script src
 /* Mise à jour automatique : on confirme tout de suite que cette version démarre bien (sinon retour automatique à la précédente). */
 try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugins.CapacitorUpdater.notifyAppReady(); } catch (e) { }
 </script>
+<script src="vente.js?v=1"></script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.35.0';
+var VERSION_APP = '1.36.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -244,9 +245,9 @@ function fondElements() {
   if (!CFG.get('jeton', '')) return Promise.resolve([]);
   if (role === 'camion') return cmMiens().then(function (l) { return l.filter(att).map(function (r) { return { cid: r.cid, ordre: r.pris_ms, corps: cmCorps(r) }; }); });
   if (role) return Promise.resolve([]);
-  return Promise.all([tous(), phMiens()]).then(function (x) {
+  return Promise.all([tous(), phMiens(), vtFond()]).then(function (x) {
     return x[0].filter(att).sort(function (a, b) { return a.cree_le < b.cree_le ? -1 : 1; }).map(function (r, i) { return { cid: r.ref, ordre: i + 1, corps: rapCorps(r) }; })
-      .concat(x[1].filter(att).map(function (r) { return { cid: r.cid, ordre: r.pris_ms, corps: phCorps(r) }; }));
+      .concat(x[1].filter(att).map(function (r) { return { cid: r.cid, ordre: r.pris_ms, corps: phCorps(r) }; }), x[2]);
   });
 }
 /* Met les copies du téléphone d'accord avec la file : ajoute ce qui manque, retire ce qui est réglé. Sans effet sur une ancienne application. */
@@ -385,13 +386,14 @@ function infosDuJour(liste, date) {
 function accueilChat() { if (!CFG.get('role', '') && CFG.get('jeton', '')) chDemarrer(); }
 function accueil() {
   accueilChat();
-  tous().then(function (liste) {
+  tous().then(vtAvecListe).then(function (liste) {
     var st = CFG.get('station', {}), j = infosDuJour(liste);
     var attente = liste.filter(function (r) { return r.statut === 'attente'; });
     var rejetes = liste.filter(function (r) { return r.statut === 'rejete' && !r.vu; });
     var annules = liste.filter(function (r) { return r.statut === 'annule' && !r.vu; });
     var h = '<h1>' + esc(st.nom || '') + '</h1><div class="sub">Journée du ' + dfr(j.date) + '</div>';
-    h += msgHtml() + vtHtml();
+    h += msgHtml() + voHtml();
+    h += venteAccueilHtml(VT.liste);   // pilote des ventes : rien pour les stations hors pilote
     if (attente.length) h += '<div class="wait">⏳ ' + attente.length + ' rapport(s) en attente d\'envoi. Ils partiront tout seuls dès qu\'il y aura du signal.</div>';
     liste.filter(function (r) { return r.statut === 'verif'; }).forEach(function (r) {
       h += '<div class="err">⚠️ Rapport du ' + dfr(r.date) + ' (' + esc(libPer(r.periode)) + ') pas encore accepté : le bureau demande de revérifier des chiffres.\n<button style="margin-top:8px" onclick="revoir(\'' + esc(r.ref) + '\')">Revoir le rapport</button></div>';
@@ -673,8 +675,10 @@ function resume() {
   if (V.notes) h += '<tr><td>Notes</td><td class="n">' + esc(V.notes) + '</td></tr>';
   if (V.explication_controle && (V.confirme_codes || []).length) h += '<tr><td>⚠️ Explication</td><td class="n">' + esc(V.explication_controle) + '</td></tr>';
   h += '<tr><td>Photo</td><td class="n">' + (PHOTO ? (V.photo_source === 'galerie' ? 'oui (galerie : ' + esc(V.photo_galerie || '') + ')' : 'oui') : 'non') + '</td></tr></table></div>' +
+    (venteOn() ? '<div id="vtCtl"></div>' : '') +
     '<div class="note">Après l\'envoi, le rapport ne peut plus être modifié. Montants en ' + DEV + '.</div>';
   view(h, '<button class="sec" onclick="ecranFormulaire()">Modifier</button><button id="bEnv" onclick="enregistrerRapport()">Envoyer</button>');
+  if (venteOn()) vtControleHtml(J.date, nb(V.closing_meter) - nb(V.opening_meter)).then(function (c) { var d = $('vtCtl'); if (d) d.innerHTML = c; });
 }
 function enregistrerRapport() {
   var b = $('bEnv'); b.disabled = true; b.textContent = 'Enregistrement…';
@@ -740,7 +744,7 @@ function synchroniser(manuel) {
       }, Promise.resolve());
     });
   }).then(function () {
-    S.sync = false; majNet(S.en_ligne ? '● en ligne' : '○ hors ligne'); ntBientot(); fondAligner();
+    S.sync = false; majNet(S.en_ligne ? '● en ligne' : '○ hors ligne'); ntBientot(); fondAligner(); if (!arret) vtEnvoyer();
     if (!arret && S.ecran === 'manquants') ecranManquants();
     else if (!arret && (S.ecran === 'accueil' || manuel)) accueil();
   });
@@ -1050,7 +1054,7 @@ function camAccueil(msg, err) {
       h += '<div class="err">❌ ' + esc(CM_NOMS[r.op] || r.op) + ' refusé(e) par le bureau :\n' + esc(r.erreur || '') + '\n<button class="sec" style="margin-top:8px" onclick="cmVu(\'' + esc(r.cid) + '\')">J\'ai compris</button></div>';
     });
     if (!d.clients) h += '<div class="note">Liste des clients pas encore reçue. Il faut internet une première fois.</div>';
-    h += msgHtml() + vtHtml();
+    h += msgHtml() + voHtml();
     h += '<button class="bigbtn" onclick="cmForm(\'livraison\')">🚚 Nouvelle livraison</button><button class="bigbtn sec" onclick="cmForm(\'paiement\')">💵 Paiement reçu d\'un client</button><button class="bigbtn sec" onclick="cmForm(\'achat\')">⛽ Chargement ou achat</button><button class="bigbtn sec" onclick="cmForm(\'photo\')">📷 Photo (compteur du client, station, autre)</button>' +
       (chPossible() ? '<button class="bigbtn sec" onclick="ecranChat()">💬 Chat<span class="chBadge">' + chBadgeTxt() + '</span></button>' : '');
     var rap = function (date) {   // '' = pas fait, sinon 'att' ou 'ok'
@@ -1522,7 +1526,7 @@ function msgCharger(force) {
     });
     Object.keys(reps).forEach(function (k) { if (!garde[k] && reps[k].statut === 'attente') garde[k] = reps[k]; else if (!garde[k]) chR = true; });
     if (chR) CFG.set('reponses', garde);
-    CFG.set('messages', l); ntBientot(); repEnvoyer(); msgFond(); vtCharger(force); }).catch(function () { });
+    CFG.set('messages', l); ntBientot(); repEnvoyer(); msgFond(); voCharger(force); }).catch(function () { });
 }
 function msgHtml() {   // sur l'écran d'accueil : les conseils et messages d'aujourd'hui et d'hier dont l'heure est passée
   var now = Date.now(), jh = phJourHeure(now), hier = jourPlus(jh.date, -1), h = '';
@@ -1588,20 +1592,20 @@ function repEnvoyer() {
  * Sur le téléphone d'une station ou d'un camion : du 20 à la fin du mois, chaque employé vote pour un(e) collègue de tout le réseau
  * (pas pour soi-même ; la dernière voix compte). Si la direction a choisi la station (ou une personne de la station) et ajouté une
  * photo pour le site redrebel.us, le téléphone demande l'accord avant que la photo soit publiée. */
-var VT = { le: 0 };
-function vtCharger(force) {
-  if (!msgRole() || !CFG.get('jeton', '') || (!force && Date.now() - VT.le < 30 * 60000)) return;
-  VT.le = Date.now();
-  api('votes').then(function (d) { CFG.set('votes', d); msgFond(); }).catch(function () { VT.le = 0; });
+var VO = { le: 0 };
+function voCharger(force) {
+  if (!msgRole() || !CFG.get('jeton', '') || (!force && Date.now() - VO.le < 30 * 60000)) return;
+  VO.le = Date.now();
+  api('votes').then(function (d) { CFG.set('votes', d); msgFond(); }).catch(function () { VO.le = 0; });
 }
-function vtHtml() {
+function voHtml() {
   var d = CFG.get('votes', null), h = '';
   if (!d) return '';
   (d.accords || []).forEach(function (a, i) {
     h += '<div class="okb">🏅 <b>' + (a.genre === 'equipe' ? 'Votre équipe est l\'équipe du mois' : esc(a.noms) + ' est l\'employé(e) du mois') + ' !</b> Bravo !' +
       '<div style="margin-top:6px">La direction voudrait mettre ' + (a.genre === 'equipe' ? 'la photo de l\'équipe avec les prénoms' : 'sa photo avec son prénom') + ' sur le site redrebel.us. ' +
       (a.genre === 'equipe' ? 'L\'équipe est-elle d\'accord ?' : esc(a.noms) + ' est-il (elle) d\'accord ?') + '</div>' +
-      '<div style="margin-top:8px;display:flex;gap:8px"><button onclick="vtAccord(' + i + ',true)">Oui, d\'accord</button><button class="sec" onclick="vtAccord(' + i + ',false)">Non, pas de photo</button></div></div>';
+      '<div style="margin-top:8px;display:flex;gap:8px"><button onclick="voAccord(' + i + ',true)">Oui, d\'accord</button><button class="sec" onclick="voAccord(' + i + ',false)">Non, pas de photo</button></div></div>';
   });
   if (d.ouvert && (d.miens || []).length && d.mois === phJourHeure(Date.now()).date.slice(0, 7)) {
     var faits = (d.deja || []).length;
@@ -1611,23 +1615,23 @@ function vtHtml() {
   }
   return h;
 }
-function vtRetour() { if (CFG.get('role', '') === 'camion') camAccueil(); else accueil(); }
+function voRetour() { if (CFG.get('role', '') === 'camion') camAccueil(); else accueil(); }
 function ecranVote(err) {
   var d = CFG.get('votes', null);
-  if (!d || !d.ouvert) return vtRetour();
+  if (!d || !d.ouvert) return voRetour();
   S.ecran = 'vote';
   var opts = '<option value="">— choisir —</option>' + (d.groupes || []).map(function (g) {
     return '<optgroup label="' + esc(g.nom) + '">' + g.employes.map(function (n) { return '<option value="' + esc(g.code + '|' + n) + '">' + esc(n) + '</option>'; }).join('') + '</optgroup>';
   }).join('');
   view('<h2>🗳️ Employé(e) du mois</h2>' + (err ? '<div class="err">' + esc(err) + '</div>' : '') +
-    '<label>Votre nom</label><select id="vtVotant"><option value="">— choisir —</option>' + d.miens.map(function (n) { return '<option>' + esc(n) + '</option>'; }).join('') + '</select>' +
-    '<label>Votre vote : le (la) collègue qui a le mieux travaillé ce mois-ci</label><select id="vtPour">' + opts + '</select>' +
+    '<label>Votre nom</label><select id="voVotant"><option value="">— choisir —</option>' + d.miens.map(function (n) { return '<option>' + esc(n) + '</option>'; }).join('') + '</select>' +
+    '<label>Votre vote : le (la) collègue qui a le mieux travaillé ce mois-ci</label><select id="voPour">' + opts + '</select>' +
     '<p class="mut">On ne vote pas pour soi-même. Une voix par personne : si vous votez de nouveau, c\'est le dernier vote qui compte. La direction confirme le résultat.</p>' +
-    '<div style="margin-top:10px"><button id="bVote" onclick="vtEnvoyer()">Envoyer mon vote</button></div>' +
-    '<div style="margin-top:10px"><button class="sec" onclick="vtRetour()">Retour</button></div>');
+    '<div style="margin-top:10px"><button id="bVote" onclick="voEnvoyer()">Envoyer mon vote</button></div>' +
+    '<div style="margin-top:10px"><button class="sec" onclick="voRetour()">Retour</button></div>');
 }
-function vtEnvoyer() {
-  var d = CFG.get('votes', {}), votant = $('vtVotant').value, pour = String($('vtPour').value || ''), i = pour.indexOf('|');
+function voEnvoyer() {
+  var d = CFG.get('votes', {}), votant = $('voVotant').value, pour = String($('voPour').value || ''), i = pour.indexOf('|');
   if (!votant) return alerte('Choisissez votre nom.');
   if (i < 0) return alerte('Choisissez un(e) collègue.');
   var st = pour.slice(0, i), nom = pour.slice(i + 1);
@@ -1635,15 +1639,15 @@ function vtEnvoyer() {
   $('bVote').disabled = true;
   api('vote', { payload: { votant: votant, pour: nom, pour_station: st, cid: 'V' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7) } }).then(function () {
     d.deja = (d.deja || []).filter(function (x) { return x.votant !== votant; }).concat([{ votant: votant, pour: nom }]); CFG.set('votes', d);
-    vtRetour(); setTimeout(function () { alerte('✅ Merci ' + votant + ', votre vote est enregistré.'); }, 700);
+    voRetour(); setTimeout(function () { alerte('✅ Merci ' + votant + ', votre vote est enregistré.'); }, 700);
   }).catch(function (e) { ecranVote(e && e.reseau ? 'Pas de signal : votre vote n\'est pas parti. Réessayez quand il y aura du réseau.' : (e && e.erreur) || 'Erreur.'); });
 }
-function vtAccord(i, oui) {
+function voAccord(i, oui) {
   var d = CFG.get('votes', {}), a = (d.accords || [])[i];
   if (!a) return;
   if (!confirm(oui ? 'Confirmer : OUI, la photo peut aller sur le site redrebel.us.' : 'Confirmer : NON, pas de photo sur le site.')) return;
   api('accordPhoto', { payload: { mois: a.mois, genre: a.genre, oui: !!oui } }).then(function () {
-    d.accords.splice(i, 1); CFG.set('votes', d); vtRetour(); setTimeout(function () { alerte(oui ? 'Merci ! La photo sera sur le site.' : 'C\'est noté : pas de photo.'); }, 700);
+    d.accords.splice(i, 1); CFG.set('votes', d); voRetour(); setTimeout(function () { alerte(oui ? 'Merci ! La photo sera sur le site.' : 'C\'est noté : pas de photo.'); }, 700);
   }).catch(function (e) { alerte(e && e.reseau ? 'Pas de signal. Réessayez plus tard.' : (e && e.erreur) || 'Erreur.'); });
 }
 
@@ -2784,7 +2788,7 @@ function verifierMaj() {
   }).catch(function (e) { S.majErreur = String((e && (e.message || e.errorMessage)) || e || '').slice(0, 90); }).then(function () { S.majEnCours = false; });
 }
 document.addEventListener('resume', function () { verifierMaj(); bandeauMaj(); phEnvoyer(); msgCharger(); ntBientot(); repEnvoyer(); pushRepli(); cmReprise(); chReprise(); });
-setInterval(function () { phEnvoyer(); fond('photos', ecranPhotos); msgCharger(); repEnvoyer(); cmEnvoyer(); }, 60000);   // file des photos + heure en cours à jour
+setInterval(function () { phEnvoyer(); fond('photos', ecranPhotos); msgCharger(); repEnvoyer(); cmEnvoyer(); vtEnvoyer(); }, 60000);   // file des photos + heure en cours à jour
 setTimeout(verifierMaj, 4000); setInterval(verifierMaj, 3 * 3600 * 1000);
 
 /* Téléphone à petite mémoire : Android peut fermer l'application pendant que l'appareil photo est ouvert. Au retour, la photo est rendue ici. */

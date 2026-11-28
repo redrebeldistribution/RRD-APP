@@ -14,9 +14,14 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.39';
+var MOBILE_VERSION = 'm1.40';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var STATION_FORMATION = 'TST', MAX_APPAREILS_FORMATION = 50;   // les codes de la station de test servent à la formation : plusieurs téléphones avec le même code (propriétaire, 26/11/2026)
+/* Pilote des ventes (écran « Vente » du téléphone, propriétaire 28/11/2026) : seulement la station de formation pour l'essai.
+ * Brochette s'ajoutera ici, et dans VT_STATIONS_APP de www/vente.js, seulement sur accord séparé du propriétaire. */
+var VENTE_PILOTE = ['TST'];
+var VENTE_ONGLET = 'Ventes (pilote)';
+var VENTE_ENTETES = ['cid', 'station', 'date', 'heure', 'gallons', 'paiement', 'client', 'genre', 'vente_signalee', 'motif', 'appareil', 'recu_le', 'note'];
 var MAX_APPAREILS_ROLE = 5;   // un code DIR ou CPT peut servir sur 5 appareils en même temps (demande du propriétaire, 26/11/2026)
 var ROLES_APPAREIL = { DIRECTION: 'management', COMPTA: 'accounting' };   // station = DIRECTION ou COMPTA → téléphone de la direction / comptabilité
 /* Contrôles avant d'accepter un rapport (chiffres « visiblement faux »). Réglables ici. */
@@ -88,6 +93,7 @@ function apiMobile_(action, b) {
       case 'votes': return ok_(votesTel_(app));
       case 'vote': return ok_(vote_(app, payload));
       case 'accordPhoto': return ok_(accordPhoto_(app, payload));
+      case 'vente': return ok_(venteMobile_(app, payload));
       case 'dir': return ok_(direction_(app, String(b.sous_action || ''), payload));
       default: throw new UserError('Action inconnue.');
     }
@@ -248,6 +254,7 @@ function initMobile_(app) {
   };
   base.prerempli = prerempliPour(date, jour, base.periodes[0]);
   base.plafonds = plafonds_(tous);
+  base.vente_pilote = VENTE_PILOTE.indexOf(String(st.code)) >= 0 ? 1 : 0;   // le téléphone n'envoie ses ventes que si 1
   // Rapports de cette station annulés par le bureau (8 derniers jours) : le téléphone l'affiche et propose de le refaire.
   var limite = Utilities.formatDate(new Date(new Date(date + 'T12:00:00Z').getTime() - 8 * 24 * 3600 * 1000), 'UTC', 'yyyy-MM-dd');
   base.annules = rapportsEffectifs_().filter(function (r) { return String(r.station) === st.code && estAnnule(r) && iso(r.date_rapport) >= limite; })
@@ -2353,4 +2360,52 @@ function menageTelegram() {
   var msg = 'Ménage du ' + maintenant_() + ' — ' + bilan.join(' || ');
   (ss_().getSheetByName('Inventaire Drive (résumé)') || ss_().insertSheet('Inventaire Drive (résumé)')).getRange(1, 10).setValue(msg);
   Logger.log(msg);
+}
+
+
+/* ============================ Ventes (pilote) ============================
+ * Une ligne par vente notée sur le téléphone : gallons et paiement (cash ou crédit + client). Aucun prix ni montant ici :
+ * le bureau garde son prix, rien n'est inventé. « erreur » = la station signale qu'une vente déjà envoyée est fausse ;
+ * la vente d'origine reste telle quelle et seul le bureau corrige. Renvoyer la même vente (même cid) ne crée jamais de doublon. */
+function venteMobile_(app, p) {
+  if (app.role || !app.station) throw new UserError('Réservé au téléphone d\'une station.', 'FORBIDDEN');
+  var st = app.station;
+  if (VENTE_PILOTE.indexOf(String(st.code)) < 0) throw new UserError('Les ventes ne sont pas encore ouvertes pour cette station.', 'FORBIDDEN');
+  var genre = String(p.genre || '');
+  if (genre !== 'vente' && genre !== 'erreur') throw new UserError('Opération inconnue.');
+  var cid = String(p.cid || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 60);
+  if (!cid) throw new UserError('Vente sans identifiant.');
+  var recu = new Date(), pris = new Date(Number(p.pris_ms) || 0), note = '';
+  if (!(pris.getTime() > 0) || pris.getTime() > recu.getTime() + 10 * 60000) { note = 'Heure du téléphone refusée : heure de réception utilisée'; pris = recu; }
+  else if (recu.getTime() - pris.getTime() > 31 * 864e5) throw new UserError('Vente trop ancienne (plus de 31 jours).');
+  // journée de la vente : comme sur le téléphone, avant 4 h du matin c'est encore la veille
+  var jour = Number(Utilities.formatDate(pris, TZ, 'H')) < 4 ? new Date(pris.getTime() - 864e5) : pris;
+  var date = Utilities.formatDate(jour, TZ, 'yyyy-MM-dd'), heure = Utilities.formatDate(pris, TZ, 'HH:mm');
+  var l = { gallons: '', paiement: '', client: '', parent: '', motif: '' };
+  if (genre === 'vente') {
+    var g = Number(phNombre_(String(p.gallons === undefined || p.gallons === null ? '' : p.gallons)));
+    if (!(g > 0)) throw new UserError('Nombre de gallons illisible.');
+    if (g > 500) throw new UserError('Plus de 500 gallons pour une seule vente : vérifiez le chiffre.');
+    l.gallons = Math.round(g * 100) / 100;
+    l.paiement = String(p.paiement || '');
+    if (l.paiement !== 'cash' && l.paiement !== 'credit') throw new UserError('Dites si la vente est cash ou à crédit.');
+    l.client = String(p.client || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+    if (l.paiement === 'credit' && !l.client) throw new UserError('Écrivez le nom du client pour une vente à crédit.');
+    if (l.paiement === 'cash') l.client = '';
+  } else {
+    l.parent = String(p.parent || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 60);
+    l.motif = String(p.motif || '').trim().slice(0, 200);
+    if (!l.parent || !l.motif) throw new UserError('Dites quelle vente est fausse et pourquoi.');
+  }
+  var lock = LockService.getScriptLock(); lock.waitLock(25000);
+  try {
+    var sh = camFeuille_(VENTE_ONGLET, VENTE_ENTETES), n = sh.getLastRow();
+    if (n > 1) {
+      var from = Math.max(2, n - 4999), cids = sh.getRange(from, 1, n - from + 1, 1).getValues();
+      for (var i = 0; i < cids.length; i++) if (String(cids[i][0]) === cid) return { recu: true, deja: true, cid: cid };
+    }
+    var sur = function (t) { return /^[=+\-@]/.test(t) ? ' ' + t : t; };   // jamais une formule dans la feuille
+    sh.appendRow([cid, st.code, date, heure, l.gallons, l.paiement, sur(l.client), genre, l.parent, sur(l.motif), app.id, maintenant_(), note]);
+    return { recu: true, cid: cid, date: date };
+  } finally { lock.releaseLock(); }
 }
