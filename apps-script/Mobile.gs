@@ -14,14 +14,14 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.40';
+var MOBILE_VERSION = 'm1.41';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var STATION_FORMATION = 'TST', MAX_APPAREILS_FORMATION = 50;   // les codes de la station de test servent à la formation : plusieurs téléphones avec le même code (propriétaire, 26/11/2026)
 /* Pilote des ventes (écran « Vente » du téléphone, propriétaire 28/11/2026) : seulement la station de formation pour l'essai.
  * Brochette s'ajoutera ici, et dans VT_STATIONS_APP de www/vente.js, seulement sur accord séparé du propriétaire. */
 var VENTE_PILOTE = ['TST'];
 var VENTE_ONGLET = 'Ventes (pilote)';
-var VENTE_ENTETES = ['cid', 'station', 'date', 'heure', 'gallons', 'paiement', 'client', 'genre', 'vente_signalee', 'motif', 'appareil', 'recu_le', 'note'];
+var VENTE_ENTETES = ['cid', 'station', 'date', 'heure', 'gallons', 'paiement', 'client', 'genre', 'vente_signalee', 'motif', 'appareil', 'recu_le', 'note', 'prix_gal', 'montant', 'prix_telephone', 'recu_no'];   // m1.41 : prix du bureau, montant, prix vu sur le téléphone, n° de reçu
 var MAX_APPAREILS_ROLE = 5;   // un code DIR ou CPT peut servir sur 5 appareils en même temps (demande du propriétaire, 26/11/2026)
 var ROLES_APPAREIL = { DIRECTION: 'management', COMPTA: 'accounting' };   // station = DIRECTION ou COMPTA → téléphone de la direction / comptabilité
 /* Contrôles avant d'accepter un rapport (chiffres « visiblement faux »). Réglables ici. */
@@ -255,6 +255,10 @@ function initMobile_(app) {
   base.prerempli = prerempliPour(date, jour, base.periodes[0]);
   base.plafonds = plafonds_(tous);
   base.vente_pilote = VENTE_PILOTE.indexOf(String(st.code)) >= 0 ? 1 : 0;   // le téléphone n'envoie ses ventes que si 1
+  if (base.vente_pilote) {   // m1.41 (propriétaire 27/11 : c'est une caisse) : le prix du bureau, pour montrer le total au client et rendre la monnaie
+    var pv = prixPour(lire_(SHEETS.PRIX), String(st.code), date);
+    base.vente_prix = pv && pv.prix > 0 ? { prix: pv.prix, depuis: pv.date } : null;
+  }
   // Rapports de cette station annulés par le bureau (8 derniers jours) : le téléphone l'affiche et propose de le refaire.
   var limite = Utilities.formatDate(new Date(new Date(date + 'T12:00:00Z').getTime() - 8 * 24 * 3600 * 1000), 'UTC', 'yyyy-MM-dd');
   base.annules = rapportsEffectifs_().filter(function (r) { return String(r.station) === st.code && estAnnule(r) && iso(r.date_rapport) >= limite; })
@@ -607,6 +611,7 @@ function direction_(app, sous, p) {
     case 'demandeStatut': exiger_(ctx, ['management']); return demandeStatut_(ctx, p);
     case 'honneur': exiger_(ctx, ['management', 'accounting']); return honneurBureau_(p);
     case 'honneurConfirmer': exiger_(ctx, ['management']); return honneurConfirmer_(ctx, p);
+    case 'ventes': exiger_(ctx, ['management', 'accounting']); return ventesBureau_(p);
     case 'honneurRetirer': exiger_(ctx, ['management']); return honneurRetirer_(ctx, p);
     default: throw new UserError('Action inconnue.');
   }
@@ -2381,7 +2386,7 @@ function venteMobile_(app, p) {
   // journée de la vente : comme sur le téléphone, avant 4 h du matin c'est encore la veille
   var jour = Number(Utilities.formatDate(pris, TZ, 'H')) < 4 ? new Date(pris.getTime() - 864e5) : pris;
   var date = Utilities.formatDate(jour, TZ, 'yyyy-MM-dd'), heure = Utilities.formatDate(pris, TZ, 'HH:mm');
-  var l = { gallons: '', paiement: '', client: '', parent: '', motif: '' };
+  var l = { gallons: '', paiement: '', client: '', parent: '', motif: '', prix: '', montant: '', prix_tel: '' };
   if (genre === 'vente') {
     var g = Number(phNombre_(String(p.gallons === undefined || p.gallons === null ? '' : p.gallons)));
     if (!(g > 0)) throw new UserError('Nombre de gallons illisible.');
@@ -2392,6 +2397,12 @@ function venteMobile_(app, p) {
     l.client = String(p.client || '').trim().replace(/\s+/g, ' ').slice(0, 60);
     if (l.paiement === 'credit' && !l.client) throw new UserError('Écrivez le nom du client pour une vente à crédit.');
     if (l.paiement === 'cash') l.client = '';
+    var pv = prixPour(lire_(SHEETS.PRIX), String(st.code), date);   // le prix du bureau pour le jour de la vente ; jamais celui du téléphone
+    l.prix = pv && pv.prix > 0 ? pv.prix : '';
+    l.montant = l.prix !== '' ? Math.round(l.gallons * l.prix * 100) / 100 : '';
+    l.prix_tel = Number(p.prix_vu) > 0 ? Number(p.prix_vu) : '';
+    if (l.prix === '') note = (note ? note + ' ; ' : '') + 'prix du bureau manquant : montant à calculer par le bureau';
+    else if (l.prix_tel !== '' && l.prix_tel !== l.prix) note = (note ? note + ' ; ' : '') + 'prix montré sur le téléphone ' + l.prix_tel + ', prix du bureau ' + l.prix + ' gardé';
   } else {
     l.parent = String(p.parent || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 60);
     l.motif = String(p.motif || '').trim().slice(0, 200);
@@ -2399,13 +2410,58 @@ function venteMobile_(app, p) {
   }
   var lock = LockService.getScriptLock(); lock.waitLock(25000);
   try {
-    var sh = camFeuille_(VENTE_ONGLET, VENTE_ENTETES), n = sh.getLastRow();
+    var sh = camFeuille_(VENTE_ONGLET, VENTE_ENTETES); camEntetes_(sh, VENTE_ENTETES);
+    var n = sh.getLastRow();
     if (n > 1) {
       var from = Math.max(2, n - 4999), cids = sh.getRange(from, 1, n - from + 1, 1).getValues();
       for (var i = 0; i < cids.length; i++) if (String(cids[i][0]) === cid) return { recu: true, deja: true, cid: cid };
     }
     var sur = function (t) { return /^[=+\-@]/.test(t) ? ' ' + t : t; };   // jamais une formule dans la feuille
-    sh.appendRow([cid, st.code, date, heure, l.gallons, l.paiement, sur(l.client), genre, l.parent, sur(l.motif), app.id, maintenant_(), note]);
-    return { recu: true, cid: cid, date: date };
+    var recuNo = String(p.recu_no || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40);
+    sh.appendRow([cid, st.code, date, heure, l.gallons, l.paiement, sur(l.client), genre, l.parent, sur(l.motif), app.id, maintenant_(), note, l.prix, l.montant, l.prix_tel, recuNo]);
+    return { recu: true, cid: cid, date: date, prix: l.prix, montant: l.montant };
   } finally { lock.releaseLock(); }
+}
+
+/** Bureau (m1.41) : ventes du pilote par station et par jour (chaque vente avec prix et montant), comparées aux gallons du compteur
+ * des rapports, et le crédit par client. Une vente sans prix du bureau n'a pas de montant : elle est comptée à part, jamais estimée. */
+function ventesBureau_(p) {
+  var auj = dateRapport(), du = /^\d{4}-\d{2}-\d{2}$/.test(String(p.du || '')) ? String(p.du) : auj, au = /^\d{4}-\d{2}-\d{2}$/.test(String(p.au || '')) ? String(p.au) : du;
+  if (au < du) throw new UserError('Dates inversées.');
+  var noms = {}; stations_().forEach(function (s) { noms[String(s.code)] = String(s.nom); });
+  var sh = camFeuille_(VENTE_ONGLET, VENTE_ENTETES), n = sh.getLastRow(), lignes = [];
+  if (n > 1) {
+    var h = sh.getRange(1, 1, 1, Math.max(sh.getLastColumn(), VENTE_ENTETES.length)).getValues()[0].map(String);
+    lignes = sh.getRange(2, 1, n - 1, h.length).getValues().map(function (r) { var o = {}; h.forEach(function (k, j) { if (k) o[k] = r[j]; }); return o; });
+  }
+  var jourDe = function (v) { return v instanceof Date ? Utilities.formatDate(v, TZ, 'yyyy-MM-dd') : String(v || '').slice(0, 10); };
+  var erreurs = {}; lignes.forEach(function (r) { if (String(r.genre) === 'erreur') (erreurs[String(r.vente_signalee)] = erreurs[String(r.vente_signalee)] || []).push(String(r.motif || '').trim()); });
+  var st = String(p.station || ''), groupes = {}, credit = {};
+  lignes.forEach(function (r) {
+    var d = jourDe(r.date); if (String(r.genre) !== 'vente' || d < du || d > au || (st && String(r.station) !== st)) return;
+    var k = String(r.station) + '|' + d;
+    var g = groupes[k] = groupes[k] || { station: String(r.station), station_nom: noms[String(r.station)] || String(r.station), date: d, ventes: [], gallons: 0, montant: 0, cash: 0, credit: 0, sans_prix: 0, signalees: 0 };
+    var gal = Number(r.gallons) || 0, mt = r.montant === '' || r.montant === null ? null : Number(r.montant), heure = r.heure instanceof Date ? Utilities.formatDate(r.heure, TZ, 'HH:mm') : String(r.heure || '');
+    var e = erreurs[String(r.cid)] || [];
+    g.ventes.push({ cid: String(r.cid), recu_no: String(r.recu_no || ''), heure: heure, gallons: gal, prix: r.prix_gal === '' ? null : Number(r.prix_gal), montant: mt, paiement: String(r.paiement), client: String(r.client || '').trim(), erreur: e.join(' ; '), note: String(r.note || '') });
+    g.gallons += gal; if (mt === null) g.sans_prix++; else { g.montant += mt; if (String(r.paiement) === 'credit') g.credit += mt; else g.cash += mt; }
+    if (e.length) g.signalees++;
+    if (String(r.paiement) === 'credit') { var c = String(r.client || '').trim() || '(sans nom)', ck = String(r.station) + '|' + votNorm_(c);
+      var x = credit[ck] = credit[ck] || { client: c, station_nom: noms[String(r.station)] || String(r.station), nb: 0, gallons: 0, montant: 0, sans_prix: 0, dernier: '' };
+      x.nb++; x.gallons += gal; if (mt === null) x.sans_prix++; else x.montant += mt; if (d > x.dernier) x.dernier = d; }
+  });
+  var compteur = {};   // gallons du compteur (rapports valides) par station et jour
+  rapportsEffectifs_().forEach(function (r) {
+    if (estAnnule(r)) return; var d = iso(r.date_rapport), k = String(r.station) + '|' + d; if (!groupes[k]) return;
+    compteur[k] = (compteur[k] || 0) + (num(r.closing_meter) - num(r.opening_meter));
+  });
+  var ar = function (v) { return Math.round(v * 100) / 100; };
+  var jours = Object.keys(groupes).sort().reverse().map(function (k) {
+    var g = groupes[k]; g.gallons = ar(g.gallons); g.montant = ar(g.montant); g.cash = ar(g.cash); g.credit = ar(g.credit);
+    g.compteur = compteur[k] === undefined ? null : ar(compteur[k]);
+    g.ventes.sort(function (a, b) { return a.heure < b.heure ? -1 : 1; });
+    return g;
+  });
+  return { du: du, au: au, aujourdhui: auj, station: st, devise: CURRENCY, stations: VENTE_PILOTE.map(function (c) { return { code: c, nom: noms[c] || c }; }), jours: jours,
+    credit: Object.keys(credit).map(function (k) { var x = credit[k]; x.gallons = ar(x.gallons); x.montant = ar(x.montant); return x; }).sort(function (a, b) { return b.montant - a.montant; }) };
 }

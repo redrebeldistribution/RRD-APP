@@ -42,6 +42,7 @@
   html.scan, body.scan { background:transparent !important; } body.scan { visibility:hidden; }   /* lecture d'un code : la caméra se voit derrière la page */
   #scanBar { visibility:visible; position:fixed; left:0; right:0; bottom:0; padding:14px; background:rgba(0,0,0,.72); color:#fff; text-align:center; z-index:50; }
   button:active { opacity:.55; }   /* le bouton réagit sous le doigt */
+  @media print { .top, #sect, #sPhotos, .tabs, #bar, .noprint, .pill { display:none !important; } body { background:#fff; } .card { break-inside:avoid; } }
   .hidden { display:none; } .mut { color:var(--mut); font-size:13px; } .center { text-align:center; }
   .bigbtn { width:100%; padding:18px; font-size:18px; margin:8px 0; }
   img.prev, img.photo { max-width:100%; border-radius:10px; margin-top:8px; }
@@ -73,10 +74,10 @@ document.write('<script src="config.js?' + Date.now() + '"><\/script><script src
 /* Mise à jour automatique : on confirme tout de suite que cette version démarre bien (sinon retour automatique à la précédente). */
 try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugins.CapacitorUpdater.notifyAppReady(); } catch (e) { }
 </script>
-<script src="vente.js?v=1"></script>
+<script src="vente.js?v=2"></script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.36.0';
+var VERSION_APP = '1.37.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -1722,6 +1723,48 @@ function honRetirer(genre) {
   call('honneurRetirer', { mois: HON.mois, genre: genre }).then(function (r) { ongletHonneur(r, 'Retiré du site.'); }).catch(function (e) { alerte(e.erreur || 'Pas de connexion.'); });
 }
 
+/* Bureau (build 78) : ventes du pilote — chaque vente avec son prix et son total, journée par station comparée au compteur,
+ * crédit par client. Imprimer (ordinateur) ou envoyer le résumé par WhatsApp. Le prix est celui de l'onglet « Prix ». */
+var VB = { du: '', au: '', station: '' };
+function ongletVentes(data) {
+  var rendre = function (d) {
+    VB.du = d.du; VB.au = d.au; VB.d = d;
+    var dv = d.devise || DEV, h = entete();
+    h += '<div class="card noprint"><b>🧾 Ventes (pilote)</b><div class="mut">Ventes notées sur les téléphones des stations du pilote (' + d.stations.map(function (s) { return esc(s.nom); }).join(', ') + '). Prix = onglet « Prix » au jour de la vente ; une vente sans prix n\'a pas de total.</div>' +
+      '<div class="row" style="gap:8px;margin-top:8px"><div><label>Du</label><input type="date" id="vbDu" value="' + esc(d.du) + '"></div><div><label>Au</label><input type="date" id="vbAu" value="' + esc(d.au) + '"></div></div>' +
+      '<label>Station</label><select id="vbSt"><option value="">Toutes</option>' + d.stations.map(function (s) { return '<option value="' + esc(s.code) + '"' + (s.code === d.station ? ' selected' : '') + '>' + esc(s.nom) + '</option>'; }).join('') + '</select>' +
+      '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap"><button onclick="vbCharger()">Afficher</button>' + (WEB ? '<button class="sec" onclick="window.print()">🖨 Imprimer</button>' : '') + '<button class="sec" onclick="vbWhatsApp()">📲 WhatsApp</button></div>' +
+      (WEB ? '' : '<p class="mut">Pour imprimer : ouvrez app.redrebel.us sur l\'ordinateur, onglet « 🧾 Ventes ».</p>') + '</div>';
+    h += '<h2>Rapport des ventes — ' + esc(dfr(d.du)) + (d.au !== d.du ? ' au ' + esc(dfr(d.au)) : '') + '</h2>';
+    if (!d.jours.length) h += '<p class="mut">Aucune vente pour ces dates.</p>';
+    d.jours.forEach(function (j) {
+      var ec = j.compteur === null ? null : Math.round((j.compteur - j.gallons) * 100) / 100;
+      h += '<div class="card"><div class="row"><div><b>' + esc(j.station_nom) + '</b> — ' + esc(dfr(j.date)) + '<div class="mut">' + j.ventes.length + ' vente(s) · ' + fmt(j.gallons) + ' gal' +
+        (j.compteur === null ? ' · pas de rapport de fermeture' : ' · compteur ' + fmt(j.compteur) + ' gal' + (ec ? ' (<b style="color:' + (Math.abs(ec) <= Math.max(2, 0.02 * j.compteur) ? 'var(--ok)' : 'var(--bad)') + '">' + (ec > 0 ? fmt(ec) + ' gal sans vente notée' : fmt(-ec) + ' gal de plus que le compteur') + '</b>)' : ' ✅')) + '</div></div>' +
+        '<div style="text-align:right"><b style="font-size:18px">' + fmt(j.montant) + ' ' + esc(dv) + '</b><div class="mut">cash ' + fmt(j.cash) + ' · crédit ' + fmt(j.credit) + '</div></div></div>' +
+        (j.sans_prix ? '<div class="wait">' + j.sans_prix + ' vente(s) sans prix dans l\'onglet « Prix » : pas de total pour elles.</div>' : '') +
+        '<table><tr><th>Heure</th><th>Reçu</th><th class="n">Gal</th><th class="n">Prix</th><th class="n">Total</th><th>Paiement</th></tr>' + j.ventes.map(function (v) {
+          return '<tr><td>' + esc(v.heure) + '</td><td>' + esc(v.recu_no || '—') + '</td><td class="n">' + fmt(v.gallons) + '</td><td class="n">' + fmt(v.prix) + '</td><td class="n"><b>' + fmt(v.montant) + '</b></td><td>' + (v.paiement === 'credit' ? 'Crédit — ' + esc(v.client) : 'Cash') +
+            (v.erreur ? '<div style="color:var(--bad)">⚠️ erreur signalée : ' + esc(v.erreur) + '</div>' : '') + '</td></tr>';
+        }).join('') + '</table></div>';
+    });
+    if (d.credit.length) h += '<h2>Crédit par client</h2><table><tr><th>Client</th><th>Station</th><th class="n">Ventes</th><th class="n">Gal</th><th class="n">Total</th><th>Dernière</th></tr>' + d.credit.map(function (c) {
+      return '<tr><td>' + esc(c.client) + '</td><td>' + esc(c.station_nom) + '</td><td class="n">' + c.nb + '</td><td class="n">' + fmt(c.gallons) + '</td><td class="n"><b>' + fmt(c.montant) + '</b>' + (c.sans_prix ? ' (+' + c.sans_prix + ' sans prix)' : '') + '</td><td>' + esc(dfr(c.dernier).slice(0, 5)) + '</td></tr>';
+    }).join('') + '</table><p class="mut">Crédit des ventes notées sur ces dates (pas le solde total du client).</p>';
+    view(h);
+  };
+  if (data) return rendre(data);
+  call('ventes', { du: VB.du, au: VB.au, station: VB.station }).then(rendre).catch(errTab);
+}
+function vbCharger() { VB.du = $('vbDu').value; VB.au = $('vbAu').value; VB.station = $('vbSt').value; if (VB.au && VB.du && VB.au < VB.du) return alerte('Dates inversées.'); charge(); ongletVentes(); }
+function vbWhatsApp() {
+  var d = VB.d; if (!d) return;
+  var l = ['RRD — Ventes ' + dfr(d.du) + (d.au !== d.du ? ' au ' + dfr(d.au) : '')];
+  d.jours.forEach(function (j) { l.push('• ' + j.station_nom + ' ' + dfr(j.date).slice(0, 5) + ' : ' + j.ventes.length + ' ventes, ' + fmt(j.gallons) + ' gal, ' + fmt(j.montant) + ' ' + (d.devise || DEV) + ' (cash ' + fmt(j.cash) + ', crédit ' + fmt(j.credit) + ')' + (j.compteur !== null ? ', compteur ' + fmt(j.compteur) + ' gal' : '')); });
+  if (d.credit.length) { l.push('Crédit :'); d.credit.forEach(function (c) { l.push('- ' + c.client + ' : ' + fmt(c.gallons) + ' gal, ' + fmt(c.montant)); }); }
+  var a = document.createElement('a'); a.href = 'https://wa.me/?text=' + encodeURIComponent(l.join('\n')); a.target = '_blank'; a.rel = 'noopener'; document.body.appendChild(a); a.click(); a.remove();
+}
+
 var D = null, T = { onglet: 'rapports', du: '', au: '', station: '', date: '' }, R = null, CORR = null, ANNUL = null;
 function call(action, payload) { return api('dir', { sous_action: action, payload: payload || {} }); }
 function fmt2(n) { return fmt(n); }
@@ -1902,7 +1945,7 @@ function exporterCsv() {
 }
 
 function entete() {
-  var tabs = [['rapports', 'Rapports'], ['analyse', '📊 Analyse'], ['resume', 'Résumé du jour'], ['photos', '📷 Photos'], ['bordereaux', '🧾 Bordereaux'], ['stock', IC_CITERNE + ' Stock'], ['camion', '🚚 Camion'], ['livrer', '🧭 À livrer'], ['argent', '💵 Argent'], ['messages', '✉️ Messages'], ['chat', '💬 Chat'], ['demandes', '📝 Demandes'], ['honneur', '🏅 À l\'honneur'], ['prix', 'Prix']];
+  var tabs = [['rapports', 'Rapports'], ['analyse', '📊 Analyse'], ['resume', 'Résumé du jour'], ['photos', '📷 Photos'], ['bordereaux', '🧾 Bordereaux'], ['stock', IC_CITERNE + ' Stock'], ['camion', '🚚 Camion'], ['livrer', '🧭 À livrer'], ['argent', '💵 Argent'], ['messages', '✉️ Messages'], ['chat', '💬 Chat'], ['demandes', '📝 Demandes'], ['honneur', '🏅 À l\'honneur'], ['ventes', '🧾 Ventes'], ['prix', 'Prix']];
   if (D.utilisateur.role === 'management') tabs.push(['appareils', 'Téléphones']);
   return '<h1>Tableau de bord</h1><div class="sub">' + esc(D.utilisateur.nom) + ' · ' + (D.utilisateur.role === 'management' ? 'Direction' : 'Comptabilité') + ' · montants en ' + DEV + ' · <a href="#" onclick="changerCode();return false">Changer de code</a></div>' +
     '<div class="mut">Version ' + VERSION_APP + ' (build ' + (window.RRD_BUILD || 0) + ')' + (S.majPrete ? ' — <b>mise à jour ' + esc(S.majPrete) + ' prête : fermez l\'application puis rouvrez-la</b>' : S.majErreur ? ' — mise à jour impossible : ' + esc(S.majErreur) : '') + '</div>' +
@@ -1910,7 +1953,7 @@ function entete() {
 }
 function charge() { view(entete() + '<p class="mut center">Chargement…</p>'); }
 function errTab(e) { view(entete() + '<div class="err">' + esc(e.reseau ? 'Pas de connexion. Réessayez.' : e.erreur) + '</div>', '<button class="sec" onclick="tableau(T.onglet)">Réessayer</button>'); }
-function tableau(o) { T.retour = ''; T.onglet = o; charge(); ({ rapports: ongletRapports, analyse: function () { ongletAnalyse(); }, resume: ongletResume, photos: ongletPhotos, bordereaux: ongletBordereaux, stock: function () { ongletStock(); }, camion: function () { ongletCamion(); }, livrer: function () { ongletLivrer(); }, chat: function () { ecranChat(); }, demandes: function () { ongletDemandes(); }, honneur: function () { ongletHonneur(); }, argent: function () { ongletArgent(); }, messages: function () { ongletMessages(); }, prix: ongletPrix, appareils: ongletAppareils })[o](); }
+function tableau(o) { T.retour = ''; T.onglet = o; charge(); ({ rapports: ongletRapports, analyse: function () { ongletAnalyse(); }, resume: ongletResume, photos: ongletPhotos, bordereaux: ongletBordereaux, stock: function () { ongletStock(); }, camion: function () { ongletCamion(); }, livrer: function () { ongletLivrer(); }, chat: function () { ecranChat(); }, demandes: function () { ongletDemandes(); }, honneur: function () { ongletHonneur(); }, ventes: function () { ongletVentes(); }, argent: function () { ongletArgent(); }, messages: function () { ongletMessages(); }, prix: ongletPrix, appareils: ongletAppareils })[o](); }
 function badgeEcart(e) {
   if (e === null || e === undefined) return '<span class="badge b-warn">prix manquant</span>';
   if (Math.abs(e) < 1) return '<span class="badge b-ok">écart 0</span>';
