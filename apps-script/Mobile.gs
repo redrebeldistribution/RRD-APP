@@ -2272,7 +2272,7 @@ function honneurPublic_() {
  * « Inventaire Drive (résumé) ». Ne supprime rien. Feuilles lues pour les liens : Activity Log et la feuille privée (jamais 1D0k4…). */
 function analyseTelegram() {
   var sh = ss_().getSheetByName('Inventaire Drive (Telegram)'), n = sh.getLastRow();
-  var rows = sh.getRange(2, 1, n - 1, 8).getValues();
+  var vu = {}, rows = sh.getRange(2, 1, n - 1, 8).getValues().filter(function (r) { if (vu[r[3]]) return false; vu[r[3]] = 1; return true; });   // un fichier noté deux fois (1er essai interrompu) ne compte qu'une fois
   var refs = {}, re = /[-\w]{25,60}/g, lus = [];
   [[SpreadsheetApp.openById(DSR_ACTIVITY_LOG_ID), 'Activity Log'], [ss_(), 'feuille privée']].forEach(function (x) {
     x[0].getSheets().forEach(function (s) {
