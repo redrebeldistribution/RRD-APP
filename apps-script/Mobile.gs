@@ -2031,22 +2031,28 @@ function demandeStatut_(ctx, p) {
  * dans l'onglet « Inventaire Drive (Telegram) » de la feuille privée. À lancer depuis l'éditeur ; elle reprend où elle s'était arrêtée. */
 var INV_RACINES = { 'Telegram Desktop': '15aaDHT_86Fh7zFQL16E2nTJ6MdYbepFb', '11 Photos Telegram 2026': '1fAW8U-no5_BqEk-YOvm8b3pw_pK7tMQX',
   '09 Photos Telegram 2023': '1i_iqLHLu89Iwja99iLjEgC1pVDRqrG-N', '10 Exports WhatsApp & Telegram': '1pU6LF5CKXw6In9GtZ6ExGStRdmeOBZPs' };
-function inventaireTelegram() {
+function inventaireTelegram() {   // lecture seule ; s'arrête avant 5 minutes et reprend où il en était (même dans un très gros dossier)
   var debut = Date.now(), props = PropertiesService.getScriptProperties(), etat = JSON.parse(props.getProperty('INV_ETAT') || 'null');
-  if (!etat) { etat = { pile: [], fichiers: 0 }; Object.keys(INV_RACINES).forEach(function (n) { etat.pile.push({ id: INV_RACINES[n], chemin: n, racine: n }); }); }
+  if (!etat) { etat = { pile: [], cur: null, fichiers: 0 }; Object.keys(INV_RACINES).forEach(function (n) { etat.pile.push({ id: INV_RACINES[n], chemin: n, racine: n }); }); }
   var sh = camFeuille_('Inventaire Drive (Telegram)', ['racine', 'dossier', 'fichier', 'id', 'type', 'taille_ko', 'cree_le', 'proprietaire']);
-  var lot = [];
-  while (etat.pile.length && Date.now() - debut < 300000) {
-    var d = etat.pile.pop(), dos = DriveApp.getFolderById(d.id), sous = dos.getFolders(), f = dos.getFiles();
-    while (sous.hasNext()) { var s = sous.next(); etat.pile.push({ id: s.getId(), chemin: d.chemin + ' / ' + s.getName(), racine: d.racine }); }
-    while (f.hasNext()) {
-      var x = f.next(), prop = '';
-      try { prop = x.getOwner() ? x.getOwner().getEmail() : ''; } catch (e) { }
-      lot.push([d.racine, d.chemin, x.getName(), x.getId(), x.getMimeType(), Math.round(x.getSize() / 1024), Utilities.formatDate(x.getDateCreated(), TZ, 'yyyy-MM-dd'), prop]);
-      if (lot.length >= 500) { sh.getRange(sh.getLastRow() + 1, 1, lot.length, 8).setValues(lot); etat.fichiers += lot.length; lot = []; }
+  var lot = [], temps = function () { return Date.now() - debut < 240000; };
+  var vider = function () { if (lot.length) { sh.getRange(sh.getLastRow() + 1, 1, lot.length, 8).setValues(lot); etat.fichiers += lot.length; lot = []; } };
+  while ((etat.cur || etat.pile.length) && temps()) {
+    if (!etat.cur) {
+      var d = etat.pile.pop(), dos = DriveApp.getFolderById(d.id), sous = dos.getFolders(), prop = '';
+      while (sous.hasNext()) { var s = sous.next(); etat.pile.push({ id: s.getId(), chemin: d.chemin + ' / ' + s.getName(), racine: d.racine }); }
+      try { prop = dos.getOwner() ? dos.getOwner().getEmail() : ''; } catch (e) { }
+      etat.cur = { id: d.id, chemin: d.chemin, racine: d.racine, prop: prop, jeton: '' };
     }
+    var c = etat.cur, it = c.jeton ? DriveApp.continueFileIterator(c.jeton) : DriveApp.getFolderById(c.id).getFiles();
+    while (it.hasNext() && temps()) {
+      var x = it.next();
+      lot.push([c.racine, c.chemin, x.getName(), x.getId(), x.getMimeType(), Math.round(x.getSize() / 1024), Utilities.formatDate(x.getDateCreated(), TZ, 'yyyy-MM-dd'), c.prop]);
+      if (lot.length >= 500) vider();
+    }
+    if (it.hasNext()) c.jeton = it.getContinuationToken(); else etat.cur = null;
   }
-  if (lot.length) { sh.getRange(sh.getLastRow() + 1, 1, lot.length, 8).setValues(lot); etat.fichiers += lot.length; }
-  if (etat.pile.length) { props.setProperty('INV_ETAT', JSON.stringify(etat)); Logger.log('À SUIVRE — ' + etat.fichiers + ' fichiers notés, ' + etat.pile.length + ' dossiers restants : relancer inventaireTelegram'); }
+  vider();
+  if (etat.cur || etat.pile.length) { props.setProperty('INV_ETAT', JSON.stringify(etat)); Logger.log('À SUIVRE — ' + etat.fichiers + ' fichiers notés, ' + etat.pile.length + ' dossiers restants : relancer inventaireTelegram'); }
   else { props.deleteProperty('INV_ETAT'); Logger.log('FINI — ' + etat.fichiers + ' fichiers notés. Drive utilisé : ' + Math.round(DriveApp.getStorageUsed() / 1048576) + ' Mo sur ' + Math.round(DriveApp.getStorageLimit() / 1048576) + ' Mo'); }
 }
