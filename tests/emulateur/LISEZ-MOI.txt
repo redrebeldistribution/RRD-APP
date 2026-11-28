@@ -1,0 +1,19 @@
+Essais automatiques sur un téléphone Android virtuel (GitHub Actions, fichier .github/workflows/emulateur.yml).
+
+À chaque changement de l'application, GitHub :
+  1. fait une copie d'ESSAI de l'application reliée au faux bureau (faux_bureau.py) : jamais le vrai serveur,
+     jamais les vraies feuilles, pas de chat, pas de mise à jour automatique (preparer.sh le vérifie) ;
+  2. démarre un téléphone Android 11 virtuel, installe la copie et joue les scénarios (scenarios.py) ;
+  3. met une coche verte ou une croix rouge, avec les captures d'écran dans « Artifacts ».
+
+Scénarios : mauvais code refusé, activation TST-0001, vente cash (total 1 500 et monnaie 500), crédit sans nom refusé,
+crédit avec nom, vente sans signal qui attend, application fermée puis rouverte (la vente reste), signal revenu
+(la vente part seule), erreur signalée, pas de bouton supprimer, écran Photos.
+
+Sur un ordinateur (Chrome), sans émulateur :
+  bash preparer.sh /tmp/essai/www http://127.0.0.1:8765      (sur une COPIE de www)
+  python3 faux_bureau.py 8765 journal.jsonl &
+  (cd /tmp/essai/www && python3 -m http.server 8080 &)
+  python3 scenarios.py chrome http://127.0.0.1:8765 captures http://127.0.0.1:8080/index.html
+
+Ce que l'émulateur ne vérifie pas : imprimante Bluetooth réelle, vraies photos, signal faible réel, téléphones bon marché.
