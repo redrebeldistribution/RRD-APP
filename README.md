@@ -1,8 +1,8 @@
 # RRD – Application Android (Rapport de fermeture)
 
-Application Android hors connexion pour les stations RRD. Remplace le bouton Telegram « 📋 Rapport de fermeture ».
+Application Android hors connexion pour les stations RRD (rapports de fermeture, photos, transferts, camions, ventes).
 
-- `www/` : l'application (écrans repris de la Mini App Telegram, avec enregistrement hors connexion).
+- `www/` : l'application (écrans de l'application, avec enregistrement hors connexion).
 - `www/config.js` : adresse du serveur (`.../exec`).
 - `apps-script/Mobile.gs` : fichier à ajouter au projet Apps Script « RRD – Rapport de fermeture ».
 - `android/` : projet Android (Capacitor). Le fichier .apk est construit automatiquement par GitHub Actions à chaque modification, et publié dans « Releases ».

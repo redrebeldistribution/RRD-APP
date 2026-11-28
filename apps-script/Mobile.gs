@@ -1,5 +1,5 @@
 /**
- * RRD – Rapport de fermeture : accès pour l'application Android (hors Telegram).
+ * RRD – Rapport de fermeture : accès pour l'application Android et le tableau de bord web.
  * À AJOUTER comme nouveau fichier « Mobile » dans le projet Apps Script « RRD – Rapport de fermeture ».
  * Ne modifie aucun autre fichier : réutilise validerRapport, rapportsDuJour_, recuEmploye_, enregistrerPhoto_, etc.
  *
@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.43';
+var MOBILE_VERSION = 'm1.44';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var STATION_FORMATION = 'TST', MAX_APPAREILS_FORMATION = 50;   // les codes de la station de test servent à la formation : plusieurs téléphones avec le même code (propriétaire, 26/11/2026)
 /* Pilote des ventes (écran « Vente » du téléphone, propriétaire 28/11/2026) : seulement la station de formation pour l'essai.
@@ -220,7 +220,7 @@ function appareil_(jeton) {
   if (role === 'camion' && !cam) throw new UserError('Ce camion n\'existe pas ou est inactif.', 'DESACTIVE');
   if (role) {
     try { majCellule_(APPAREILS, a._ligne, 'dernier_contact', maintenant_()); } catch (e) { }
-    return { ligne: a, station: null, role: role, camion: cam, id: 'APP-' + String(a.code_activation), nom: String(a.nom || a.note || a.code_activation), username: 'app', enGroupe: false, chatInstance: '' };
+    return { ligne: a, station: null, role: role, camion: cam, id: 'APP-' + String(a.code_activation), nom: String(a.nom || a.note || a.code_activation), username: 'app' };
   }
   var st = stations_().filter(function (s) { return String(s.code) === String(a.station).trim() && estVrai_(s.actif); })[0];
   if (!st) throw new UserError('Station inactive.', 'DESACTIVE');
@@ -577,10 +577,10 @@ function initDirection_(app) {
   };
 }
 
-/** Mêmes fonctions que le tableau de bord Telegram, avec l'identité du téléphone de la direction. */
+/** Fonctions du tableau de bord (Code.gs), avec l'identité du téléphone de la direction. */
 function direction_(app, sous, p) {
   if (!app.role || app.role === 'transferts' || app.role === 'camion') throw new UserError('Accès réservé à la direction.', 'FORBIDDEN');
-  var ctx = { id: app.id, nom: app.nom, username: 'app', role: app.role, chatType: 'private', chatInstance: '', enGroupe: false };
+  var ctx = { id: app.id, nom: app.nom, username: 'app', role: app.role };
   switch (sous) {
     case 'rapports': return listeRapports_(ctx, p);
     case 'gestion': exiger_(ctx, ['management', 'accounting']); return gestion_(p);
@@ -683,7 +683,7 @@ function activerAppareil_(ctx, p) {
 }
 
 /* ============================ Photos horaires (m1.11, 26/11/2026) ============================
- * Remplace les groupes photos de Telegram : chaque heure (7 h à 16 h) la station prend 3 photos dans l'application
+ * Photos horaires : chaque heure (7 h à 16 h) la station prend 3 photos dans l'application
  * (compteur, station, citerne). Les photos vont dans un dossier Drive privé, une ligne par photo dans l'onglet
  * « Photos horaires » de la feuille privée. L'heure retenue est celle du téléphone au moment de la photo
  * (jamais dans le futur) ; l'heure de réception est notée à côté. Rien n'est jamais supprimé ici.
@@ -2050,47 +2050,6 @@ function demandeStatut_(ctx, p) {
 }
 
 
-/* ============================ Inventaire des photos Telegram dans Drive (27/11/2026, lecture seule) ============================
- * Demande du propriétaire : faire de la place dans Drive (87 %) en retirant les photos Telegram déjà utilisées et rangées ailleurs.
- * Cette fonction NE SUPPRIME RIEN : elle compte, pèse et repère les doublons (même nom et même taille), puis écrit le résultat
- * dans l'onglet « Inventaire Drive (Telegram) » de la feuille privée. À lancer depuis l'éditeur ; elle reprend où elle s'était arrêtée. */
-var INV_RACINES = { 'Telegram Desktop': '15aaDHT_86Fh7zFQL16E2nTJ6MdYbepFb', '11 Photos Telegram 2026': '1fAW8U-no5_BqEk-YOvm8b3pw_pK7tMQX',
-  '09 Photos Telegram 2023': '1i_iqLHLu89Iwja99iLjEgC1pVDRqrG-N', '10 Exports WhatsApp & Telegram': '1pU6LF5CKXw6In9GtZ6ExGStRdmeOBZPs' };
-function inventaireTelegram() {   // lecture seule ; s'arrête avant 5 minutes et reprend où il en était (même dans un très gros dossier)
-  var debut = Date.now(), props = PropertiesService.getScriptProperties(), etat = JSON.parse(props.getProperty('INV_ETAT') || 'null');
-  if (!etat) { etat = { pile: [], cur: null, fichiers: 0 }; Object.keys(INV_RACINES).forEach(function (n) { etat.pile.push({ id: INV_RACINES[n], chemin: n, racine: n }); }); }
-  var sh = camFeuille_('Inventaire Drive (Telegram)', ['racine', 'dossier', 'fichier', 'id', 'type', 'taille_ko', 'cree_le', 'proprietaire']);
-  var lot = [], temps = function () { return Date.now() - debut < 240000; };
-  var vider = function () { if (lot.length) { sh.getRange(sh.getLastRow() + 1, 1, lot.length, 8).setValues(lot); etat.fichiers += lot.length; lot = []; } };
-  while ((etat.cur || etat.pile.length) && temps()) {
-    if (!etat.cur) {
-      var d = etat.pile.pop(), dos = DriveApp.getFolderById(d.id), sous = dos.getFolders(), prop = '';
-      while (sous.hasNext()) { var s = sous.next(); etat.pile.push({ id: s.getId(), chemin: d.chemin + ' / ' + s.getName(), racine: d.racine }); }
-      try { prop = dos.getOwner() ? dos.getOwner().getEmail() : ''; } catch (e) { }
-      etat.cur = { id: d.id, chemin: d.chemin, racine: d.racine, prop: prop, jeton: '' };
-    }
-    var c = etat.cur, it = c.jeton ? DriveApp.continueFileIterator(c.jeton) : DriveApp.getFolderById(c.id).getFiles();
-    while (it.hasNext() && temps()) {
-      var x = it.next();
-      lot.push([c.racine, c.chemin, x.getName(), x.getId(), x.getMimeType(), Math.round(x.getSize() / 1024), Utilities.formatDate(x.getDateCreated(), TZ, 'yyyy-MM-dd'), c.prop]);
-      if (lot.length >= 500) vider();
-    }
-    if (it.hasNext()) c.jeton = it.getContinuationToken(); else etat.cur = null;
-  }
-  vider();
-  ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'inventaireTelegram') ScriptApp.deleteTrigger(t); });
-  var msg;
-  if (etat.cur || etat.pile.length) {
-    props.setProperty('INV_ETAT', JSON.stringify(etat));
-    ScriptApp.newTrigger('inventaireTelegram').timeBased().after(60 * 1000).create();   // se relance tout seul dans 1 minute (lecture seule)
-    msg = 'À SUIVRE — ' + etat.fichiers + ' fichiers notés, ' + etat.pile.length + ' dossiers restants (relance automatique) — ' + maintenant_();
-  } else {
-    props.deleteProperty('INV_ETAT');
-    msg = 'FINI — ' + etat.fichiers + ' fichiers notés. Drive utilisé : ' + Math.round(DriveApp.getStorageUsed() / 1048576) + ' Mo sur ' + Math.round(DriveApp.getStorageLimit() / 1048576) + ' Mo — ' + maintenant_();
-  }
-  sh.getRange(1, 10).setValue(msg); Logger.log(msg);
-}
-
 /* ============================ À l'honneur : équipe et employé(e) du mois (m1.39, 27/11/2026) ============================
  * Propriétaire, 27/11/2026 : une page du site pour que les employés se sentent appréciés.
  *  - « Équipe du mois » = la 1re station du RRD Challenge du mois (points lus dans l'Activity Log), confirmée par la direction.
@@ -2284,93 +2243,6 @@ function honneurPublic_() {
   }) };
   try { cache.put('honneur_public', JSON.stringify(o), 600); } catch (e) { }
   return o;
-}
-
-/** Lecture seule : résumé de l'inventaire (dossiers, tailles, doublons nom + taille, fichiers liés depuis les feuilles) dans l'onglet
- * « Inventaire Drive (résumé) ». Ne supprime rien. Feuilles lues pour les liens : Activity Log et la feuille privée (jamais 1D0k4…). */
-function analyseTelegram() {
-  var sh = ss_().getSheetByName('Inventaire Drive (Telegram)'), n = sh.getLastRow();
-  var vu = {}, rows = sh.getRange(2, 1, n - 1, 8).getValues().filter(function (r) { if (vu[r[3]]) return false; vu[r[3]] = 1; return true; });   // un fichier noté deux fois (1er essai interrompu) ne compte qu'une fois
-  var refs = {}, re = /[-\w]{25,60}/g, lus = [];
-  [[SpreadsheetApp.openById(DSR_ACTIVITY_LOG_ID), 'Activity Log'], [ss_(), 'feuille privée']].forEach(function (x) {
-    x[0].getSheets().forEach(function (s) {
-      var nom = s.getName(); if (/^Inventaire Drive/.test(nom) || s.getLastRow() < 1 || s.getLastColumn() < 1) return;
-      var r = s.getDataRange(), v = r.getValues(), f = r.getFormulas();
-      for (var i = 0; i < v.length; i++) for (var j = 0; j < v[i].length; j++) {
-        var t = String(v[i][j]) + ' ' + f[i][j]; if (t.length < 26) continue;
-        var m = t.match(re); if (m) m.forEach(function (id) { (refs[id] = refs[id] || {})[x[1] + ' › ' + nom] = 1; });
-      }
-      lus.push(x[1] + ' › ' + nom);
-    });
-  });
-  var grp = function (r) { return String(r[1]).split(' / ').slice(0, 3).join(' / '); };
-  var dos = {}, cle = {}, tot = { n: 0, ko: 0 };
-  rows.forEach(function (r) {
-    var g = grp(r), k = String(r[2]).toLowerCase() + '|' + r[5];
-    var d = dos[g] = dos[g] || { n: 0, ko: 0, lies: 0, ko_lies: 0, dbl: 0, ko_dbl: 0, kado: /kado/i.test(r[1]), prop: {} };
-    d.n++; d.ko += Number(r[5]) || 0; d.prop[r[7] || '?'] = 1; tot.n++; tot.ko += Number(r[5]) || 0;
-    if (refs[r[3]]) { d.lies++; d.ko_lies += Number(r[5]) || 0; }
-    if (Number(r[5]) > 0) (cle[k] = cle[k] || []).push(g);
-  });
-  rows.forEach(function (r) {   // doublon = même nom et même taille ailleurs (autre dossier ou même dossier)
-    var k = String(r[2]).toLowerCase() + '|' + r[5]; if (!(Number(r[5]) > 0) || (cle[k] || []).length < 2) return;
-    var d = dos[grp(r)]; d.dbl++; d.ko_dbl += Number(r[5]) || 0;
-  });
-  var paires = {};
-  Object.keys(cle).forEach(function (k) { var l = cle[k]; if (l.length < 2) return; var u = l.filter(function (x, i) { return l.indexOf(x) === i; }).sort(); var p = u.join('  ⟷  '); paires[p] = (paires[p] || 0) + (l.length - 1) * Number(k.split('|')[1]); });
-  var out = [['Inventaire Drive — résumé (lecture seule, rien supprimé) — ' + maintenant_(), '', '', '', '', '', '', ''],
-    ['Total : ' + tot.n + ' fichiers, ' + Math.round(tot.ko / 1024) + ' Mo. Drive : ' + Math.round(DriveApp.getStorageUsed() / 1048576) + ' Mo utilisés sur ' + Math.round(DriveApp.getStorageLimit() / 1048576) + ' Mo.', '', '', '', '', '', '', ''],
-    ['', '', '', '', '', '', '', ''],
-    ['dossier (3 niveaux)', 'fichiers', 'Mo', 'liés depuis une feuille', 'Mo liés', 'en double (nom + taille)', 'Mo en double', 'propriétaire(s) / Kado']];
-  Object.keys(dos).sort(function (a, b) { return dos[b].ko - dos[a].ko; }).forEach(function (g) {
-    var d = dos[g]; out.push([g, d.n, Math.round(d.ko / 1024), d.lies, Math.round(d.ko_lies / 1024), d.dbl, Math.round(d.ko_dbl / 1024), Object.keys(d.prop).join(', ') + (d.kado ? ' — KADO (à part)' : '')]);
-  });
-  out.push(['', '', '', '', '', '', '', '']); out.push(['copies en trop entre dossiers (Mo récupérables si on garde une seule copie)', '', 'Mo', '', '', '', '', '']);
-  Object.keys(paires).sort(function (a, b) { return paires[b] - paires[a]; }).slice(0, 60).forEach(function (p) { out.push([p, '', Math.round(paires[p] / 1024), '', '', '', '', '']); });
-  out.push(['', '', '', '', '', '', '', '']); out.push(['onglets lus pour les liens : ' + lus.length, lus.join(' ; ').slice(0, 45000), '', '', '', '', '', '']);
-  var r = ss_().getSheetByName('Inventaire Drive (résumé)') || ss_().insertSheet('Inventaire Drive (résumé)');
-  r.clear(); r.getRange(1, 1, out.length, 8).setValues(out);
-  Logger.log('Résumé écrit : ' + out.length + ' lignes');
-}
-
-/** Ménage approuvé par le propriétaire le 27/11/2026 : met à la corbeille (récupérable 30 jours) trois dossiers en double.
- * Pour chaque dossier, vérifie d'abord avec l'inventaire que CHAQUE fichier existe ailleurs (même nom, même taille) et qu'aucune
- * feuille (Activity Log, feuille privée) ne le lie ; sinon le dossier n'est pas touché. Résultat écrit dans « Inventaire Drive (résumé) » J1. */
-function menageTelegram() {
-  var plan = [
-    { racine: '1pU6LF5CKXw6In9GtZ6ExGStRdmeOBZPs', nom: 'ChatExport_2026-11-09 (1)', chemin: '10 Exports WhatsApp & Telegram / ChatExport_2026-11-09 (1)', ref: 'Telegram Desktop / ChatExport_2026-11-09 (1)' },
-    { racine: '15aaDHT_86Fh7zFQL16E2nTJ6MdYbepFb', nom: 'ChatExport_2026-11-22', chemin: 'Telegram Desktop / ChatExport_2026-11-22', ref: 'Telegram Desktop / ChatExport_2026-11-25 (1)' },
-    { racine: '', id: '1i_iqLHLu89Iwja99iLjEgC1pVDRqrG-N', chemin: '09 Photos Telegram 2023', ref: '' }   // ref vide : n'importe où ailleurs
-  ];
-  var sh = ss_().getSheetByName('Inventaire Drive (Telegram)'), vu = {};
-  var rows = sh.getRange(2, 1, sh.getLastRow() - 1, 8).getValues().filter(function (r) { if (vu[r[3]]) return false; vu[r[3]] = 1; return true; });
-  var refs = {}, re = /[-\w]{25,60}/g;
-  [SpreadsheetApp.openById(DSR_ACTIVITY_LOG_ID), ss_()].forEach(function (x) {
-    x.getSheets().forEach(function (s) {
-      if (/^Inventaire Drive/.test(s.getName()) || s.getLastRow() < 1 || s.getLastColumn() < 1) return;
-      var r = s.getDataRange(), v = r.getValues(), f = r.getFormulas();
-      for (var i = 0; i < v.length; i++) for (var j = 0; j < v[i].length; j++) { var t = String(v[i][j]) + ' ' + f[i][j]; if (t.length > 25) (t.match(re) || []).forEach(function (id) { refs[id] = 1; }); }
-    });
-  });
-  var dans = function (d, p) { d = String(d); return d === p || d.indexOf(p + ' / ') === 0; };
-  var cle = function (r) { return String(r[2]).toLowerCase() + '|' + r[5]; };
-  var bilan = [];
-  plan.forEach(function (x) {
-    var a = rows.filter(function (r) { return dans(r[1], x.chemin); });
-    var b = {}; rows.forEach(function (r) { if (!dans(r[1], x.chemin) && (!x.ref || dans(r[1], x.ref))) b[cle(r)] = 1; });
-    var manque = a.filter(function (r) { return !b[cle(r)]; }), lies = a.filter(function (r) { return refs[r[3]]; });
-    var mo = Math.round(a.reduce(function (s, r) { return s + (Number(r[5]) || 0); }, 0) / 1024);
-    if (!a.length || manque.length || lies.length) { bilan.push('PAS TOUCHÉ — ' + x.chemin + ' : ' + a.length + ' fichiers, ' + manque.length + ' sans copie ailleurs' + (manque.length ? ' (ex. ' + manque.slice(0, 5).map(function (r) { return r[2]; }).join(', ') + ')' : '') + ', ' + lies.length + ' liés depuis une feuille'); return; }
-    var dos = x.id ? DriveApp.getFolderById(x.id) : null;
-    if (!dos) { var it = DriveApp.getFolderById(x.racine).getFoldersByName(x.nom), l = []; while (it.hasNext()) l.push(it.next()); if (l.length !== 1) { bilan.push('PAS TOUCHÉ — ' + x.chemin + ' : ' + l.length + ' dossiers de ce nom'); return; } dos = l[0]; }
-    var prop = ''; try { prop = dos.getOwner().getEmail(); } catch (e) { }
-    if (prop !== 'redrebeldistribution@gmail.com') { bilan.push('PAS TOUCHÉ — ' + x.chemin + ' : propriétaire ' + prop); return; }
-    dos.setTrashed(true);
-    bilan.push('À LA CORBEILLE — ' + x.chemin + ' (id ' + dos.getId() + ') : ' + a.length + ' fichiers, ' + mo + ' Mo, tous avec une copie ailleurs, aucun lié');
-  });
-  var msg = 'Ménage du ' + maintenant_() + ' — ' + bilan.join(' || ');
-  (ss_().getSheetByName('Inventaire Drive (résumé)') || ss_().insertSheet('Inventaire Drive (résumé)')).getRange(1, 10).setValue(msg);
-  Logger.log(msg);
 }
 
 
