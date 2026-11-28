@@ -2314,3 +2314,43 @@ function analyseTelegram() {
   r.clear(); r.getRange(1, 1, out.length, 8).setValues(out);
   Logger.log('Résumé écrit : ' + out.length + ' lignes');
 }
+
+/** Ménage approuvé par le propriétaire le 27/11/2026 : met à la corbeille (récupérable 30 jours) trois dossiers en double.
+ * Pour chaque dossier, vérifie d'abord avec l'inventaire que CHAQUE fichier existe ailleurs (même nom, même taille) et qu'aucune
+ * feuille (Activity Log, feuille privée) ne le lie ; sinon le dossier n'est pas touché. Résultat écrit dans « Inventaire Drive (résumé) » J1. */
+function menageTelegram() {
+  var plan = [
+    { racine: '1pU6LF5CKXw6In9GtZ6ExGStRdmeOBZPs', nom: 'ChatExport_2026-11-09 (1)', chemin: '10 Exports WhatsApp & Telegram / ChatExport_2026-11-09 (1)', ref: 'Telegram Desktop / ChatExport_2026-11-09 (1)' },
+    { racine: '15aaDHT_86Fh7zFQL16E2nTJ6MdYbepFb', nom: 'ChatExport_2026-11-22', chemin: 'Telegram Desktop / ChatExport_2026-11-22', ref: 'Telegram Desktop / ChatExport_2026-11-25 (1)' },
+    { racine: '', id: '1i_iqLHLu89Iwja99iLjEgC1pVDRqrG-N', chemin: '09 Photos Telegram 2023', ref: '' }   // ref vide : n'importe où ailleurs
+  ];
+  var sh = ss_().getSheetByName('Inventaire Drive (Telegram)'), vu = {};
+  var rows = sh.getRange(2, 1, sh.getLastRow() - 1, 8).getValues().filter(function (r) { if (vu[r[3]]) return false; vu[r[3]] = 1; return true; });
+  var refs = {}, re = /[-\w]{25,60}/g;
+  [SpreadsheetApp.openById(DSR_ACTIVITY_LOG_ID), ss_()].forEach(function (x) {
+    x.getSheets().forEach(function (s) {
+      if (/^Inventaire Drive/.test(s.getName()) || s.getLastRow() < 1 || s.getLastColumn() < 1) return;
+      var r = s.getDataRange(), v = r.getValues(), f = r.getFormulas();
+      for (var i = 0; i < v.length; i++) for (var j = 0; j < v[i].length; j++) { var t = String(v[i][j]) + ' ' + f[i][j]; if (t.length > 25) (t.match(re) || []).forEach(function (id) { refs[id] = 1; }); }
+    });
+  });
+  var dans = function (d, p) { d = String(d); return d === p || d.indexOf(p + ' / ') === 0; };
+  var cle = function (r) { return String(r[2]).toLowerCase() + '|' + r[5]; };
+  var bilan = [];
+  plan.forEach(function (x) {
+    var a = rows.filter(function (r) { return dans(r[1], x.chemin); });
+    var b = {}; rows.forEach(function (r) { if (!dans(r[1], x.chemin) && (!x.ref || dans(r[1], x.ref))) b[cle(r)] = 1; });
+    var manque = a.filter(function (r) { return !b[cle(r)]; }), lies = a.filter(function (r) { return refs[r[3]]; });
+    var mo = Math.round(a.reduce(function (s, r) { return s + (Number(r[5]) || 0); }, 0) / 1024);
+    if (!a.length || manque.length || lies.length) { bilan.push('PAS TOUCHÉ — ' + x.chemin + ' : ' + a.length + ' fichiers, ' + manque.length + ' sans copie ailleurs' + (manque.length ? ' (ex. ' + manque.slice(0, 5).map(function (r) { return r[2]; }).join(', ') + ')' : '') + ', ' + lies.length + ' liés depuis une feuille'); return; }
+    var dos = x.id ? DriveApp.getFolderById(x.id) : null;
+    if (!dos) { var it = DriveApp.getFolderById(x.racine).getFoldersByName(x.nom), l = []; while (it.hasNext()) l.push(it.next()); if (l.length !== 1) { bilan.push('PAS TOUCHÉ — ' + x.chemin + ' : ' + l.length + ' dossiers de ce nom'); return; } dos = l[0]; }
+    var prop = ''; try { prop = dos.getOwner().getEmail(); } catch (e) { }
+    if (prop !== Session.getEffectiveUser().getEmail()) { bilan.push('PAS TOUCHÉ — ' + x.chemin + ' : propriétaire ' + prop); return; }
+    dos.setTrashed(true);
+    bilan.push('À LA CORBEILLE — ' + x.chemin + ' (id ' + dos.getId() + ') : ' + a.length + ' fichiers, ' + mo + ' Mo, tous avec une copie ailleurs, aucun lié');
+  });
+  var msg = 'Ménage du ' + maintenant_() + ' — ' + bilan.join(' || ');
+  (ss_().getSheetByName('Inventaire Drive (résumé)') || ss_().insertSheet('Inventaire Drive (résumé)')).getRange(1, 10).setValue(msg);
+  Logger.log(msg);
+}
