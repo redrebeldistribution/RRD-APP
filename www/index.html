@@ -76,7 +76,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 <script src="vente.js?v=1"></script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.34.0';
+var VERSION_APP = '1.36.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -392,7 +392,7 @@ function accueil() {
     var rejetes = liste.filter(function (r) { return r.statut === 'rejete' && !r.vu; });
     var annules = liste.filter(function (r) { return r.statut === 'annule' && !r.vu; });
     var h = '<h1>' + esc(st.nom || '') + '</h1><div class="sub">Journée du ' + dfr(j.date) + '</div>';
-    h += msgHtml();
+    h += msgHtml() + voHtml();
     h += venteAccueilHtml(VT.liste);   // pilote des ventes : rien pour les stations hors pilote
     if (attente.length) h += '<div class="wait">⏳ ' + attente.length + ' rapport(s) en attente d\'envoi. Ils partiront tout seuls dès qu\'il y aura du signal.</div>';
     liste.filter(function (r) { return r.statut === 'verif'; }).forEach(function (r) {
@@ -448,7 +448,7 @@ function changerCode(siAnnule) {
     if (att) return alert(att + ' rapport(s) pas encore envoyé(s). Attendez qu\'ils partent (bouton Envoyer / actualiser) avant de changer de code.');
     if (attPh) return alert(attPh + ' photo(s), bordereau(x) ou opération(s) pas encore envoyé(s). Attendez qu\'ils partent (bouton Envoyer / actualiser) avant de changer de code.');
     if (!confirm('Changer le code de ce téléphone ? Il faudra un nouveau code d\'activation et internet.')) { if (typeof siAnnule === 'function') siAnnule(); return; }
-    ['jeton', 'role', 'nom', 'station', 'init', 'init_le', 'noms', 'messages', 'reponses', 'msgVus', 'phTypes', 'phSuivie', 'camion', 'camInit'].forEach(CFG.del);
+    ['jeton', 'role', 'nom', 'station', 'init', 'init_le', 'noms', 'messages', 'reponses', 'msgVus', 'phTypes', 'phSuivie', 'camion', 'camInit', 'votes'].forEach(CFG.del);
     S.init = null; D = null; PH.serveur = null; CM.d = null; ecranEnregistrer();
   });
 }
@@ -1054,7 +1054,7 @@ function camAccueil(msg, err) {
       h += '<div class="err">❌ ' + esc(CM_NOMS[r.op] || r.op) + ' refusé(e) par le bureau :\n' + esc(r.erreur || '') + '\n<button class="sec" style="margin-top:8px" onclick="cmVu(\'' + esc(r.cid) + '\')">J\'ai compris</button></div>';
     });
     if (!d.clients) h += '<div class="note">Liste des clients pas encore reçue. Il faut internet une première fois.</div>';
-    h += msgHtml();
+    h += msgHtml() + voHtml();
     h += '<button class="bigbtn" onclick="cmForm(\'livraison\')">🚚 Nouvelle livraison</button><button class="bigbtn sec" onclick="cmForm(\'paiement\')">💵 Paiement reçu d\'un client</button><button class="bigbtn sec" onclick="cmForm(\'achat\')">⛽ Chargement ou achat</button><button class="bigbtn sec" onclick="cmForm(\'photo\')">📷 Photo (compteur du client, station, autre)</button>' +
       (chPossible() ? '<button class="bigbtn sec" onclick="ecranChat()">💬 Chat<span class="chBadge">' + chBadgeTxt() + '</span></button>' : '');
     var rap = function (date) {   // '' = pas fait, sinon 'att' ou 'ok'
@@ -1526,7 +1526,7 @@ function msgCharger(force) {
     });
     Object.keys(reps).forEach(function (k) { if (!garde[k] && reps[k].statut === 'attente') garde[k] = reps[k]; else if (!garde[k]) chR = true; });
     if (chR) CFG.set('reponses', garde);
-    CFG.set('messages', l); ntBientot(); repEnvoyer(); msgFond(); }).catch(function () { });
+    CFG.set('messages', l); ntBientot(); repEnvoyer(); msgFond(); voCharger(force); }).catch(function () { });
 }
 function msgHtml() {   // sur l'écran d'accueil : les conseils et messages d'aujourd'hui et d'hier dont l'heure est passée
   var now = Date.now(), jh = phJourHeure(now), hier = jourPlus(jh.date, -1), h = '';
@@ -1586,6 +1586,140 @@ function repEnvoyer() {
       } else { REP.envoi = false; }   // pas de signal : nouvel essai plus tard
     });
   })();
+}
+
+/* ======================= À l'honneur : vote de l'employé(e) du mois et accord pour la photo du site (build 75) =======================
+ * Sur le téléphone d'une station ou d'un camion : du 20 à la fin du mois, chaque employé vote pour un(e) collègue de tout le réseau
+ * (pas pour soi-même ; la dernière voix compte). Si la direction a choisi la station (ou une personne de la station) et ajouté une
+ * photo pour le site redrebel.us, le téléphone demande l'accord avant que la photo soit publiée. */
+var VO = { le: 0 };
+function voCharger(force) {
+  if (!msgRole() || !CFG.get('jeton', '') || (!force && Date.now() - VO.le < 30 * 60000)) return;
+  VO.le = Date.now();
+  api('votes').then(function (d) { CFG.set('votes', d); msgFond(); }).catch(function () { VO.le = 0; });
+}
+function voHtml() {
+  var d = CFG.get('votes', null), h = '';
+  if (!d) return '';
+  (d.accords || []).forEach(function (a, i) {
+    h += '<div class="okb">🏅 <b>' + (a.genre === 'equipe' ? 'Votre équipe est l\'équipe du mois' : esc(a.noms) + ' est l\'employé(e) du mois') + ' !</b> Bravo !' +
+      '<div style="margin-top:6px">La direction voudrait mettre ' + (a.genre === 'equipe' ? 'la photo de l\'équipe avec les prénoms' : 'sa photo avec son prénom') + ' sur le site redrebel.us. ' +
+      (a.genre === 'equipe' ? 'L\'équipe est-elle d\'accord ?' : esc(a.noms) + ' est-il (elle) d\'accord ?') + '</div>' +
+      '<div style="margin-top:8px;display:flex;gap:8px"><button onclick="voAccord(' + i + ',true)">Oui, d\'accord</button><button class="sec" onclick="voAccord(' + i + ',false)">Non, pas de photo</button></div></div>';
+  });
+  if (d.ouvert && (d.miens || []).length && d.mois === phJourHeure(Date.now()).date.slice(0, 7)) {
+    var faits = (d.deja || []).length;
+    h += '<div class="note"><b>🗳️ Employé(e) du mois</b> — chaque employé vote pour le (la) collègue qui a le mieux travaillé ce mois-ci, dans tout le réseau.' +
+      (faits ? '<div class="mut" style="margin-top:4px">Déjà voté : ' + d.deja.map(function (x) { return esc(x.votant); }).join(', ') + '</div>' : '') +
+      '<div style="margin-top:8px"><button class="sec" onclick="ecranVote()">🗳️ Voter</button></div></div>';
+  }
+  return h;
+}
+function voRetour() { if (CFG.get('role', '') === 'camion') camAccueil(); else accueil(); }
+function ecranVote(err) {
+  var d = CFG.get('votes', null);
+  if (!d || !d.ouvert) return voRetour();
+  S.ecran = 'vote';
+  var opts = '<option value="">— choisir —</option>' + (d.groupes || []).map(function (g) {
+    return '<optgroup label="' + esc(g.nom) + '">' + g.employes.map(function (n) { return '<option value="' + esc(g.code + '|' + n) + '">' + esc(n) + '</option>'; }).join('') + '</optgroup>';
+  }).join('');
+  view('<h2>🗳️ Employé(e) du mois</h2>' + (err ? '<div class="err">' + esc(err) + '</div>' : '') +
+    '<label>Votre nom</label><select id="voVotant"><option value="">— choisir —</option>' + d.miens.map(function (n) { return '<option>' + esc(n) + '</option>'; }).join('') + '</select>' +
+    '<label>Votre vote : le (la) collègue qui a le mieux travaillé ce mois-ci</label><select id="voPour">' + opts + '</select>' +
+    '<p class="mut">On ne vote pas pour soi-même. Une voix par personne : si vous votez de nouveau, c\'est le dernier vote qui compte. La direction confirme le résultat.</p>' +
+    '<div style="margin-top:10px"><button id="bVote" onclick="voEnvoyer()">Envoyer mon vote</button></div>' +
+    '<div style="margin-top:10px"><button class="sec" onclick="voRetour()">Retour</button></div>');
+}
+function voEnvoyer() {
+  var d = CFG.get('votes', {}), votant = $('voVotant').value, pour = String($('voPour').value || ''), i = pour.indexOf('|');
+  if (!votant) return alerte('Choisissez votre nom.');
+  if (i < 0) return alerte('Choisissez un(e) collègue.');
+  var st = pour.slice(0, i), nom = pour.slice(i + 1);
+  if (st === d.code && nom === votant) return alerte('On ne vote pas pour soi-même.');
+  $('bVote').disabled = true;
+  api('vote', { payload: { votant: votant, pour: nom, pour_station: st, cid: 'V' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7) } }).then(function () {
+    d.deja = (d.deja || []).filter(function (x) { return x.votant !== votant; }).concat([{ votant: votant, pour: nom }]); CFG.set('votes', d);
+    voRetour(); setTimeout(function () { alerte('✅ Merci ' + votant + ', votre vote est enregistré.'); }, 700);
+  }).catch(function (e) { ecranVote(e && e.reseau ? 'Pas de signal : votre vote n\'est pas parti. Réessayez quand il y aura du réseau.' : (e && e.erreur) || 'Erreur.'); });
+}
+function voAccord(i, oui) {
+  var d = CFG.get('votes', {}), a = (d.accords || [])[i];
+  if (!a) return;
+  if (!confirm(oui ? 'Confirmer : OUI, la photo peut aller sur le site redrebel.us.' : 'Confirmer : NON, pas de photo sur le site.')) return;
+  api('accordPhoto', { payload: { mois: a.mois, genre: a.genre, oui: !!oui } }).then(function () {
+    d.accords.splice(i, 1); CFG.set('votes', d); voRetour(); setTimeout(function () { alerte(oui ? 'Merci ! La photo sera sur le site.' : 'C\'est noté : pas de photo.'); }, 700);
+  }).catch(function (e) { alerte(e && e.reseau ? 'Pas de signal. Réessayez plus tard.' : (e && e.erreur) || 'Erreur.'); });
+}
+
+/* Bureau : onglet « 🏅 À l'honneur » — classement du RRD Challenge, voix des collègues, confirmation pour le site. */
+var HON = { photo: { equipe: '', employe: '' }, mois: '' };
+function ongletHonneur(data, msg) {
+  var rendre = function (d) {
+    HON.mois = d.mois; HON.d = d; HON.photo = { equipe: '', employe: '' };
+    var dir = D.utilisateur.role === 'management', h = entete() + (msg ? '<div class="okb">' + esc(msg) + '</div>' : '');
+    var moisPrec = (function () { var p = d.aujourdhui.split('-'), y = +p[0], m = +p[1] - 1; if (m < 1) { m = 12; y--; } return y + '-' + (m < 10 ? '0' : '') + m; })();
+    h += '<div class="card"><b>🏅 À l\'honneur sur le site redrebel.us</b><div class="mut">Équipe du mois = 1re du RRD Challenge. Employé(e) du mois = vote des collègues dans l\'application (du ' + d.debut + ' à la fin du mois). Rien n\'est publié avant votre confirmation ; la photo seulement après le « oui » donné sur le téléphone de la station.</div>' +
+      '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">' + [d.aujourdhui.slice(0, 7), moisPrec].map(function (m) { return '<button class="' + (m === d.mois ? '' : 'sec') + '" style="padding:6px 10px" onclick="honMois(\'' + m + '\')">' + esc(moisFr(m)) + '</button>'; }).join('') + '</div></div>';
+    var fait = {}; d.honneur.filter(function (x) { return !x.retire; }).forEach(function (x) { fait[x.genre] = x; });
+    ['equipe', 'employe'].forEach(function (g) {
+      var x = fait[g];
+      if (!x) return;
+      h += '<div class="okb"><b>' + (g === 'equipe' ? '👥 Équipe du mois' : '⭐ Employé(e) du mois') + ' — publié(e)</b><br>' + esc(x.station_nom) + ' : ' + esc(x.noms) + (x.pourquoi ? '<br><i>' + esc(x.pourquoi) + '</i>' : '') +
+        '<div class="mut">Confirmé par ' + esc(x.confirme_par) + ' · photo : ' + (!x.photo ? 'aucune' : x.accord === 'oui' ? 'en ligne (accord donné)' : x.accord === 'non' ? 'refusée par la station' : 'en attente de l\'accord de la station') + '</div>' +
+        (dir ? '<button class="sec" style="margin-top:6px;padding:6px 10px" onclick="honRetirer(\'' + g + '\')">Retirer du site</button>' : '') + '</div>';
+    });
+    h += '<h2>👥 Équipe du mois — RRD Challenge ' + esc(moisFr(d.mois)) + '</h2>';
+    if (d.challenge_erreur) h += '<div class="err">' + esc(d.challenge_erreur) + '</div>';
+    if (!d.challenge.length) h += '<p class="mut">Pas encore de points ce mois-ci dans « RRD Challenge (points) ».</p>';
+    else h += '<table><tr><th>#</th><th>Station</th><th class="n">Points</th><th class="n">Jours</th></tr>' + d.challenge.map(function (c, i) { return '<tr><td>' + (i + 1) + '</td><td>' + esc(c.nom) + '</td><td class="n">' + fmt(c.points) + '</td><td class="n">' + c.jours + '</td></tr>'; }).join('') + '</table>' +
+      '<p class="mut">Points du tableau « RRD Challenge (points) » de l\'Activity Log. En cas d\'égalité, les règles de départage du Challenge s\'appliquent.</p>';
+    var premier = d.challenge[0] ? d.challenge[0].code : '';
+    if (dir) h += '<label>Station</label><select id="honEqSt" onchange="honEqNoms()">' + d.stations.map(function (s) { return '<option value="' + esc(s.code) + '"' + (s.code === premier ? ' selected' : '') + '>' + esc(s.nom) + '</option>'; }).join('') + '</select>' +
+      '<label>Prénoms de l\'équipe (d\'après les rapports du mois)</label><textarea id="honEqNoms" maxlength="300"></textarea>' +
+      '<label>Une phrase pour le site (facultatif)</label><input id="honEqPq" maxlength="240" placeholder="ex. 1re du RRD Challenge : rapports à l\'heure tout le mois">' +
+      '<label>Photo de l\'équipe (facultatif)</label><input type="file" accept="image/*" onchange="honPhoto(this,\'equipe\')"><div id="honPh_equipe" class="mut"></div>' +
+      '<div style="margin-top:8px"><button onclick="honConfirmer(\'equipe\')">Confirmer l\'équipe du mois</button></div>';
+    h += '<h2>⭐ Employé(e) du mois — votes ' + esc(moisFr(d.mois)) + '</h2><p class="mut">' + d.votants + ' votant(s)' + (d.ouvert && d.mois === d.aujourdhui.slice(0, 7) ? ' · vote ouvert jusqu\'à la fin du mois' : d.mois === d.aujourdhui.slice(0, 7) ? ' · le vote ouvre le ' + d.debut : '') + '</p>';
+    if (!d.votes.length) h += '<p class="mut">Aucune voix pour l\'instant.</p>';
+    else h += '<table><tr><th>Employé(e)</th><th>Station</th><th class="n">Voix</th></tr>' + d.votes.map(function (v) { return '<tr><td>' + esc(v.nom) + '</td><td>' + esc(v.station_nom) + '</td><td class="n">' + v.voix + '</td></tr>'; }).join('') + '</table>';
+    if (dir && d.votes.length) h += '<label>Employé(e) choisi(e)</label><select id="honEm">' + d.votes.map(function (v, i) { return '<option value="' + i + '">' + esc(v.nom + ' — ' + v.station_nom + ' (' + v.voix + ' voix)') + '</option>'; }).join('') + '</select>' +
+      '<label>Une phrase pour le site (facultatif)</label><input id="honEmPq" maxlength="240" placeholder="ex. Choisi(e) par ses collègues pour son accueil">' +
+      '<label>Photo (facultatif)</label><input type="file" accept="image/*" onchange="honPhoto(this,\'employe\')"><div id="honPh_employe" class="mut"></div>' +
+      '<div style="margin-top:8px"><button onclick="honConfirmer(\'employe\')">Confirmer l\'employé(e) du mois</button></div>';
+    view(h);
+    if (dir) honEqNoms();
+  };
+  if (data) return rendre(data);
+  call('honneur', { mois: HON.mois || '' }).then(function (d) { rendre(d); }).catch(errTab);
+}
+function moisFr(m) { var n = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre']; return (n[+m.slice(5, 7) - 1] || '') + ' ' + m.slice(0, 4); }
+function honMois(m) { HON.mois = m; charge(); ongletHonneur(); }
+function honEqNoms() {
+  var st = $('honEqSt') && $('honEqSt').value, e = (HON.d && HON.d.equipes && HON.d.equipes[st]) || [];
+  if ($('honEqNoms')) $('honEqNoms').value = e.map(function (n) { return String(n).trim().split(/\s+/)[0]; }).filter(function (x, i, a) { return x && a.indexOf(x) === i; }).join(', ');
+}
+function honPhoto(inp, genre) {
+  var f = inp.files && inp.files[0]; if (!f) return;
+  var url = URL.createObjectURL(f), img = new Image();
+  img.onload = function () {
+    var k = Math.min(1, 1200 / Math.max(img.width, img.height)), cv = document.createElement('canvas'); cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
+    cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height); HON.photo[genre] = cv.toDataURL('image/jpeg', 0.8); URL.revokeObjectURL(url);
+    $('honPh_' + genre).textContent = '📷 Photo prête (elle ne sera publiée qu\'après l\'accord de la station).';
+  };
+  img.onerror = function () { alerte('Photo illisible.'); };
+  img.src = url;
+}
+function honConfirmer(genre) {
+  var d = HON.d, p = { mois: d.mois, genre: genre, photo: HON.photo[genre] || '' };
+  if (genre === 'equipe') { p.station = $('honEqSt').value; p.noms = $('honEqNoms').value; p.pourquoi = $('honEqPq').value; }
+  else { var v = d.votes[Number($('honEm').value)]; if (!v) return alerte('Choisissez l\'employé(e).'); p.station = v.station; p.noms = v.nom; p.pourquoi = $('honEmPq').value; }
+  if (!String(p.noms || '').trim()) return alerte('Écrivez les prénoms.');
+  if (!confirm('Publier sur le site redrebel.us : ' + (genre === 'equipe' ? 'équipe' : 'employé(e)') + ' du mois de ' + moisFr(d.mois) + ' — ' + p.noms + ' ?' + (p.photo ? '\nLa photo attendra l\'accord donné sur le téléphone de la station.' : ''))) return;
+  call('honneurConfirmer', p).then(function (r) { ongletHonneur(r, 'Publié sur le site (prénoms seulement).'); }).catch(function (e) { alerte(e.erreur || 'Pas de connexion.'); });
+}
+function honRetirer(genre) {
+  if (!confirm('Retirer du site ? La photo redevient privée.')) return;
+  call('honneurRetirer', { mois: HON.mois, genre: genre }).then(function (r) { ongletHonneur(r, 'Retiré du site.'); }).catch(function (e) { alerte(e.erreur || 'Pas de connexion.'); });
 }
 
 var D = null, T = { onglet: 'rapports', du: '', au: '', station: '', date: '' }, R = null, CORR = null, ANNUL = null;
@@ -1768,7 +1902,7 @@ function exporterCsv() {
 }
 
 function entete() {
-  var tabs = [['rapports', 'Rapports'], ['analyse', '📊 Analyse'], ['resume', 'Résumé du jour'], ['photos', '📷 Photos'], ['bordereaux', '🧾 Bordereaux'], ['stock', IC_CITERNE + ' Stock'], ['camion', '🚚 Camion'], ['livrer', '🧭 À livrer'], ['argent', '💵 Argent'], ['messages', '✉️ Messages'], ['chat', '💬 Chat'], ['demandes', '📝 Demandes'], ['prix', 'Prix']];
+  var tabs = [['rapports', 'Rapports'], ['analyse', '📊 Analyse'], ['resume', 'Résumé du jour'], ['photos', '📷 Photos'], ['bordereaux', '🧾 Bordereaux'], ['stock', IC_CITERNE + ' Stock'], ['camion', '🚚 Camion'], ['livrer', '🧭 À livrer'], ['argent', '💵 Argent'], ['messages', '✉️ Messages'], ['chat', '💬 Chat'], ['demandes', '📝 Demandes'], ['honneur', '🏅 À l\'honneur'], ['prix', 'Prix']];
   if (D.utilisateur.role === 'management') tabs.push(['appareils', 'Téléphones']);
   return '<h1>Tableau de bord</h1><div class="sub">' + esc(D.utilisateur.nom) + ' · ' + (D.utilisateur.role === 'management' ? 'Direction' : 'Comptabilité') + ' · montants en ' + DEV + ' · <a href="#" onclick="changerCode();return false">Changer de code</a></div>' +
     '<div class="mut">Version ' + VERSION_APP + ' (build ' + (window.RRD_BUILD || 0) + ')' + (S.majPrete ? ' — <b>mise à jour ' + esc(S.majPrete) + ' prête : fermez l\'application puis rouvrez-la</b>' : S.majErreur ? ' — mise à jour impossible : ' + esc(S.majErreur) : '') + '</div>' +
@@ -1776,7 +1910,7 @@ function entete() {
 }
 function charge() { view(entete() + '<p class="mut center">Chargement…</p>'); }
 function errTab(e) { view(entete() + '<div class="err">' + esc(e.reseau ? 'Pas de connexion. Réessayez.' : e.erreur) + '</div>', '<button class="sec" onclick="tableau(T.onglet)">Réessayer</button>'); }
-function tableau(o) { T.retour = ''; T.onglet = o; charge(); ({ rapports: ongletRapports, analyse: function () { ongletAnalyse(); }, resume: ongletResume, photos: ongletPhotos, bordereaux: ongletBordereaux, stock: function () { ongletStock(); }, camion: function () { ongletCamion(); }, livrer: function () { ongletLivrer(); }, chat: function () { ecranChat(); }, demandes: function () { ongletDemandes(); }, argent: function () { ongletArgent(); }, messages: function () { ongletMessages(); }, prix: ongletPrix, appareils: ongletAppareils })[o](); }
+function tableau(o) { T.retour = ''; T.onglet = o; charge(); ({ rapports: ongletRapports, analyse: function () { ongletAnalyse(); }, resume: ongletResume, photos: ongletPhotos, bordereaux: ongletBordereaux, stock: function () { ongletStock(); }, camion: function () { ongletCamion(); }, livrer: function () { ongletLivrer(); }, chat: function () { ecranChat(); }, demandes: function () { ongletDemandes(); }, honneur: function () { ongletHonneur(); }, argent: function () { ongletArgent(); }, messages: function () { ongletMessages(); }, prix: ongletPrix, appareils: ongletAppareils })[o](); }
 function badgeEcart(e) {
   if (e === null || e === undefined) return '<span class="badge b-warn">prix manquant</span>';
   if (Math.abs(e) < 1) return '<span class="badge b-ok">écart 0</span>';
