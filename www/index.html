@@ -75,7 +75,7 @@ try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugin
 </script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.33.0';
+var VERSION_APP = '1.34.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -958,7 +958,7 @@ function quandHaiti(date, h, m) {   // l'instant (ms) où il est h:m à l'heure 
 function ntDemarrer() {
   if (!LN) return pushDemarrer();
   LN.checkPermissions().then(function (p) { return p.display === 'granted' ? p : LN.requestPermissions(); })
-    .then(function (p) { NT.ok = p.display === 'granted'; msgCharger(true); ntBientot(); fond('accueil', accueil); }).catch(function () { NT.ok = false; })
+    .then(function (p) { NT.ok = p.display === 'granted'; msgCharger(true); ntBientot(); msgFond(); }).catch(function () { NT.ok = false; })
     .then(pushDemarrer);
 }
 /* Notifications poussées (Firebase) : un message de la direction écrit pendant que l'application est fermée arrive quand même sur le
@@ -1002,7 +1002,7 @@ var CM_NOMS = { livraison: '🚚 Livraison', paiement: '💵 Paiement reçu', ch
 function cmCode() { return 'CAM:' + ((CFG.get('camion', {}) || {}).code || ''); }
 function cmDev() { return (CM.d && CM.d.devise) || DEV; }
 function cmMiens() { var c = cmCode(); return phTous().then(function (l) { return l.filter(function (r) { return r.genre === 'cam' && r.station === c; }); }); }
-function demarrerCamion() { CM.d = CFG.get('camInit', null); CM.sug = CFG.get('camSug', null); camAccueil(); cmActualiser(); chDemarrer(); }
+function demarrerCamion() { CM.d = CFG.get('camInit', null); CM.sug = CFG.get('camSug', null); camAccueil(); cmActualiser(); chDemarrer(); ntDemarrer(); }
 function cmActualiser(manuel) {
   if (CFG.get('role', '') !== 'camion' || !CFG.get('jeton', '')) return;
   majNet('envoi…');
@@ -1011,7 +1011,7 @@ function cmActualiser(manuel) {
     if (d.mode !== 'camion') return;
     CM.d = d; CFG.set('camInit', d); CFG.set('camion', d.camion);
     if (manuel) { if (S.ecran === 'camion') camAccueil('À jour.'); } else fond('camion', function () { camAccueil(); });
-    cmSugCharger();
+    cmSugCharger(); msgCharger(manuel);
   }).catch(function (e) {
     majNet(e && e.reseau ? '○ hors ligne' : '● en ligne');
     if (e && (e.code === 'NON_ENREGISTRE' || e.code === 'DESACTIVE')) { CFG.set('jeton', ''); CFG.set('role', ''); return ecranEnregistrer(e.erreur); }
@@ -1050,6 +1050,7 @@ function camAccueil(msg, err) {
       h += '<div class="err">❌ ' + esc(CM_NOMS[r.op] || r.op) + ' refusé(e) par le bureau :\n' + esc(r.erreur || '') + '\n<button class="sec" style="margin-top:8px" onclick="cmVu(\'' + esc(r.cid) + '\')">J\'ai compris</button></div>';
     });
     if (!d.clients) h += '<div class="note">Liste des clients pas encore reçue. Il faut internet une première fois.</div>';
+    h += msgHtml();
     h += '<button class="bigbtn" onclick="cmForm(\'livraison\')">🚚 Nouvelle livraison</button><button class="bigbtn sec" onclick="cmForm(\'paiement\')">💵 Paiement reçu d\'un client</button><button class="bigbtn sec" onclick="cmForm(\'achat\')">⛽ Chargement ou achat</button><button class="bigbtn sec" onclick="cmForm(\'photo\')">📷 Photo (compteur du client, station, autre)</button>' +
       (chPossible() ? '<button class="bigbtn sec" onclick="ecranChat()">💬 Chat<span class="chBadge">' + chBadgeTxt() + '</span></button>' : '');
     var rap = function (date) {   // '' = pas fait, sinon 'att' ou 'ok'
@@ -1461,8 +1462,9 @@ function ttScanFin() {
 }
 function ntBientot() { if (!LN) return; clearTimeout(NT.timer); NT.timer = setTimeout(ntPlanifier, 1500); }
 function ntPlanifier() {
-  if (!LN || NT.ok === false || CFG.get('role', '') || !CFG.get('jeton', '')) return;
+  if (!LN || NT.ok === false || !msgRole() || !CFG.get('jeton', '')) return;
   if (NT.enCours) return ntBientot();
+  var camion = CFG.get('role', '') === 'camion';   // camion : seulement les conseils et messages, pas les rappels de photos ni de rapport
   NT.enCours = true;
   Promise.all([phMiens().catch(function () { return []; }), tous().catch(function () { return []; })]).then(function (x) {
     var photos = x[0], rapports = x[1], now = Date.now(), jh = phJourHeure(now), plan = [];
@@ -1472,7 +1474,7 @@ function ntPlanifier() {
       return photos.some(function (r) { return r.date === date && (h === null || r.heure === h) && r.type === type && r.statut !== 'rejete'; }) ||
         (!!srv && date === jh.date && Object.keys(srv.faits).some(function (k) { return (h === null || Number(k) === h) && srv.faits[k].indexOf(type) >= 0; }));
     };
-    for (var d = 0; d < 3; d++) {
+    for (var d = 0; d < 3 && !camion; d++) {
       var date = jourPlus(jh.date, d);
       if (suivie) PH_HEURES.forEach(function (h) {
         if (types.every(function (t) { return fait(date, h, t); })) return;
@@ -1504,8 +1506,10 @@ function ntPlanifier() {
   }).catch(function () { }).then(function () { NT.enCours = false; });
 }
 /* Messages et conseils de la direction : pris au bureau (au plus toutes les 10 minutes, ou tout de suite si « force »), gardés sur le téléphone. */
+function msgRole() { var r = CFG.get('role', ''); return !r || r === 'camion'; }   // conseils et messages : stations et camions (build 74)
+function msgFond() { if (CFG.get('role', '') === 'camion') fond('camion', function () { camAccueil(); }); else fond('accueil', accueil); }
 function msgCharger(force) {
-  if (CFG.get('role', '') || !CFG.get('jeton', '') || (!force && Date.now() - NT.msgLe < 10 * 60000)) return;
+  if (!msgRole() || !CFG.get('jeton', '') || (!force && Date.now() - NT.msgLe < 10 * 60000)) return;
   NT.msgLe = Date.now();
   api('messages').then(function (d) {
     var l = d.messages || [], vus = CFG.get('msgVus', []), ch = false;
@@ -1518,7 +1522,7 @@ function msgCharger(force) {
     });
     Object.keys(reps).forEach(function (k) { if (!garde[k] && reps[k].statut === 'attente') garde[k] = reps[k]; else if (!garde[k]) chR = true; });
     if (chR) CFG.set('reponses', garde);
-    CFG.set('messages', l); ntBientot(); repEnvoyer(); fond('accueil', accueil); }).catch(function () { });
+    CFG.set('messages', l); ntBientot(); repEnvoyer(); msgFond(); }).catch(function () { });
 }
 function msgHtml() {   // sur l'écran d'accueil : les conseils et messages d'aujourd'hui et d'hier dont l'heure est passée
   var now = Date.now(), jh = phJourHeure(now), hier = jourPlus(jh.date, -1), h = '';
@@ -1539,32 +1543,33 @@ function msgHtml() {   // sur l'écran d'accueil : les conseils et messages d'au
 /* Réponse de la station à un conseil ou à un message : écrite sur le téléphone, gardée si pas de signal, envoyée dès que possible. */
 function msgRepondre(id) {
   var m = (CFG.get('messages', []) || []).filter(function (x) { return Number(x.id) === Number(id); })[0];
-  if (!m) return accueil();
+  if (!m) return msgRetour();
   S.ecran = 'reponse';
   view('<h2>' + (m.type === 'conseil' ? '💡 Conseil du jour' : '✉️ Message de la direction') + '</h2>' +
     '<div class="note" style="white-space:pre-line">' + esc(m.texte) + '</div>' +
     '<label>Votre réponse</label><textarea id="rTexte" maxlength="500" placeholder="Écrivez en une phrase ce que vous allez faire."></textarea>' +
     '<p class="mut">Une phrase avec vos mots. « ok » ou « vu » ne suffit pas.</p>' +
     '<div style="margin-top:10px"><button onclick="msgRepValider(' + Number(m.id) + ')">Envoyer la réponse</button></div>' +
-    '<div style="margin-top:10px"><button class="sec" onclick="accueil()">Retour</button></div>');
+    '<div style="margin-top:10px"><button class="sec" onclick="msgRetour()">Retour</button></div>');
 }
+function msgRetour() { if (CFG.get('role', '') === 'camion') camAccueil(); else accueil(); }
 function msgRepValider(id) {
   var t = String($('rTexte').value || '').trim();
   if (t.length < 10 || t.split(/\s+/).length < 3) return alerte('Écrivez une phrase complète (au moins trois mots).');
   var reps = CFG.get('reponses', {}) || {};
   reps[id] = { texte: t.slice(0, 500), ecrit_ms: Date.now(), cid: 'R' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8), statut: 'attente' };
   CFG.set('reponses', reps);
-  accueil(); repEnvoyer();
+  msgRetour(); repEnvoyer();
 }
 var REP = { envoi: false };
 function repEnvoyer() {
-  if (REP.envoi || !CFG.get('jeton', '') || CFG.get('role', '')) return;
+  if (REP.envoi || !CFG.get('jeton', '') || !msgRole()) return;
   var reps = CFG.get('reponses', {}) || {}, ids = Object.keys(reps).filter(function (k) { return reps[k].statut === 'attente'; });
   if (!ids.length) return;
   REP.envoi = true;
   var i = 0;
   (function suivant() {
-    if (i >= ids.length) { REP.envoi = false; fond('accueil', accueil); return; }
+    if (i >= ids.length) { REP.envoi = false; msgFond(); return; }
     var id = ids[i++], r = reps[id];
     api('reponse', { payload: { msg_id: Number(id), texte: r.texte, ecrit_ms: r.ecrit_ms, cid: r.cid } }).then(function () {
       var cur = CFG.get('reponses', {}) || {}; if (cur[id]) { cur[id].statut = 'envoye'; CFG.set('reponses', cur); }
@@ -1572,7 +1577,7 @@ function repEnvoyer() {
     }, function (e) {
       if (e && e.reseau === false && e.code !== 'SERVEUR') {   // refusée par le bureau (message supprimé, etc.) : on ne réessaie pas sans fin
         var cur = CFG.get('reponses', {}) || {}; delete cur[id]; CFG.set('reponses', cur);
-        if (S.ecran === 'accueil') alerte(e.erreur || 'Réponse refusée.');
+        if (S.ecran === 'accueil' || S.ecran === 'camion') alerte(e.erreur || 'Réponse refusée.');
         suivant();
       } else { REP.envoi = false; }   // pas de signal : nouvel essai plus tard
     });
@@ -2302,7 +2307,8 @@ function ongletMessages(data, msg) {
   var rendre = function (d) {
     var gestion = D.utilisateur.role === 'management', h = entete();
     if (msg) h += '<div class="okb">' + esc(msg) + '</div>';
-    if (gestion) h += '<h2>Nouveau message</h2><label>Pour</label><select id="mCible"><option value="TOUS">Toutes les stations</option>' + d.stations.map(function (s) { return '<option value="' + esc(s.code) + '">' + esc(s.nom) + '</option>'; }).join('') + '</select>' +
+    if (gestion) h += '<h2>Nouveau message</h2><label>Pour</label><select id="mCible"><option value="TOUS">Toutes les stations</option>' + d.stations.map(function (s) { return '<option value="' + esc(s.code) + '">' + esc(s.nom) + '</option>'; }).join('') +
+      ((d.camions || []).length ? '<option value="CAMIONS">🚚 Tous les camions</option>' + d.camions.map(function (c) { return '<option value="' + esc(c.code) + '">' + esc(c.nom) + '</option>'; }).join('') : '') + '</select>' +
       '<label>Genre</label><select id="mType"><option value="conseil">💡 Conseil du jour</option><option value="message">✉️ Message</option></select>' +
       '<label>Quand</label><select id="mQuand" onchange="msgQuand()"><option value="maintenant">Envoyer maintenant</option><option value="plus_tard">Programmer pour plus tard</option></select>' +
       '<div class="row" id="mPlus" style="display:none"><div><label>Jour</label><input type="date" id="mDate" value="' + d.aujourdhui + '" min="' + d.aujourdhui + '"></div><div><label>Heure (heure d\'Haïti)</label><input type="time" id="mHeure" value="06:30"></div></div>' +

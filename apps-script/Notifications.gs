@@ -75,6 +75,12 @@ function fcm_(corps) {
   return dernier;
 }
 
+/** « TOUS » = toutes les stations (pas les camions) ; « CAMIONS » = tous les camions ; sinon un code exact (station ou « CAM:1 »). */
+function pourTel_(cible, station) {
+  cible = String(cible).trim().toUpperCase();
+  if (station.indexOf('CAM:') === 0) return cible === 'CAMIONS' || cible === station;
+  return cible === 'TOUS' || cible === station;
+}
 function traiter_() {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(8000)) return { ok: true, occupe: true };
@@ -108,7 +114,7 @@ function traiter_() {
       if (hA.push !== undefined && hA.station !== undefined) {
         shA.getRange(2, 1, shA.getLastRow() - 1, shA.getLastColumn()).getValues().forEach(function (r, i) {
           var st = String(r[hA.station]).trim().toUpperCase(), jeton = String(r[hA.push] || '').trim();
-          if (!jeton || !st || st === 'DIRECTION' || st === 'COMPTA' || st.indexOf('TR:') === 0 || st.indexOf('CAM:') === 0) return;   // conseils et messages : stations seulement
+          if (!jeton || !st || st === 'DIRECTION' || st === 'COMPTA' || st.indexOf('TR:') === 0) return;   // conseils et messages : stations et camions (27/11/2026)
           if (hA.actif !== undefined && !/^(oui|true|yes|1)$/i.test(String(r[hA.actif]).trim())) return;
           if (hA.jeton !== undefined && !String(r[hA.jeton] || '').trim()) return;   // code libéré
           tel.push({ ligne: i + 2, station: st, push: jeton, vu: hA.msg_vu_le === undefined ? '' : txt(r[hA.msg_vu_le], 'yyyy-MM-dd HH:mm:ss'), col: hA.push + 1 });
@@ -120,7 +126,7 @@ function traiter_() {
     for (var k = 0; k < dus.length && !stop; k++) {
       var m = dus[k], recus = [];
       if (!m.tropTard && m.texte) {
-        var cibles = tel.filter(function (t) { return (m.cible === 'TOUS' || m.cible.toUpperCase() === t.station) && t.vu && (!m.cree || t.vu < m.cree); });   // t.vu vide : le téléphone n'a encore jamais pris ses messages, il le fait à l'ouverture
+        var cibles = tel.filter(function (t) { return pourTel_(m.cible, t.station) && t.vu && (!m.cree || t.vu < m.cree); });   // t.vu vide : le téléphone n'a encore jamais pris ses messages, il le fait à l'ouverture
         for (var j = 0; j < cibles.length; j++) {
           var t = cibles[j], r = fcm_(corps_(t.push, m));
           if (r.code === 200) { envoyes++; if (recus.indexOf(t.station) < 0) recus.push(t.station); }

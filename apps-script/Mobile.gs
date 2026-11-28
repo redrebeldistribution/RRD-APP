@@ -14,7 +14,7 @@
  * Installation (une seule fois) : exécuter installerMobile(), puis Déployer › Gérer les déploiements › ✏️ › Nouvelle version.
  */
 
-var MOBILE_VERSION = 'm1.37';
+var MOBILE_VERSION = 'm1.38';
 var TRANSFERTS_SHEET_ID = '1TmjlsDmogSWElqWNmPfON9S-dvouCbEgOHnWl8iPRnA';   // feuille des transferts (onglet « Agents transferts »)
 var STATION_FORMATION = 'TST', MAX_APPAREILS_FORMATION = 50;   // les codes de la station de test servent à la formation : plusieurs téléphones avec le même code (propriétaire, 26/11/2026)
 var MAX_APPAREILS_ROLE = 5;   // un code DIR ou CPT peut servir sur 5 appareils en même temps (demande du propriétaire, 26/11/2026)
@@ -1109,12 +1109,22 @@ function msgLire_() {
   });
 }
 function msgJour_(n) { return Utilities.formatDate(new Date(Date.now() + n * 864e5), TZ, 'yyyy-MM-dd'); }
-/** Pour le téléphone d'une station : ses messages actifs, d'avant-hier à dans 14 jours. */
+/** m1.38 (27/11/2026) : les conseils aussi pour les chauffeurs. Pour qui est un message : « TOUS » = toutes les stations (pas les camions),
+ * « CAMIONS » = tous les camions, « CAM:1 » = un camion, sinon le code d'une station. msgCode_ : le code qui reçoit et répond, ou ''. */
+function msgCode_(app) {
+  if (app.role === 'camion' && app.camion) return 'CAM:' + app.camion.code;
+  return (!app.role && app.station) ? String(app.station.code) : '';
+}
+function msgPour_(m, code) {
+  if (code.indexOf('CAM:') === 0) return m.cible === 'CAMIONS' || m.cible === code;
+  return m.cible === 'TOUS' || m.cible === code;
+}
+/** Pour le téléphone d'une station ou d'un camion : ses messages actifs, d'avant-hier à dans 14 jours. */
 function messagesStation_(app) {
-  if (app.role || !app.station) throw new UserError('Réservé au téléphone de la station.', 'FORBIDDEN');
-  var code = String(app.station.code), du = msgJour_(-2), au = msgJour_(14);
+  var code = msgCode_(app), du = msgJour_(-2), au = msgJour_(14);
+  if (!code) throw new UserError('Réservé au téléphone d\'une station ou d\'un camion.', 'FORBIDDEN');
   var miennes = {}; repLire_().forEach(function (r) { if (r.station === code) miennes[r.msg_id] = r.texte; });   // la dernière réponse de cette station à chaque message
-  var l = msgLire_().filter(function (m) { return m.actif && (m.cible === 'TOUS' || m.cible === code) && m.date >= du && m.date <= au; })
+  var l = msgLire_().filter(function (m) { return m.actif && msgPour_(m, code) && m.date >= du && m.date <= au; })
     .map(function (m) { return { id: m.id, date: m.date, heure: m.heure, type: m.type, texte: m.texte, pousse: m.pousse_a.indexOf(code) >= 0, reponse: miennes[m.id] || '' }; });
   try { majColonne_(APPAREILS, app.ligne._ligne, 'msg_vu_le', maintenant_()); } catch (e) { }   // ce téléphone a maintenant ces messages : inutile de les lui pousser
   return { date: msgJour_(0), messages: l };
@@ -1151,10 +1161,12 @@ function pushReveiller_() {
   } catch (e) { }
 }
 function messagesListe_() {
-  var noms = { TOUS: 'Toutes les stations' }; stations_().forEach(function (s) { noms[String(s.code)] = String(s.nom); });
+  var noms = { TOUS: 'Toutes les stations', CAMIONS: '🚚 Tous les camions' }; stations_().forEach(function (s) { noms[String(s.code)] = String(s.nom); });
+  var cams = camions_().filter(function (c) { return c.actif; }); cams.forEach(function (c) { noms['CAM:' + c.code] = '🚚 ' + c.nom; });
   var du = msgJour_(-30), parMsg = {};
   repLire_().forEach(function (r) { (parMsg[r.msg_id] = parMsg[r.msg_id] || []).push({ station: r.station, nom: noms[r.station] || r.station, ecrit_le: r.ecrit_le, texte: r.texte }); });
   return { aujourdhui: msgJour_(0), stations: stations_().filter(function (s) { return estVrai_(s.actif); }).map(function (s) { return { code: String(s.code), nom: String(s.nom) }; }),
+    camions: cams.map(function (c) { return { code: 'CAM:' + c.code, nom: '🚚 ' + c.nom }; }),
     messages: msgLire_().filter(function (m) { return m.actif && m.date >= du; }).sort(function (a, b) { return (a.date + a.heure) < (b.date + b.heure) ? 1 : -1; })
       .map(function (m) { return { id: m.id, date: m.date, heure: m.heure, type: m.type, texte: m.texte, cible: m.cible, cible_nom: noms[m.cible] || m.cible, par: m.par, reponses: parMsg[m.id] || [] }; }) };
 }
@@ -1180,11 +1192,12 @@ function repLire_() {
   });
 }
 function reponseStation_(app, p) {
-  if (app.role || !app.station) throw new UserError('Réservé au téléphone de la station.', 'FORBIDDEN');
-  var code = String(app.station.code), texte = String(p.texte || '').trim().slice(0, 500), cid = String(p.cid || '').slice(0, 40);
+  var code = msgCode_(app);
+  if (!code) throw new UserError('Réservé au téléphone d\'une station ou d\'un camion.', 'FORBIDDEN');
+  var texte = String(p.texte || '').trim().slice(0, 500), cid = String(p.cid || '').slice(0, 40);
   if (texte.length < 3) throw new UserError('Écrivez votre réponse.');
   var m = msgLire_().filter(function (x) { return x.id === Number(p.msg_id); })[0];
-  if (!m || !m.actif || (m.cible !== 'TOUS' && m.cible !== code)) throw new UserError('Ce message n\'existe plus.');
+  if (!m || !m.actif || !msgPour_(m, code)) throw new UserError('Ce message n\'existe plus.');
   var recu = new Date(), ecrit = new Date(Number(p.ecrit_ms) || 0), note = '';
   if (!(ecrit.getTime() > 0) || ecrit.getTime() > recu.getTime() + 10 * 60000) { note = 'heure du téléphone refusée : heure de réception utilisée'; ecrit = recu; }
   var lock = LockService.getScriptLock(); lock.waitLock(20000);
@@ -1206,7 +1219,7 @@ function messageAjouter_(ctx, p) {
   if (p.maintenant === true) { date = auj; heure = Utilities.formatDate(new Date(), TZ, 'HH:mm'); }   // « Envoyer maintenant » : l'heure du bureau, pas celle de l'appareil
   if (date < auj) throw new UserError('La date est déjà passée.');
   var cible = String(p.cible || 'TOUS').trim();
-  if (cible !== 'TOUS' && !stations_().some(function (s) { return String(s.code) === cible && estVrai_(s.actif); })) throw new UserError('Station inconnue.');
+  if (cible !== 'TOUS' && cible !== 'CAMIONS' && !(cible.indexOf('CAM:') === 0 ? !!camDe_(cible) : stations_().some(function (s) { return String(s.code) === cible && estVrai_(s.actif); }))) throw new UserError('Station ou camion inconnu.');
   var type = p.type === 'conseil' ? 'conseil' : 'message';
   var lock = LockService.getScriptLock(); lock.waitLock(20000);
   try {
