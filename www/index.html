@@ -74,10 +74,10 @@ document.write('<script src="config.js?' + Date.now() + '"><\/script><script src
 /* Mise à jour automatique : on confirme tout de suite que cette version démarre bien (sinon retour automatique à la précédente). */
 try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugins.CapacitorUpdater.notifyAppReady(); } catch (e) { }
 </script>
-<script src="vente.js?v=3"></script>
+<script src="vente.js?v=4"></script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.38.0';
+var VERSION_APP = '1.38.1';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -1729,7 +1729,7 @@ var VB = { du: '', au: '', station: '' };
 function ongletVentes(data) {
   var rendre = function (d) {
     VB.du = d.du; VB.au = d.au; VB.d = d;
-    var dv = d.devise || DEV, h = entete();
+    var dv = window.VT_DEV || 'HTD', h = entete();
     h += '<div class="card noprint"><b>🧾 Ventes (pilote)</b><div class="mut">Ventes notées sur les téléphones des stations du pilote (' + d.stations.map(function (s) { return esc(s.nom); }).join(', ') + '). Prix = onglet « Prix » au jour de la vente ; une vente sans prix n\'a pas de total.</div>' +
       '<div class="row" style="gap:8px;margin-top:8px"><div><label>Du</label><input type="date" id="vbDu" value="' + esc(d.du) + '"></div><div><label>Au</label><input type="date" id="vbAu" value="' + esc(d.au) + '"></div></div>' +
       '<label>Station</label><select id="vbSt"><option value="">Toutes</option>' + d.stations.map(function (s) { return '<option value="' + esc(s.code) + '"' + (s.code === d.station ? ' selected' : '') + '>' + esc(s.nom) + '</option>'; }).join('') + '</select>' +
@@ -1760,7 +1760,7 @@ function vbCharger() { VB.du = $('vbDu').value; VB.au = $('vbAu').value; VB.stat
 function vbWhatsApp() {
   var d = VB.d; if (!d) return;
   var l = ['RRD — Ventes ' + dfr(d.du) + (d.au !== d.du ? ' au ' + dfr(d.au) : '')];
-  d.jours.forEach(function (j) { l.push('• ' + j.station_nom + ' ' + dfr(j.date).slice(0, 5) + ' : ' + j.ventes.length + ' ventes, ' + fmt(j.gallons) + ' gal, ' + fmt(j.montant) + ' ' + (d.devise || DEV) + ' (cash ' + fmt(j.cash) + ', crédit ' + fmt(j.credit) + ')' + (j.compteur !== null ? ', compteur ' + fmt(j.compteur) + ' gal' : '')); });
+  d.jours.forEach(function (j) { l.push('• ' + j.station_nom + ' ' + dfr(j.date).slice(0, 5) + ' : ' + j.ventes.length + ' ventes, ' + fmt(j.gallons) + ' gal, ' + fmt(j.montant) + ' ' + (window.VT_DEV || 'HTD') + ' (cash ' + fmt(j.cash) + ', crédit ' + fmt(j.credit) + ')' + (j.compteur !== null ? ', compteur ' + fmt(j.compteur) + ' gal' : '')); });
   if (d.credit.length) { l.push('Crédit :'); d.credit.forEach(function (c) { l.push('- ' + c.client + ' : ' + fmt(c.gallons) + ' gal, ' + fmt(c.montant)); }); }
   var a = document.createElement('a'); a.href = 'https://wa.me/?text=' + encodeURIComponent(l.join('\n')); a.target = '_blank'; a.rel = 'noopener'; document.body.appendChild(a); a.click(); a.remove();
 }

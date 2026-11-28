@@ -10,6 +10,7 @@
  * ne peut pas être effacée par la station : « Signaler une erreur » prévient le bureau, qui corrige.
  * Build 79 : bouton « Scanner le réservoir » (étiquette du client), facultatif.
  * Tant que le serveur ne connaît pas encore les ventes (pas de vente_pilote dans init), elles restent en attente sur le téléphone. */
+var VT_DEV = 'HTD';   // propriétaire 28/11/2026 : dans la caisse, « HTD » au lieu de « dollars haïtiens »
 var VT = { envoi: false, gal: 0, mode: 'cash', db: null, liste: [], res: '', scan: false };
 var VT_TAILLES = [5, 10, 20];
 var VT_STATIONS_APP = ['TST'];   // garde-fou côté téléphone : même si le serveur se trompe, l'écran ne s'ouvre que pour ces stations
@@ -147,7 +148,7 @@ function venteAccueilHtml(l) {
   if (!venteOn()) return '';
   var j = vtDuJour(l || [], dateRapport());
   return '<button class="bigbtn" onclick="ecranVente()">🧾 Vente</button>' +
-    '<p class="mut center">Aujourd\'hui : ' + j.ventes.length + ' vente(s), ' + fmt(j.gallons) + ' gal' + (j.montant ? ', ' + fmt(j.montant) + ' ' + esc(DEV) : '') + (j.attente ? ' · ⏳ ' + j.attente + ' en attente d\'envoi' : '') + '</p>';
+    '<p class="mut center">Aujourd\'hui : ' + j.ventes.length + ' vente(s), ' + fmt(j.gallons) + ' gal' + (j.montant ? ', ' + fmt(j.montant) + ' ' + esc(VT_DEV) : '') + (j.attente ? ' · ⏳ ' + j.attente + ' en attente d\'envoi' : '') + '</p>';
 }
 function vtAvecListe(x) {   // appelé par accueil() : charge les ventes du téléphone ; ne fait rien pour les autres stations
   if (!venteOn()) { VT.liste = []; return Promise.resolve(x); }
@@ -157,8 +158,8 @@ function vtAvecListe(x) {   // appelé par accueil() : charge les ventes du tél
 function vtTotalHtml() {   // total de la vente en cours et monnaie à rendre (cash)
   var prix = vtPrix(), g = Number(VT.gal) || 0;
   if (!prix) return '<div class="wait">Prix pas encore reçu du bureau : le total n\'est pas montré. Touchez « Envoyer / actualiser » avec du signal.</div>';
-  if (!(g > 0)) return '<p class="mut">Prix du bureau : ' + fmt(prix) + ' ' + esc(DEV) + ' le gallon.</p>';
-  var t = vtArr(g * prix), h = '<div class="okb" style="text-align:center"><div class="mut">' + fmt(g) + ' gal × ' + fmt(prix) + '</div><div style="font-size:34px;font-weight:800">' + fmt(t) + ' <span style="font-size:16px">' + esc(DEV) + '</span></div>';
+  if (!(g > 0)) return '<p class="mut">Prix du bureau : ' + fmt(prix) + ' ' + esc(VT_DEV) + ' le gallon.</p>';
+  var t = vtArr(g * prix), h = '<div class="okb" style="text-align:center"><div class="mut">' + fmt(g) + ' gal × ' + fmt(prix) + '</div><div style="font-size:34px;font-weight:800">' + fmt(t) + ' <span style="font-size:16px">' + esc(VT_DEV) + '</span></div>';
   if (VT.mode === 'cash') {
     var r = Number(VT.recu) || 0;
     if (r > 0) h += r >= t ? '<div style="font-size:20px;margin-top:6px">Monnaie à rendre : <b>' + fmt(vtArr(r - t)) + '</b></div>' : '<div style="font-size:18px;margin-top:6px;color:var(--bad)">Il manque ' + fmt(vtArr(t - r)) + '</div>';
@@ -173,7 +174,7 @@ function ecranVente(msg) {
   vtMiennes().then(function (l) { return l; }, function () { return []; }).then(function (l) {
     var j = vtDuJour(l, dateRapport());
     var h = '<h1>🧾 Vente</h1><div class="sub">Journée du ' + dfr(dateRapport()) + ' · ' + j.ventes.length + ' vente(s), ' + fmt(j.gallons) + ' gal' +
-      (j.montant ? ' · ' + fmt(j.montant) + ' ' + esc(DEV) + ' (cash ' + fmt(j.cash_montant) + ', crédit ' + fmt(j.credit_montant) + ')' : '') + '</div>';
+      (j.montant ? ' · ' + fmt(j.montant) + ' ' + esc(VT_DEV) + ' (cash ' + fmt(j.cash_montant) + ', crédit ' + fmt(j.credit_montant) + ')' : '') + '</div>';
     if (msg) h += '<div class="okb">' + esc(msg) + '</div>';
     if (j.attente && !vtServeurPret()) h += '<div class="note">Essai : les ventes restent sur ce téléphone tant que le bureau n\'a pas ouvert la réception des ventes.</div>';
     else if (j.attente) h += '<div class="wait">⏳ ' + j.attente + ' en attente d\'envoi. Elles partiront toutes seules dès qu\'il y aura du signal.</div>';
@@ -199,7 +200,7 @@ function ecranVente(msg) {
       recentes.forEach(function (r) {
         var s = j.signalees[r.cid], m = vtMontant(r);
         var etat = r.statut === 'envoye' ? '✅' : r.statut === 'attente' ? '⏳' : '❌';
-        h += '<div class="card"><div class="row"><div><b>' + fmt(r.gallons) + ' gal</b>' + (m !== null ? ' · <b>' + fmt(m) + ' ' + esc(DEV) + '</b>' : '') + ' · ' + (r.paiement === 'credit' ? 'Crédit ' + esc(r.client || '') : 'Cash') +
+        h += '<div class="card"><div class="row"><div><b>' + fmt(r.gallons) + ' gal</b>' + (m !== null ? ' · <b>' + fmt(m) + ' ' + esc(VT_DEV) + '</b>' : '') + ' · ' + (r.paiement === 'credit' ? 'Crédit ' + esc(r.client || '') : 'Cash') +
           '<div class="mut">' + esc(r.heure || '') + (r.recu_no ? ' · reçu ' + esc(r.recu_no) : '') + (r.reservoir ? ' · 🔳 ' + esc(r.reservoir) : '') + ' ' + etat + (s ? ' · ⚠️ erreur signalée' : '') + (r.statut === 'rejete' ? ' · refusée : ' + esc(r.erreur || '') : '') + '</div></div>' +
           '<div style="text-align:right;flex:none;display:flex;flex-direction:column;gap:6px"><button class="sec" style="padding:8px 10px;font-size:14px" onclick="vtEcranRecu(\'' + esc(r.cid) + '\')">🧾 Reçu</button>' +
           (s ? '' : '<button class="sec" style="padding:8px 10px;font-size:14px" onclick="vtSignaler(\'' + esc(r.cid) + '\')">Signaler une erreur</button>') + '</div></div></div>';
@@ -259,7 +260,7 @@ function vtRecuLignes(r) {
   var l = ['RED REBEL DISTRIBUTION', 'Propane - ' + (st.nom || r.station || ''), 'Reçu n° ' + (r.recu_no || r.cid), d + ' ' + (r.heure || ''), '--------------------------------',
     'Propane : ' + n(r.gallons) + ' gal' + (Number(r.prix_vu) > 0 ? ' x ' + n(r.prix_vu) : '')];
   if (r.reservoir) l.push('Réservoir : ' + r.reservoir);
-  if (m !== null) l.push('TOTAL : ' + n(m) + ' ' + DEV);
+  if (m !== null) l.push('TOTAL : ' + n(m) + ' ' + VT_DEV);
   if (r.paiement === 'credit') l.push('Paiement : à crédit - ' + (r.client || ''));
   else { l.push('Paiement : cash'); if (Number(r.recu_client) > 0) { l.push('Reçu : ' + n(r.recu_client)); l.push('Monnaie rendue : ' + n(r.monnaie || 0)); } }
   l.push('--------------------------------', 'Merci de votre confiance !');
@@ -372,6 +373,6 @@ function vtControleHtml(date, galCompteur) {
     var cls = Math.abs(manque) <= Math.max(2, 0.02 * galCompteur) ? 'okb' : 'wait';
     return '<div class="' + cls + '">🧾 Ventes notées : ' + fmt(j.gallons) + ' gal (' + j.ventes.length + ' vente(s)) · Compteur : ' + fmt(galCompteur) + ' gal' +
       (manque > 0 ? ' · ' + fmt(manque) + ' gal sans vente notée' : manque < 0 ? ' · ' + fmt(-manque) + ' gal de plus que le compteur' : '') +
-      (j.montant ? '<br>Argent des ventes : cash ' + fmt(j.cash_montant) + ' · crédit ' + fmt(j.credit_montant) + ' ' + esc(DEV) + (j.sans_prix ? ' · ' + j.sans_prix + ' vente(s) sans prix' : '') : '') + '</div>';
+      (j.montant ? '<br>Argent des ventes : cash ' + fmt(j.cash_montant) + ' · crédit ' + fmt(j.credit_montant) + ' ' + esc(VT_DEV) + (j.sans_prix ? ' · ' + j.sans_prix + ' vente(s) sans prix' : '') : '') + '</div>';
   }, function () { return ''; });
 }
