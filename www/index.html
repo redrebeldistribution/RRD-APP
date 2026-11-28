@@ -73,6 +73,7 @@ document.write('<script src="config.js?' + Date.now() + '"><\/script><script src
 /* Mise à jour automatique : on confirme tout de suite que cette version démarre bien (sinon retour automatique à la précédente). */
 try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugins.CapacitorUpdater.notifyAppReady(); } catch (e) { }
 </script>
+<script src="vente.js?v=1"></script>
 <script>
 /* ======================= Outils ======================= */
 var VERSION_APP = '1.34.0';
@@ -244,9 +245,9 @@ function fondElements() {
   if (!CFG.get('jeton', '')) return Promise.resolve([]);
   if (role === 'camion') return cmMiens().then(function (l) { return l.filter(att).map(function (r) { return { cid: r.cid, ordre: r.pris_ms, corps: cmCorps(r) }; }); });
   if (role) return Promise.resolve([]);
-  return Promise.all([tous(), phMiens()]).then(function (x) {
+  return Promise.all([tous(), phMiens(), vtFond()]).then(function (x) {
     return x[0].filter(att).sort(function (a, b) { return a.cree_le < b.cree_le ? -1 : 1; }).map(function (r, i) { return { cid: r.ref, ordre: i + 1, corps: rapCorps(r) }; })
-      .concat(x[1].filter(att).map(function (r) { return { cid: r.cid, ordre: r.pris_ms, corps: phCorps(r) }; }));
+      .concat(x[1].filter(att).map(function (r) { return { cid: r.cid, ordre: r.pris_ms, corps: phCorps(r) }; }), x[2]);
   });
 }
 /* Met les copies du téléphone d'accord avec la file : ajoute ce qui manque, retire ce qui est réglé. Sans effet sur une ancienne application. */
@@ -385,13 +386,14 @@ function infosDuJour(liste, date) {
 function accueilChat() { if (!CFG.get('role', '') && CFG.get('jeton', '')) chDemarrer(); }
 function accueil() {
   accueilChat();
-  tous().then(function (liste) {
+  tous().then(vtAvecListe).then(function (liste) {
     var st = CFG.get('station', {}), j = infosDuJour(liste);
     var attente = liste.filter(function (r) { return r.statut === 'attente'; });
     var rejetes = liste.filter(function (r) { return r.statut === 'rejete' && !r.vu; });
     var annules = liste.filter(function (r) { return r.statut === 'annule' && !r.vu; });
     var h = '<h1>' + esc(st.nom || '') + '</h1><div class="sub">Journée du ' + dfr(j.date) + '</div>';
     h += msgHtml();
+    h += venteAccueilHtml(VT.liste);   // pilote des ventes : rien pour les stations hors pilote
     if (attente.length) h += '<div class="wait">⏳ ' + attente.length + ' rapport(s) en attente d\'envoi. Ils partiront tout seuls dès qu\'il y aura du signal.</div>';
     liste.filter(function (r) { return r.statut === 'verif'; }).forEach(function (r) {
       h += '<div class="err">⚠️ Rapport du ' + dfr(r.date) + ' (' + esc(libPer(r.periode)) + ') pas encore accepté : le bureau demande de revérifier des chiffres.\n<button style="margin-top:8px" onclick="revoir(\'' + esc(r.ref) + '\')">Revoir le rapport</button></div>';
@@ -673,8 +675,10 @@ function resume() {
   if (V.notes) h += '<tr><td>Notes</td><td class="n">' + esc(V.notes) + '</td></tr>';
   if (V.explication_controle && (V.confirme_codes || []).length) h += '<tr><td>⚠️ Explication</td><td class="n">' + esc(V.explication_controle) + '</td></tr>';
   h += '<tr><td>Photo</td><td class="n">' + (PHOTO ? (V.photo_source === 'galerie' ? 'oui (galerie : ' + esc(V.photo_galerie || '') + ')' : 'oui') : 'non') + '</td></tr></table></div>' +
+    (venteOn() ? '<div id="vtCtl"></div>' : '') +
     '<div class="note">Après l\'envoi, le rapport ne peut plus être modifié. Montants en ' + DEV + '.</div>';
   view(h, '<button class="sec" onclick="ecranFormulaire()">Modifier</button><button id="bEnv" onclick="enregistrerRapport()">Envoyer</button>');
+  if (venteOn()) vtControleHtml(J.date, nb(V.closing_meter) - nb(V.opening_meter)).then(function (c) { var d = $('vtCtl'); if (d) d.innerHTML = c; });
 }
 function enregistrerRapport() {
   var b = $('bEnv'); b.disabled = true; b.textContent = 'Enregistrement…';
@@ -740,7 +744,7 @@ function synchroniser(manuel) {
       }, Promise.resolve());
     });
   }).then(function () {
-    S.sync = false; majNet(S.en_ligne ? '● en ligne' : '○ hors ligne'); ntBientot(); fondAligner();
+    S.sync = false; majNet(S.en_ligne ? '● en ligne' : '○ hors ligne'); ntBientot(); fondAligner(); if (!arret) vtEnvoyer();
     if (!arret && S.ecran === 'manquants') ecranManquants();
     else if (!arret && (S.ecran === 'accueil' || manuel)) accueil();
   });
@@ -2650,7 +2654,7 @@ function verifierMaj() {
   }).catch(function (e) { S.majErreur = String((e && (e.message || e.errorMessage)) || e || '').slice(0, 90); }).then(function () { S.majEnCours = false; });
 }
 document.addEventListener('resume', function () { verifierMaj(); bandeauMaj(); phEnvoyer(); msgCharger(); ntBientot(); repEnvoyer(); pushRepli(); cmReprise(); chReprise(); });
-setInterval(function () { phEnvoyer(); fond('photos', ecranPhotos); msgCharger(); repEnvoyer(); cmEnvoyer(); }, 60000);   // file des photos + heure en cours à jour
+setInterval(function () { phEnvoyer(); fond('photos', ecranPhotos); msgCharger(); repEnvoyer(); cmEnvoyer(); vtEnvoyer(); }, 60000);   // file des photos + heure en cours à jour
 setTimeout(verifierMaj, 4000); setInterval(verifierMaj, 3 * 3600 * 1000);
 
 /* Téléphone à petite mémoire : Android peut fermer l'application pendant que l'appareil photo est ouvert. Au retour, la photo est rendue ici. */
