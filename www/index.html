@@ -74,10 +74,10 @@ document.write('<script src="config.js?' + Date.now() + '"><\/script><script src
 /* Mise à jour automatique : on confirme tout de suite que cette version démarre bien (sinon retour automatique à la précédente). */
 try { window.Capacitor && Capacitor.Plugins.CapacitorUpdater && Capacitor.Plugins.CapacitorUpdater.notifyAppReady(); } catch (e) { }
 </script>
-<script src="vente.js?v=2"></script>
+<script src="vente.js?v=3"></script>
 <script>
 /* ======================= Outils ======================= */
-var VERSION_APP = '1.37.0';
+var VERSION_APP = '1.38.0';
 var TZ = 'America/Port-au-Prince', CUTOFF_HOUR = 4;
 var DEV = 'dollars haïtiens';
 var CHAMPS_DEFAUT = [
@@ -1744,7 +1744,7 @@ function ongletVentes(data) {
         '<div style="text-align:right"><b style="font-size:18px">' + fmt(j.montant) + ' ' + esc(dv) + '</b><div class="mut">cash ' + fmt(j.cash) + ' · crédit ' + fmt(j.credit) + '</div></div></div>' +
         (j.sans_prix ? '<div class="wait">' + j.sans_prix + ' vente(s) sans prix dans l\'onglet « Prix » : pas de total pour elles.</div>' : '') +
         '<table><tr><th>Heure</th><th>Reçu</th><th class="n">Gal</th><th class="n">Prix</th><th class="n">Total</th><th>Paiement</th></tr>' + j.ventes.map(function (v) {
-          return '<tr><td>' + esc(v.heure) + '</td><td>' + esc(v.recu_no || '—') + '</td><td class="n">' + fmt(v.gallons) + '</td><td class="n">' + fmt(v.prix) + '</td><td class="n"><b>' + fmt(v.montant) + '</b></td><td>' + (v.paiement === 'credit' ? 'Crédit — ' + esc(v.client) : 'Cash') +
+          return '<tr><td>' + esc(v.heure) + '</td><td>' + esc(v.recu_no || '—') + '</td><td class="n">' + fmt(v.gallons) + '</td><td class="n">' + fmt(v.prix) + '</td><td class="n"><b>' + fmt(v.montant) + '</b></td><td>' + (v.paiement === 'credit' ? 'Crédit — ' + esc(v.client) : 'Cash') + (v.reservoir ? '<div class="mut">🔳 ' + esc(v.reservoir) + (v.client_tel ? ' · ' + esc(v.client_tel) : '') + '</div>' : '') +
             (v.erreur ? '<div style="color:var(--bad)">⚠️ erreur signalée : ' + esc(v.erreur) + '</div>' : '') + '</td></tr>';
         }).join('') + '</table></div>';
     });

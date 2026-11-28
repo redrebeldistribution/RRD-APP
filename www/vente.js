@@ -8,8 +8,9 @@
  * (init.vente_prix) : il n'est jamais tapé sur le téléphone, et le serveur recalcule le montant avec son propre prix.
  * Chaque vente est gardée sur le téléphone tout de suite, puis envoyée quand il y a du signal. Une vente envoyée
  * ne peut pas être effacée par la station : « Signaler une erreur » prévient le bureau, qui corrige.
+ * Build 79 : bouton « Scanner le réservoir » (étiquette du client), facultatif.
  * Tant que le serveur ne connaît pas encore les ventes (pas de vente_pilote dans init), elles restent en attente sur le téléphone. */
-var VT = { envoi: false, gal: 0, mode: 'cash', db: null, liste: [] };
+var VT = { envoi: false, gal: 0, mode: 'cash', db: null, liste: [], res: '', scan: false };
 var VT_TAILLES = [5, 10, 20];
 var VT_STATIONS_APP = ['TST'];   // garde-fou côté téléphone : même si le serveur se trompe, l'écran ne s'ouvre que pour ces stations
 
@@ -21,6 +22,76 @@ function venteOn() {
 function vtServeurPret() { return !!vtInit().vente_pilote; }
 function vtPrix() { var p = vtInit().vente_prix; return p && Number(p.prix) > 0 ? Number(p.prix) : 0; }   // prix du bureau, 0 = pas encore reçu
 function vtArr(v) { return Math.round(v * 100) / 100; }
+/* ---------- Réservoir scanné (build 79, propriétaire 28/11/2026 : « le scan dans la page vente ») ----------
+ * Étiquette 2x1 « version B » : QR « RRD:T:000123 », numéro imprimé « T-000123 ». Facultatif : une vente sans réservoir reste possible.
+ * Premier scan d'un réservoir : on demande le téléphone du client (et son nom) pour l'enregistrer ; ensuite le réservoir est reconnu. */
+function vtResCode(v) {
+  var t = String(v || '').toUpperCase().replace(/\s+/g, ''), m = t.match(/^RRD:T:(\d{1,8})$/) || t.match(/^T-?(\d{1,8})$/) || t.match(/^(\d{1,8})$/);
+  return m && Number(m[1]) > 0 ? 'T-' + ('000000' + Number(m[1])).slice(-6) : '';
+}
+function vtTel(v) { var d = String(v || '').replace(/\D/g, ''); if (d.length === 8) d = '509' + d; return d.length >= 10 && d.length <= 15 ? d : ''; }
+function vtResConnus(l) {   // réservoirs connus : ceux du bureau (init) puis ceux des ventes de ce téléphone
+  var m = {};
+  (vtInit().reservoirs || []).forEach(function (x) { if (x && x.r) m[x.r] = { tel: String(x.tel || ''), nom: String(x.nom || '') }; });
+  (l || VT.liste || []).slice().sort(function (a, b) { return a.pris_ms - b.pris_ms; }).forEach(function (r) {
+    if (r.genre === 'vente' && r.reservoir && r.client_tel && !m[r.reservoir]) m[r.reservoir] = { tel: r.client_tel, nom: r.client_nom || r.client || '' };
+  });
+  return m;
+}
+function vtScanPossible() { return !WEB && !!NAT.BarcodeScanner && !(S.natif && S.natif < TT_NATIF); }
+function vtScanner() {
+  var P = NAT;
+  if (!vtScanPossible()) return vtResTaper();
+  P.BarcodeScanner.isSupported().then(function (x) { if (!x.supported) throw 'Ce téléphone n\'a pas de caméra utilisable.'; return P.BarcodeScanner.checkPermissions(); })
+    .then(function (pm) { return pm.camera === 'granted' ? pm : P.BarcodeScanner.requestPermissions(); })
+    .then(function (pm) {
+      if (pm.camera !== 'granted') throw 'Permission de la caméra refusée.';
+      return P.BarcodeScanner.removeAllListeners().catch(function () { }).then(function () {
+        return P.BarcodeScanner.addListener('barcodesScanned', function (ev) {
+          var b = ev && ev.barcodes && ev.barcodes[0]; if (!b || !VT.scan) return;
+          var lu = String(b.rawValue || b.displayValue || ''), c = vtResCode(lu);
+          vtScanFin();
+          if (!c) return alerte('Ce code n\'est pas une étiquette de réservoir Red Rebel.');
+          vtResChoisi(c);
+        });
+      });
+    }).then(function () {
+      VT.scan = true; document.body.classList.add('scan'); document.documentElement.classList.add('scan');
+      var bar = document.createElement('div'); bar.id = 'scanBar'; bar.innerHTML = 'Montrez l\'étiquette du réservoir à la caméra<br><button class="sec" style="margin-top:10px" onclick="vtScanFin()">Arrêter</button> <button class="sec" style="margin-top:10px" onclick="vtScanFin();vtResTaper()">Taper le numéro</button>';
+      $('app').appendChild(bar);
+      VT.scanTimer = setTimeout(function () { if (VT.scan) { vtScanFin(); toast('Aucun code lu.'); } }, 45000);
+      return P.BarcodeScanner.startScan({});
+    }).catch(function (e) { vtScanFin(); alerte('Lecture du code : ' + ttErr(e)); });
+}
+function vtScanFin() {
+  VT.scan = false; clearTimeout(VT.scanTimer); document.body.classList.remove('scan'); document.documentElement.classList.remove('scan');
+  var b = $('scanBar'); if (b && b.parentNode) b.parentNode.removeChild(b);
+  try { NAT.BarcodeScanner && NAT.BarcodeScanner.stopScan().catch(function () { }); } catch (e) { }
+}
+function vtResTaper() {
+  var v = window.prompt('Numéro écrit sur l\'étiquette du réservoir (ex. T-000123)');
+  if (v === null) return;
+  var c = vtResCode(v); if (!c) return alerte('Numéro de réservoir illisible.');
+  vtResChoisi(c);
+}
+function vtResChoisi(c) {
+  VT.res = c; VT.resTel = ''; VT.resNom = '';
+  var k = vtResConnus()[c];
+  if (k && k.nom && VT.mode === 'credit' && !VT.client) VT.client = k.nom;
+  ecranVente();
+}
+function vtResRetirer() { VT.res = ''; VT.resTel = ''; VT.resNom = ''; ecranVente(); }
+function vtResHtml(l) {
+  if (!VT.res) return '<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">' + (vtScanPossible() ? '<button class="sec" onclick="vtScanner()">🔳 Scanner le réservoir</button>' : '') +
+    '<button class="sec" onclick="vtResTaper()">⌨️ N° du réservoir</button></div><p class="mut">Facultatif : la vente peut se faire sans réservoir.</p>';
+  var k = vtResConnus(l)[VT.res];
+  var h = '<div class="card" style="margin-top:12px"><div class="row"><div><b>🔳 Réservoir ' + esc(VT.res) + '</b><div class="mut">' +
+    (k ? 'Client : ' + esc(k.nom || '(sans nom)') + ' · ' + esc(k.tel) : 'Nouveau réservoir : à enregistrer avec le client') + '</div></div>' +
+    '<div><button class="sec" style="padding:6px 10px" onclick="vtResRetirer()">Retirer</button></div></div>';
+  if (!k) h += '<label for="vtResTel">Téléphone du client *</label><input id="vtResTel" type="tel" inputmode="tel" placeholder="ex. 3712 3456" autocomplete="off" value="' + esc(VT.resTel || '') + '" oninput="VT.resTel=this.value">' +
+    '<label for="vtResNom">Nom du client</label><input id="vtResNom" autocomplete="off" value="' + esc(VT.resNom || '') + '" oninput="VT.resNom=this.value">';
+  return h + '</div>';
+}
 function vtMontant(r) { return Number(r.montant_vu) > 0 ? Number(r.montant_vu) : (Number(r.prix_vu) > 0 ? vtArr((Number(r.gallons) || 0) * Number(r.prix_vu)) : null); }
 
 function vtDb() {
@@ -57,7 +128,7 @@ function vtRecuNo(l, date) {
   return String(stationCode() || '') + '-' + date.slice(8, 10) + date.slice(5, 7) + date.slice(2, 4) + '-' + vtPoste() + ('00' + n).slice(-3);
 }
 function vtCorps(r) {
-  return ['vente', { payload: { cid: r.cid, genre: r.genre, date: r.date, pris_ms: r.pris_ms, gallons: r.gallons, paiement: r.paiement, client: r.client, parent: r.parent, motif: r.motif, prix_vu: r.prix_vu || '', recu_no: r.recu_no || '' } }];
+  return ['vente', { payload: { cid: r.cid, genre: r.genre, date: r.date, pris_ms: r.pris_ms, gallons: r.gallons, paiement: r.paiement, client: r.client, parent: r.parent, motif: r.motif, prix_vu: r.prix_vu || '', recu_no: r.recu_no || '', reservoir: r.reservoir || '', client_tel: r.client_tel || '', client_nom: r.client_nom || '' } }];
 }
 function vtDuJour(l, date) {
   var v = l.filter(function (r) { return r.genre === 'vente' && r.date === date; });
@@ -110,6 +181,7 @@ function ecranVente(msg) {
       return '<button class="' + (VT.gal === g ? 'fait' : 'sec') + '" style="font-size:24px;font-weight:600" onclick="vtTaille(' + g + ')">' + g + '</button>';
     }).join('') + '<button class="' + (VT.gal && VT_TAILLES.indexOf(VT.gal) < 0 ? 'fait' : 'sec') + '" onclick="vtAutre()">' + (VT.gal && VT_TAILLES.indexOf(VT.gal) < 0 ? fmt(VT.gal) : 'Autre') + '</button></div>';
     h += '<div id="vtAutreBox" class="hidden"><input id="vtAutreIn" type="number" inputmode="decimal" step="0.1" min="0" placeholder="ex. 7,5" oninput="vtAutreLu()"></div>';
+    h += vtResHtml(l);
     h += '<label>Paiement</label><div class="ph3">' +
       '<button class="' + (VT.mode === 'cash' ? 'fait' : 'sec') + '" onclick="vtMode(\'cash\')">💵 Cash</button>' +
       '<button class="' + (VT.mode === 'credit' ? 'fait' : 'sec') + '" onclick="vtMode(\'credit\')">📒 Crédit</button></div>';
@@ -128,12 +200,12 @@ function ecranVente(msg) {
         var s = j.signalees[r.cid], m = vtMontant(r);
         var etat = r.statut === 'envoye' ? '✅' : r.statut === 'attente' ? '⏳' : '❌';
         h += '<div class="card"><div class="row"><div><b>' + fmt(r.gallons) + ' gal</b>' + (m !== null ? ' · <b>' + fmt(m) + ' ' + esc(DEV) + '</b>' : '') + ' · ' + (r.paiement === 'credit' ? 'Crédit ' + esc(r.client || '') : 'Cash') +
-          '<div class="mut">' + esc(r.heure || '') + (r.recu_no ? ' · reçu ' + esc(r.recu_no) : '') + ' ' + etat + (s ? ' · ⚠️ erreur signalée' : '') + (r.statut === 'rejete' ? ' · refusée : ' + esc(r.erreur || '') : '') + '</div></div>' +
+          '<div class="mut">' + esc(r.heure || '') + (r.recu_no ? ' · reçu ' + esc(r.recu_no) : '') + (r.reservoir ? ' · 🔳 ' + esc(r.reservoir) : '') + ' ' + etat + (s ? ' · ⚠️ erreur signalée' : '') + (r.statut === 'rejete' ? ' · refusée : ' + esc(r.erreur || '') : '') + '</div></div>' +
           '<div style="text-align:right;flex:none;display:flex;flex-direction:column;gap:6px"><button class="sec" style="padding:8px 10px;font-size:14px" onclick="vtEcranRecu(\'' + esc(r.cid) + '\')">🧾 Reçu</button>' +
           (s ? '' : '<button class="sec" style="padding:8px 10px;font-size:14px" onclick="vtSignaler(\'' + esc(r.cid) + '\')">Signaler une erreur</button>') + '</div></div></div>';
       });
     }
-    view(h, '<button class="sec" onclick="VT.gal=0;accueil()">🏠 Accueil</button><button id="vtOk" onclick="vtEnregistrer()"' + (VT.gal > 0 ? '' : ' disabled') + '>Enregistrer</button>', 'vente');
+    view(h, '<button class="sec" onclick="VT.gal=0;VT.res=\'\';accueil()">🏠 Accueil</button><button id="vtOk" onclick="vtEnregistrer()"' + (VT.gal > 0 ? '' : ' disabled') + '>Enregistrer</button>', 'vente');
   });
 }
 function vtTaille(g) { VT.gal = g; ecranVente(); }
@@ -146,14 +218,25 @@ function vtEnregistrer() {
   if (g > 500) return alerte('Plus de 500 gallons pour une seule vente : vérifiez le chiffre.');
   var client = '';
   if (VT.mode === 'credit') { client = String((($('vtClient') || {}).value) || VT.client || '').trim().replace(/\s+/g, ' ').slice(0, 60); if (!client) return alerte('Écrivez le nom du client pour une vente à crédit.'); }
+  var res = VT.res || '', resTel = '', resNom = '';
+  if (res) {
+    var k = vtResConnus()[res];
+    if (k) { resTel = k.tel; resNom = k.nom; }
+    else {
+      resTel = vtTel((($('vtResTel') || {}).value) || VT.resTel);
+      resNom = String((($('vtResNom') || {}).value) || VT.resNom || '').trim().replace(/\s+/g, ' ').slice(0, 60);
+      if (!resTel) return alerte('Nouveau réservoir : écrivez le téléphone du client (8 chiffres), ou retirez le réservoir.');
+    }
+    if (!resNom && client) resNom = client;
+  }
   var prix = vtPrix(), total = prix ? vtArr(g * prix) : null, recu = VT.mode === 'cash' && total !== null && Number(VT.recu) >= total ? Number(VT.recu) : 0;
   var b = $('vtOk'); if (b) b.disabled = true;
   var ms = Date.now(), p = partiesHaiti(new Date(ms)), date = dateRapport();
   vtMiennes().then(function (l) { return l; }, function () { return []; }).then(function (l) {
     var r = { cid: vtCid(), genre: 'vente', station: stationCode(), date: date, pris_ms: ms, heure: p.hour + ':' + p.minute, gallons: g, paiement: VT.mode, client: client, statut: 'attente',
-      prix_vu: prix || '', montant_vu: total === null ? '' : total, recu_client: recu || '', monnaie: recu ? vtArr(recu - total) : '', recu_no: vtRecuNo(l, date) };
+      prix_vu: prix || '', montant_vu: total === null ? '' : total, recu_client: recu || '', monnaie: recu ? vtArr(recu - total) : '', recu_no: vtRecuNo(l, date), reservoir: res, client_tel: resTel, client_nom: resNom };
     return vtGarder(r).then(function () {
-      VT.gal = 0; VT.mode = 'cash'; VT.client = ''; VT.recu = 0;
+      VT.gal = 0; VT.mode = 'cash'; VT.client = ''; VT.recu = 0; VT.res = ''; VT.resTel = ''; VT.resNom = '';
       vtEnvoyer(); vtEcranRecu(r.cid, true);
     });
   }).catch(function () { if (b) b.disabled = false; alerte('Impossible de garder la vente sur le téléphone (mémoire pleine ?). Réessayez.'); });
@@ -175,6 +258,7 @@ function vtRecuLignes(r) {
   var n = function (v) { return Number(v).toLocaleString('fr-FR', { maximumFractionDigits: 2 }).replace(/\s/g, ' '); };
   var l = ['RED REBEL DISTRIBUTION', 'Propane - ' + (st.nom || r.station || ''), 'Reçu n° ' + (r.recu_no || r.cid), d + ' ' + (r.heure || ''), '--------------------------------',
     'Propane : ' + n(r.gallons) + ' gal' + (Number(r.prix_vu) > 0 ? ' x ' + n(r.prix_vu) : '')];
+  if (r.reservoir) l.push('Réservoir : ' + r.reservoir);
   if (m !== null) l.push('TOTAL : ' + n(m) + ' ' + DEV);
   if (r.paiement === 'credit') l.push('Paiement : à crédit - ' + (r.client || ''));
   else { l.push('Paiement : cash'); if (Number(r.recu_client) > 0) { l.push('Reçu : ' + n(r.recu_client)); l.push('Monnaie rendue : ' + n(r.monnaie || 0)); } }
