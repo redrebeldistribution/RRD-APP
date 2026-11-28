@@ -178,8 +178,18 @@ def essai(nom):
                     A.capture(nom + '-ECHEC')
                 except Exception:
                     pass
-                RESULTATS.append((nom, False, str(e), time.time() - t))
+                try:
+                    ecran = texte()
+                except Exception as x:
+                    ecran = '(écran illisible : %s)' % x
+                try:
+                    db = A.ev("return JSON.stringify((await vtMiennes()).map(r => [r.gallons, r.statut, r.date]))")
+                except Exception as x:
+                    db = '(ventes illisibles : %s)' % x
+                RESULTATS.append((nom, False, str(e) + ' — écran : ' + ' '.join(str(ecran).split())[:300] + ' — ventes du téléphone : ' + str(db)[:300], time.time() - t))
                 print('❌', nom, '—', e, flush=True)
+                print('   écran :', ' '.join(str(ecran).split())[:600], flush=True)
+                print('   ventes du téléphone :', db, flush=True)
                 raise
         lancer.nom = nom
         return lancer
